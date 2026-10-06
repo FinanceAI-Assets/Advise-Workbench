@@ -1,0 +1,12 @@
+# Runtime dependencies plus test and lint tools.
+-r requirements.txt
+fakeredis==2.39.0
+import-linter==2.15
+lupa==2.8
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+pytest==9.1.1
+ruff==0.16.10
+
+# Optional extras (not installed by default):
+#   OCR for scanned PDFs:  pip install "pdf2image>=1.17" "pytesseract>=0.3.10" "Pillow>=10.0"

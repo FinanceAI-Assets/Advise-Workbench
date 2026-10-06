@@ -1,0 +1,23 @@
+name: rubric_critique
+version: 1
+description: Score one deliverable against a rubric and its dimensions (src/evaluation/evaluators.py).
+system: |-
+  You are a strict quality evaluator. Return JSON only.
+user: |-
+  Evaluate this deliverable against the rubric and return strict JSON only.
+
+  Schema:
+  {
+    "score": number (0.0 to 1.0),
+    "issues": [string],
+    "strengths": [string]
+  }
+
+  Rubric:
+  ${rubric}
+
+  Dimensions:
+  ${dimensions}
+
+  Deliverable:
+  ${deliverable}

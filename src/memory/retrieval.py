@@ -1,0 +1,839 @@
+from __future__ import annotations
+
+import json
+import math
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from src.memory.documents.source_chunks import (
+    assign_source_ids,
+    chunk_text,
+    format_chunk_citation,
+    normalize_chunk,
+)
+from src.core.storage import workspace_path
+
+
+@dataclass
+class ContextBundle:
+    text: str
+    char_budget: int = 32000
+    metadata: dict[str, object] | None = None
+
+
+def _chunk_strings(chunks: list[dict[str, Any]]) -> list[str]:
+    """BM25/search text for provenance chunk records."""
+    return [chunk_text(c) for c in chunks if chunk_text(c)]
+
+
+_TOKEN_RE = re.compile(r"[^a-zA-Z0-9]+")
+
+
+def _tokenize(s: str) -> list[str]:
+    s = (s or "").lower()
+    parts = [p for p in _TOKEN_RE.split(s) if p]
+    return parts
+
+
+@dataclass
+class _BM25Index:
+    """Precomputed per-corpus BM25 state. Built once when chunks are loaded/cached."""
+
+    tokenized: list[list[str]] = field(default_factory=list)
+    dl: list[int] = field(default_factory=list)
+    avgdl: float = 0.0
+    df: dict[str, int] = field(default_factory=dict)
+
+
+def _build_bm25_index(chunks: list[str]) -> _BM25Index:
+    tokenized = [_tokenize(c) for c in chunks]
+    dl = [len(toks) for toks in tokenized]
+    n = len(chunks)
+    avgdl = sum(dl) / n if n else 0.0
+    df: dict[str, int] = {}
+    for toks in tokenized:
+        for t in set(toks):
+            df[t] = df.get(t, 0) + 1
+    return _BM25Index(tokenized=tokenized, dl=dl, avgdl=avgdl, df=df)
+
+
+class TieredContextEngine:
+    """
+    Tiered context assembly:
+    - Tier 0: CONTEXT.md (+ optional style/context provided by caller)
+    - Tier 1: LP snippets (currently passed in; OneDrive integration is added later)
+    - Tier 2: source_docs chunks ranked by BM25, merged with MMR-style deduplication
+    """
+
+    def __init__(self) -> None:
+        self.k1 = 1.5
+        self.b = 0.75
+        # Caches store (latest_mtime, chunk_records, precomputed_bm25_index).
+        self._parsed_cache: dict[str, tuple[float, list[dict[str, Any]], _BM25Index]] = {}
+        self._wiki_cache: dict[str, tuple[float, list[str], _BM25Index]] = {}
+
+    def _load_all_parsed_chunks(self, project_id: str | None) -> list[dict[str, Any]]:
+        if not project_id:
+            return []
+        parsed_dir = workspace_path(project_id) / "parsed_docs"
+        if not parsed_dir.exists():
+            return []
+        cache_key = str(parsed_dir)
+        latest_mtime = 0.0
+        parsed_files = list(parsed_dir.glob("*.json"))
+        for p in parsed_files:
+            try:
+                latest_mtime = max(latest_mtime, p.stat().st_mtime)
+            except Exception:  # noqa: S112 — best-effort, non-fatal
+                continue
+        cached = self._parsed_cache.get(cache_key)
+        if cached and cached[0] == latest_mtime:
+            return list(cached[1])
+        chunks: list[dict[str, Any]] = []
+        for p in parsed_files:
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                doc_id = str(data.get("sha256") or p.stem)
+                filename = str(data.get("filename") or "")
+                doc_chunks = data.get("chunks") or []
+                for c in doc_chunks:
+                    if isinstance(c, str) and c.strip():
+                        chunks.append(normalize_chunk(c, doc_id=doc_id, filename=filename))
+                    elif isinstance(c, dict) and chunk_text(c):
+                        chunks.append(normalize_chunk(c, doc_id=doc_id, filename=filename))
+            except Exception:  # noqa: S112 — best-effort, non-fatal
+                continue
+        texts = _chunk_strings(chunks)
+        self._parsed_cache[cache_key] = (latest_mtime, list(chunks), _build_bm25_index(texts))
+        return chunks
+
+    def _get_doc_index(self, project_id: str | None) -> _BM25Index | None:
+        """Return cached BM25 index for parsed_docs, or None if cache is cold."""
+        if not project_id:
+            return None
+        key = str(workspace_path(project_id) / "parsed_docs")
+        cached = self._parsed_cache.get(key)
+        return cached[2] if cached else None
+
+    _WIKI_STALE_HOURS = 72
+
+    def _load_wiki_chunks(self, project_id: str | None) -> list[str]:
+        """Load wiki pages as ranked text chunks for context injection.
+
+        Wiki pages are LLM-enriched summaries — higher signal than raw parsed_docs.
+        Each chunk is prefixed with its page title so the agent knows the source.
+        Pages older than _WIKI_STALE_HOURS get a [STALE] prefix so agents can weight them
+        accordingly. Results are mtime-cached to avoid re-reading on every call.
+        """
+        if not project_id:
+            return []
+        wiki_dir = workspace_path(project_id) / "wiki"
+        if not wiki_dir.exists():
+            return []
+        _skip = {"index.md", "log.md"}
+        md_files = [f for f in wiki_dir.glob("*.md") if f.name not in _skip]
+
+        # Mtime cache — re-read only when any file has changed.
+        cache_key = str(wiki_dir)
+        latest_mtime = 0.0
+        for f in md_files:
+            try:
+                latest_mtime = max(latest_mtime, f.stat().st_mtime)
+            except Exception:  # noqa: S112 — best-effort, non-fatal
+                continue
+        cached = self._wiki_cache.get(cache_key)
+        if cached and cached[0] == latest_mtime:
+            return list(cached[1])
+
+        now = time.time()
+        stale_threshold = self._WIKI_STALE_HOURS * 3600
+        chunks: list[str] = []
+        for md_file in md_files:
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
+                title = title_match.group(1) if title_match else md_file.stem.replace("_", " ").title()
+                body = re.sub(r"^---.*?---\s*", "", content, flags=re.DOTALL).strip()
+                if not body:
+                    continue
+                try:
+                    age_s = now - md_file.stat().st_mtime
+                    if age_s > stale_threshold:
+                        age_h = int(age_s / 3600)
+                        body = f"[STALE: {age_h}h old]\n{body}"
+                except Exception:  # noqa: S110 — best-effort, non-fatal
+                    pass
+                chunks.append(f"[Wiki: {title}]\n{body}")
+            except Exception:  # noqa: S112 — best-effort, non-fatal
+                continue
+        self._wiki_cache[cache_key] = (latest_mtime, list(chunks), _build_bm25_index(chunks))
+        return chunks
+
+    def _get_wiki_index(self, project_id: str | None) -> _BM25Index | None:
+        """Return cached BM25 index for wiki chunks, or None if cache is cold."""
+        if not project_id:
+            return None
+        key = str(workspace_path(project_id) / "wiki")
+        cached = self._wiki_cache.get(key)
+        return cached[2] if cached else None
+
+    def _bm25_scores(self, chunks_or_index: "list[str] | _BM25Index", query: str) -> list[float]:
+        """BM25 relevance scores.
+
+        Accepts a precomputed _BM25Index (fast path — no tokenization overhead) or a plain
+        list[str] for backward-compatibility with external callers that don't use the cache.
+        """
+        index = (
+            chunks_or_index
+            if isinstance(chunks_or_index, _BM25Index)
+            else _build_bm25_index(chunks_or_index)
+        )
+        n_docs = len(index.tokenized)
+        if n_docs == 0:
+            return []
+        if index.avgdl <= 0:
+            return [0.0] * n_docs
+        q_terms = _tokenize(query)
+        if not q_terms:
+            return [0.0] * n_docs
+        idf: dict[str, float] = {}
+        for term in set(q_terms):
+            dfi = index.df.get(term, 0)
+            idf[term] = math.log((n_docs - dfi + 0.5) / (dfi + 0.5) + 1.0)
+        k1 = self.k1
+        b = self.b
+        scores = [0.0] * n_docs
+        for i, toks in enumerate(index.tokenized):
+            if not toks:
+                continue
+            tf: dict[str, int] = {}
+            for t in toks:
+                tf[t] = tf.get(t, 0) + 1
+            score = 0.0
+            for term in q_terms:
+                if term not in idf:
+                    continue
+                term_tf = tf.get(term, 0)
+                if term_tf <= 0:
+                    continue
+                denom = term_tf + k1 * (1 - b + b * (index.dl[i] / index.avgdl))
+                score += idf[term] * ((term_tf * (k1 + 1)) / denom)
+            scores[i] = score
+        return scores
+
+    def _multi_query_max(
+        self, chunks_or_index: "list[str] | _BM25Index", queries: list[str]
+    ) -> list[float]:
+        """Per-chunk max BM25 score across all query variants (multi-query expansion)."""
+        index = (
+            chunks_or_index
+            if isinstance(chunks_or_index, _BM25Index)
+            else _build_bm25_index(chunks_or_index)
+        )
+        n = len(index.tokenized)
+        if not queries or n == 0:
+            return [0.0] * n
+        scores = self._bm25_scores(index, queries[0])
+        for q in queries[1:]:
+            for i, s in enumerate(self._bm25_scores(index, q)):
+                if s > scores[i]:
+                    scores[i] = s
+        return scores
+
+    def _semantic_rerank(
+        self,
+        query: str,
+        candidates: list[tuple[int, float]],
+        texts: list[str],
+        *,
+        top_k: int = 20,
+    ) -> list[tuple[int, float]]:
+        """Optional semantic rerank of BM25 candidates when sentence-transformers is available."""
+        if not candidates or not query.strip():
+            return candidates
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            return candidates
+        try:
+            model = SentenceTransformer("all-MiniLM-L6-v2")
+            q_emb = model.encode([query], normalize_embeddings=True)
+            idxs = [i for i, _ in candidates[:top_k]]
+            docs = [texts[i] for i in idxs if 0 <= i < len(texts)]
+            if not docs:
+                return candidates
+            d_emb = model.encode(docs, normalize_embeddings=True)
+            sims = (d_emb @ q_emb.T).reshape(-1)
+            reranked = sorted(zip(idxs, sims.tolist()), key=lambda x: x[1], reverse=True)
+            tail = [(i, s) for i, s in candidates if i not in idxs]
+            return reranked + tail
+        except Exception:
+            return candidates
+
+    def _mmr_select(
+        self,
+        candidates: list[tuple[int, float]],
+        chunks: list[str],
+        *,
+        max_chars: int,
+        lambda_param: float = 0.7,
+        max_items: int = 15,
+    ) -> list[int]:
+        """
+        Select candidates using an MMR-like objective:
+        lambda * relevance - (1-lambda) * diversity
+
+        Diversity is approximated with Jaccard similarity over token sets.
+        """
+
+        selected: list[int] = []
+        selected_token_sets: list[set[str]] = []
+
+        def jaccard(a: set[str], b: set[str]) -> float:
+            if not a or not b:
+                return 0.0
+            return len(a & b) / len(a | b)
+
+        for _ in range(max_items):
+            best_idx: int | None = None
+            best_score = -1e9
+
+            for idx, rel in candidates:
+                if idx in selected:
+                    continue
+                cand_tokens = set(_tokenize(chunks[idx]))
+                if not selected_token_sets:
+                    diversity = 0.0
+                else:
+                    diversity = max(jaccard(cand_tokens, tset) for tset in selected_token_sets)
+
+                mmr = lambda_param * float(rel) - (1 - lambda_param) * diversity
+                if mmr > best_score:
+                    best_score = mmr
+                    best_idx = idx
+
+            if best_idx is None:
+                break
+
+            selected.append(best_idx)
+            selected_token_sets.append(set(_tokenize(chunks[best_idx])))
+
+            current_chars = sum(len(chunks[i]) for i in selected)
+            if current_chars >= max_chars:
+                break
+
+        return selected
+
+    def _expand_queries(self, instruction: str) -> list[str]:
+        ins = (instruction or "").strip()
+        if not ins:
+            return []
+        # Deterministic "expansion" placeholders. LP/web_search + embeddings can improve this later.
+        return [
+            ins,
+            f"{ins} roles steps decisions",
+            f"{ins} best practices standards frameworks",
+        ]
+
+    @staticmethod
+    def _format_selected_sources(
+        chunks: list[dict[str, Any]],
+        selected_idxs: list[int],
+        *,
+        prefix: str = "S",
+        start_at: int = 1,
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Build inline ``[S#]`` context lines and a provenance registry for selected chunks."""
+        formatted: list[str] = []
+        registry: list[dict[str, Any]] = []
+        for offset, idx in enumerate(selected_idxs):
+            if idx < 0 or idx >= len(chunks):
+                continue
+            chunk = normalize_chunk(chunks[idx])
+            sid = f"{prefix}{start_at + offset}"
+            chunk["source_id"] = sid
+            registry.append(chunk)
+            formatted.append(format_chunk_citation(chunk, sid))
+        return formatted, registry
+
+    def assemble(
+        self,
+        project_id: str | None,
+        instruction: str,
+        *,
+        lp_snippets: list[str] | None = None,
+        style_context: str | None = None,
+    ) -> ContextBundle:
+        context_md = ""
+        if project_id:
+            try:
+                context_md = (workspace_path(project_id) / "CONTEXT.md").read_text(encoding="utf-8")
+            except FileNotFoundError:
+                context_md = ""
+
+        if style_context:
+            context_md = f"{context_md}\n\n{style_context}".strip()
+
+        lp_snippets = lp_snippets or []
+
+        tier0 = (context_md or instruction)[:2000]
+        tier1 = "\n".join(lp_snippets)[:12000]
+
+        chunks = self._load_all_parsed_chunks(project_id) if project_id else []
+        texts = _chunk_strings(chunks)
+        if not texts:
+            tier2 = instruction[:10000]
+            combined = "\n\n".join([tier0, tier1, tier2])[:32000]
+            return ContextBundle(text=combined)
+
+        # Multi-query expansion + BM25 candidate scoring using precomputed index.
+        queries = self._expand_queries(instruction)
+        index = self._get_doc_index(project_id) or _build_bm25_index(texts)
+        candidates: dict[int, float] = {}
+        for q in queries:
+            scores = self._bm25_scores(index, q)
+            for idx, sc in enumerate(scores):
+                if sc <= 0:
+                    continue
+                prev = candidates.get(idx)
+                if prev is None or sc > prev:
+                    candidates[idx] = float(sc)
+
+            # Keep candidate set bounded.
+            if len(candidates) > 60:
+                top = sorted(candidates.items(), key=lambda kv: kv[1], reverse=True)[:60]
+                candidates = dict(top)
+
+        candidate_list = sorted(candidates.items(), key=lambda kv: kv[1], reverse=True)[:60]
+        selected_idxs = self._mmr_select(
+            candidate_list,
+            texts,
+            max_chars=10000,
+        )
+        tier2 = "\n".join(texts[i] for i in selected_idxs)[:10000]
+
+        combined = "\n\n".join([tier0, tier1, tier2])[:32000]
+        return ContextBundle(text=combined)
+
+    def planner_excerpt(
+        self,
+        project_id: str | None,
+        query_text: str,
+        *,
+        char_cap: int,
+    ) -> str:
+        """
+        BM25+MMR ranked chunk text for coordinator planning only (query-aligned, bounded size).
+        """
+        qt = (query_text or "").strip()
+        if not project_id or not qt:
+            return ""
+        cap = max(500, int(char_cap))
+        queries = self._expand_queries(qt)
+
+        # Wiki pages first (curated context, up to 40% of planner budget).
+        # Uses the same multi-query expansion as parsed_docs for consistent ranking.
+        wiki_chunks = self._load_wiki_chunks(project_id)
+        wiki_text = ""
+        if wiki_chunks:
+            wiki_index = self._get_wiki_index(project_id) or _build_bm25_index(wiki_chunks)
+            wiki_scores = self._multi_query_max(wiki_index, queries)
+            wiki_candidates = sorted(enumerate(wiki_scores), key=lambda kv: kv[1], reverse=True)[:10]
+            wiki_budget = min(4000, cap * 2 // 5)
+            if not any(score > 0 for _, score in wiki_candidates):
+                wiki_sel = list(range(min(3, len(wiki_chunks))))
+            else:
+                wiki_sel = self._mmr_select(wiki_candidates, wiki_chunks, max_chars=wiki_budget)
+            wiki_text = "\n\n---\n\n".join(wiki_chunks[i] for i in wiki_sel)
+
+        chunks = self._load_all_parsed_chunks(project_id)
+        texts = _chunk_strings(chunks)
+        doc_text = ""
+        if texts:
+            doc_index = self._get_doc_index(project_id) or _build_bm25_index(texts)
+            doc_scores = self._multi_query_max(doc_index, queries)
+            candidate_list = sorted(enumerate(doc_scores), key=lambda kv: kv[1], reverse=True)[:60]
+            doc_budget = max(400, cap - len(wiki_text) - len("## Planner retrieval excerpt\n\n"))
+            selected_idxs = self._mmr_select(candidate_list, texts, max_chars=doc_budget)
+            cited, _registry = self._format_selected_sources(chunks, selected_idxs, prefix="S")
+            doc_text = "\n\n---\n\n".join(cited)
+
+        if not wiki_text and not doc_text:
+            return ""
+
+        parts = [p for p in [wiki_text, doc_text] if p]
+        header = "## Planner retrieval excerpt\n\n"
+        return (header + "\n\n---\n\n".join(parts))[:cap]
+
+    @staticmethod
+    def _compact_items(items: list[str], max_chars: int) -> tuple[list[str], int]:
+        used = 0
+        out: list[str] = []
+        dropped = 0
+        for item in items:
+            clean = (item or "").strip()
+            if not clean:
+                continue
+            if used + len(clean) + 1 > max_chars:
+                dropped += 1
+                continue
+            out.append(clean)
+            used += len(clean) + 1
+        return out, dropped
+
+    @staticmethod
+    def _snip_oldest(items: list[str], keep_count: int) -> tuple[list[str], int]:
+        """Tier 2 compaction: keep newest N items, drop oldest overflow."""
+        if keep_count <= 0:
+            return [], len(items)
+        if len(items) <= keep_count:
+            return list(items), 0
+        dropped = len(items) - keep_count
+        return list(items[-keep_count:]), dropped
+
+    @staticmethod
+    def _auto_summary(items: list[str], max_items: int = 8, max_chars: int = 1200) -> str:
+        """Tier 3 compaction: deduplicated summary of the latest high-signal entries."""
+        if not items:
+            return ""
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for item in reversed(items):
+            norm = (item or "").strip().lower()[:80]
+            if norm and norm not in seen:
+                seen.add(norm)
+                deduped.append(item.strip())
+        tail = deduped[:max_items]
+        if not tail:
+            return ""
+        lines = [f"- {t}" for t in reversed(tail)]
+        summary = "Recent memory summary:\n" + "\n".join(lines)
+        return summary[:max_chars]
+
+    @staticmethod
+    def _parse_dropped_sources(dropped_text: str) -> dict[str, list[str]]:
+        """Extract wiki page titles and LP headings from text that was hard-trimmed."""
+        wiki_titles = re.findall(r"\[Wiki:\s*([^\]]+)\]", dropped_text)
+        lp_headings = re.findall(r"\[LP\]([^\n]+)", dropped_text)
+        return {
+            "wiki_pages": [t.strip() for t in wiki_titles],
+            "lp_headings": [h.strip() for h in lp_headings],
+        }
+
+    @staticmethod
+    def _context_collapse(
+        sections: dict[str, str], char_cap: int
+    ) -> tuple[dict[str, str], bool, dict[str, object]]:
+        """
+        Tier 4 compaction: keep only essential sections under strict budget.
+        Section caps scale proportionally with char_cap so the collapse is not
+        over-aggressive at large char_cap values (the previous hardcoded values
+        discarded ~75% of the available budget at 32K).
+        """
+        hard_cap = max(2000, int(char_cap * 0.55))
+        sec_obj = max(400, int(hard_cap * 0.14))
+        sec_nonneg = max(600, int(hard_cap * 0.20))
+        sec_wc = max(400, int(hard_cap * 0.14))
+        sec_ev = max(800, int(hard_cap * 0.28))
+        sec_kf = max(400, int(hard_cap * 0.14))
+        collapsed = {
+            "ObjectiveNow": str(sections.get("ObjectiveNow") or "")[:sec_obj],
+            "NonNegotiables": str(sections.get("NonNegotiables") or "")[:sec_nonneg],
+            "WhatChanged": str(sections.get("WhatChanged") or "")[:sec_wc],
+            "Evidence": str(sections.get("Evidence") or "")[:sec_ev],
+            "KnownFailures": str(sections.get("KnownFailures") or "")[:sec_kf],
+        }
+        dropped_sources: dict[str, object] = {}
+        text = (
+            "## ObjectiveNow\n"
+            f"{collapsed['ObjectiveNow']}\n\n"
+            "## NonNegotiables\n"
+            f"{collapsed['NonNegotiables']}\n\n"
+            "## WhatChanged\n"
+            f"{collapsed['WhatChanged']}\n\n"
+            "## Evidence\n"
+            f"{collapsed['Evidence']}\n\n"
+            "## KnownFailures\n"
+            f"{collapsed['KnownFailures']}"
+        )
+        if len(text) <= hard_cap:
+            return collapsed, True, dropped_sources
+        # Final hard trim on evidence first, then what changed.
+        overflow = len(text) - hard_cap
+        if overflow > 0:
+            evidence_before = collapsed["Evidence"]
+            collapsed["Evidence"] = evidence_before[: max(0, len(evidence_before) - overflow)]
+            dropped_evidence = evidence_before[len(collapsed["Evidence"]):]
+            if dropped_evidence:
+                dropped_sources["Evidence"] = TieredContextEngine._parse_dropped_sources(dropped_evidence)
+        text = (
+            "## ObjectiveNow\n"
+            f"{collapsed['ObjectiveNow']}\n\n"
+            "## NonNegotiables\n"
+            f"{collapsed['NonNegotiables']}\n\n"
+            "## WhatChanged\n"
+            f"{collapsed['WhatChanged']}\n\n"
+            "## Evidence\n"
+            f"{collapsed['Evidence']}\n\n"
+            "## KnownFailures\n"
+            f"{collapsed['KnownFailures']}"
+        )
+        if len(text) > hard_cap:
+            over2 = len(text) - hard_cap
+            wc_before = collapsed["WhatChanged"]
+            collapsed["WhatChanged"] = wc_before[: max(0, len(wc_before) - over2)]
+            dropped_wc = wc_before[len(collapsed["WhatChanged"]):]
+            if dropped_wc:
+                dropped_sources["WhatChanged"] = TieredContextEngine._parse_dropped_sources(dropped_wc)
+        return collapsed, True, dropped_sources
+
+    def assemble_v2(
+        self,
+        project_id: str | None,
+        instruction: str,
+        *,
+        run_memory_events: list[dict[str, object]] | None = None,
+        project_profile: dict[str, object] | None = None,
+        lp_snippets: list[str] | None = None,
+        char_cap: int = 32000,
+    ) -> ContextBundle:
+        # Approximation: token ~= 4 chars, used for budgeting signals.
+        token_budget = max(500, int(char_cap / 4))
+        section_caps = {
+            "ObjectiveNow": min(3500, max(1200, int(char_cap * 0.16))),
+            "NonNegotiables": min(5500, max(1800, int(char_cap * 0.22))),
+            "WhatChanged": min(5000, max(1400, int(char_cap * 0.18))),
+            "Evidence": min(14000, max(6000, int(char_cap * 0.34))),
+            "KnownFailures": min(4000, max(1200, int(char_cap * 0.1))),
+        }
+
+        objective_items = [instruction.strip()] if (instruction or "").strip() else []
+        non_negotiables = []
+        long_term_items = []
+        user_preference_lines: list[str] = []
+        if isinstance(project_profile, dict):
+            values = project_profile.get("non_negotiables")
+            if isinstance(values, list):
+                non_negotiables = [str(v).strip() for v in values if str(v).strip()]
+            ltm = project_profile.get("long_term_items")
+            if isinstance(ltm, list):
+                long_term_items = [str(v).strip() for v in ltm if str(v).strip()]
+            upl = project_profile.get("user_preference_lines")
+            if isinstance(upl, list):
+                user_preference_lines = [str(v).strip() for v in upl if str(v).strip()]
+
+        changes: list[str] = []
+        failures: list[str] = []
+        compaction_trace: list[str] = ["tier1_micro_compact"]
+        for ev in run_memory_events or []:
+            if not isinstance(ev, dict):
+                continue
+            et = str(ev.get("event_type") or "")
+            payload = ev.get("payload")
+            body = payload if isinstance(payload, dict) else {"value": str(payload)}
+            summary = str(body.get("summary") or body.get("status") or body.get("value") or "").strip()
+            if not summary:
+                continue
+            if et in {
+                "qa_outcome",
+                "qa_remediation",
+                "guardrail_outcome",
+                "user_intent_updated",
+                "artifact_summary",
+            }:
+                changes.append(f"{et}: {summary}")
+            if et in {"qa_remediation", "guardrail_outcome"}:
+                failures.append(f"{et}: {summary}")
+        # Tier 2: snip oldest change/failure trails before section-level compaction.
+        changes, changes_snipped = self._snip_oldest(changes, keep_count=120)
+        failures, failures_snipped = self._snip_oldest(failures, keep_count=80)
+        if changes_snipped or failures_snipped:
+            compaction_trace.append("tier2_snip")
+
+        context_md = ""
+        if project_id:
+            try:
+                context_md = (workspace_path(project_id) / "CONTEXT.md").read_text(encoding="utf-8")
+            except FileNotFoundError:
+                context_md = ""
+
+        selected_lp_info: list[dict[str, object]] = []
+        lp_list = [s for s in (lp_snippets or []) if isinstance(s, str) and s.strip()]
+        for snippet in lp_list:
+            heading_line = snippet.split("\n")[0]
+            heading = heading_line[4:].strip() if heading_line.startswith("[LP]") else heading_line
+            selected_lp_info.append({"heading": heading, "chars": len(snippet)})
+
+        evidence_input = [s for s in [context_md, *lp_list] if isinstance(s, str) and s.strip()]
+        queries = self._expand_queries(instruction or "")
+
+        # Wiki pages (curated, LLM-enriched) — injected before raw parsed_docs so they
+        # get priority when the Evidence budget is tight. Use the same multi-query expansion
+        # as parsed_docs for consistent ranking quality.
+        selected_wiki_info: list[dict[str, object]] = []
+        wiki_chunks = self._load_wiki_chunks(project_id) if project_id else []
+        if wiki_chunks:
+            wiki_index = self._get_wiki_index(project_id) or _build_bm25_index(wiki_chunks)
+            wiki_scores = (
+                self._multi_query_max(wiki_index, queries)
+                if queries
+                else self._bm25_scores(wiki_index, instruction or "")
+            )
+            wiki_candidates = sorted(enumerate(wiki_scores), key=lambda kv: kv[1], reverse=True)[:20]
+            wiki_budget = min(8000, section_caps["Evidence"] // 2)
+            if not any(score > 0 for _, score in wiki_candidates):
+                wiki_selected = list(range(min(5, len(wiki_chunks))))
+            else:
+                wiki_selected = self._mmr_select(wiki_candidates, wiki_chunks, max_chars=wiki_budget)
+            for i in wiki_selected:
+                chunk = wiki_chunks[i]
+                m = re.search(r"\[Wiki:\s*([^\]]+)\]", chunk)
+                selected_wiki_info.append({"title": m.group(1).strip() if m else "unknown", "chars": len(chunk)})
+            evidence_input.extend(wiki_chunks[i] for i in wiki_selected)
+
+        chunks = self._load_all_parsed_chunks(project_id) if project_id else []
+        texts = _chunk_strings(chunks)
+        source_registry: list[dict[str, Any]] = []
+        if texts:
+            doc_index = self._get_doc_index(project_id) or _build_bm25_index(texts)
+            doc_scores = (
+                self._multi_query_max(doc_index, queries)
+                if queries
+                else self._bm25_scores(doc_index, instruction or "")
+            )
+            candidate_list = sorted(enumerate(doc_scores), key=lambda kv: kv[1], reverse=True)[:60]
+            candidate_list = self._semantic_rerank(instruction or "", candidate_list, texts)
+            if not any(score > 0 for _, score in candidate_list):
+                selected_idxs = list(range(min(12, len(texts))))
+            else:
+                selected_idxs = self._mmr_select(candidate_list, texts, max_chars=section_caps["Evidence"])
+            cited, source_registry = self._format_selected_sources(chunks, selected_idxs, prefix="S")
+            evidence_input.extend(cited)
+
+        objective_out, obj_dropped = self._compact_items(objective_items, section_caps["ObjectiveNow"])
+
+        # Non-negotiables are compacted first into their own budget slice to guarantee
+        # they always take priority. Remaining space goes to long_term_items then
+        # user_preference_lines, preventing verbose constraints from starving curated facts.
+        nonneg_only_out, nonneg_only_dropped = self._compact_items(
+            non_negotiables, section_caps["NonNegotiables"]
+        )
+        nonneg_used = sum(len(x) + 1 for x in nonneg_only_out)
+        ltm_budget = max(0, section_caps["NonNegotiables"] - nonneg_used)
+        ltm_out, ltm_dropped = self._compact_items(
+            [*long_term_items, *user_preference_lines], ltm_budget
+        )
+        nonneg_out = nonneg_only_out + ltm_out
+        nonneg_dropped = nonneg_only_dropped + ltm_dropped
+
+        changed_out, changed_dropped = self._compact_items(changes, section_caps["WhatChanged"])
+        evidence_out, evidence_dropped = self._compact_items(evidence_input, section_caps["Evidence"])
+        failures_out, fail_dropped = self._compact_items(failures, section_caps["KnownFailures"])
+        if changed_dropped or evidence_dropped or fail_dropped or nonneg_dropped or obj_dropped:
+            compaction_trace.append("tier3_auto_compact")
+
+        sections = {
+            "ObjectiveNow": "\n".join(objective_out),
+            "NonNegotiables": "\n".join(nonneg_out),
+            "WhatChanged": "\n".join(changed_out),
+            "Evidence": "\n".join(evidence_out),
+            "KnownFailures": "\n".join(failures_out),
+        }
+
+        # Tier 3 fallback signal: inject short summary when change/failure lists were compacted.
+        auto_summary = ""
+        if changed_dropped or fail_dropped:
+            auto_summary = self._auto_summary([*changes, *failures], max_items=10, max_chars=900)
+            if auto_summary:
+                sections["WhatChanged"] = (
+                    (sections["WhatChanged"] + "\n\n" + auto_summary).strip()
+                    if sections["WhatChanged"]
+                    else auto_summary
+                )
+
+        assembled = (
+            "## ObjectiveNow\n"
+            f"{sections['ObjectiveNow']}\n\n"
+            "## NonNegotiables\n"
+            f"{sections['NonNegotiables']}\n\n"
+            "## WhatChanged\n"
+            f"{sections['WhatChanged']}\n\n"
+            "## Evidence\n"
+            f"{sections['Evidence']}\n\n"
+            "## KnownFailures\n"
+            f"{sections['KnownFailures']}"
+        )[:char_cap]
+        tier4_applied = False
+        tier4_dropped_sources: dict[str, object] = {}
+        if len(assembled) >= char_cap:
+            collapsed, tier4_applied, tier4_dropped_sources = self._context_collapse(sections, char_cap=char_cap)
+            sections = collapsed
+            assembled = (
+                "## ObjectiveNow\n"
+                f"{sections['ObjectiveNow']}\n\n"
+                "## NonNegotiables\n"
+                f"{sections['NonNegotiables']}\n\n"
+                "## WhatChanged\n"
+                f"{sections['WhatChanged']}\n\n"
+                "## Evidence\n"
+                f"{sections['Evidence']}\n\n"
+                "## KnownFailures\n"
+                f"{sections['KnownFailures']}"
+            )[:char_cap]
+        if tier4_applied:
+            compaction_trace.append("tier4_context_collapse")
+        section_sizes = {k: len(v) for k, v in sections.items()}
+        section_utilization = {
+            k: round(section_sizes.get(k, 0) / max(1, section_caps.get(k, 1)), 3)
+            for k in section_caps
+        }
+        evidence_coverage = {
+            "parsed_chunk_count": len(chunks),
+            "selected_evidence_chunk_count": len(evidence_out),
+            "selected_wiki_page_count": len(selected_wiki_info),
+            "wiki_chunk_pool_count": len(wiki_chunks) if wiki_chunks else 0,
+            "evidence_budget_chars": section_caps.get("Evidence", 0),
+            "evidence_used_chars": section_sizes.get("Evidence", 0),
+            "evidence_utilization": section_utilization.get("Evidence", 0.0),
+            "source_registry_count": len(source_registry),
+        }
+        metadata = {
+            "char_cap": char_cap,
+            "token_budget_estimate": token_budget,
+            "token_count_estimate": int(len(assembled) / 4),
+            "parsed_chunk_count": len(chunks),
+            "selected_evidence_chunk_count": len(evidence_out),
+            "source_registry": source_registry,
+            "section_sizes": section_sizes,
+            "section_budgets": dict(section_caps),
+            "section_utilization": section_utilization,
+            "evidence_coverage": evidence_coverage,
+            "compaction_tiers_applied": compaction_trace,
+            "compaction_reason_codes": [
+                "overflow_detected" if tier4_applied else "quality_preserve",
+                "overflow_predicted" if (changed_dropped or evidence_dropped or fail_dropped) else "quality_preserve",
+            ],
+            "snipped_items": {
+                "WhatChanged": changes_snipped,
+                "KnownFailures": failures_snipped,
+            },
+            "auto_summary_applied": bool(auto_summary),
+            "context_collapse_applied": tier4_applied,
+            "dropped_items": {
+                "ObjectiveNow": obj_dropped,
+                "NonNegotiables": nonneg_dropped,
+                "WhatChanged": changed_dropped,
+                "Evidence": evidence_dropped,
+                "KnownFailures": fail_dropped,
+            },
+            "context_provenance": {
+                "selected_wiki_pages": selected_wiki_info,
+                "selected_lp_headings": selected_lp_info,
+                "parsed_doc_count": len(chunks),
+                "source_registry": source_registry,
+            },
+            "tier4_dropped_sources": tier4_dropped_sources,
+        }
+        return ContextBundle(text=assembled, char_budget=char_cap, metadata=metadata)

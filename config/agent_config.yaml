@@ -1,0 +1,13 @@
+# How runs are executed.
+#
+# Runs and Sheldon conversation turns are driven by LangGraph graphs:
+#   src/workflows/agent_graph.py         one run attempt: prepare -> generate -> evaluate -> finalize,
+#                                        with a checkpoint after each phase. If the server restarts
+#                                        mid-run, the run continues from the last finished phase.
+#   src/workflows/conversation_graph.py  one conversation turn: receive -> understand -> route -> respond.
+
+langgraph:
+  # Where run checkpoints are kept. "sqlite" writes a file under the workspace folder.
+  # "postgres" uses DATABASE_URL (needs the langgraph-checkpoint-postgres package).
+  # RUN_CHECKPOINT_STORE in .env overrides this.
+  checkpoint_store: sqlite

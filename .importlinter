@@ -1,0 +1,46 @@
+[importlinter]
+root_package = src
+include_external_packages = False
+
+[importlinter:contract:layers]
+name = Layers: higher layers may import lower ones, never the reverse
+type = layers
+layers =
+    src.app : src.extensions
+    src.workflows
+    src.agents
+    src.evaluation : src.guardrails
+    src.tools
+    src.memory : src.deliverables : src.prompts
+    src.llm
+    src.core
+# Existing violations, recorded so the check passes today and blocks new ones.
+# Remove a line when the import it names is gone.
+ignore_imports =
+    src.agents.planner_agent -> src.app.schemas.llm_contracts
+    src.agents.specialists._shared -> src.extensions.swarm.swarm
+    src.agents.specialists.xlsx_agent -> src.extensions.financial_models.excel_model_composer
+    src.agents.specialists.xlsx_agent -> src.workflows.task_router.output_format_detection
+    src.agents.supervisor_agent -> src.extensions.swarm.teammate_executor
+    src.agents.supervisor_execution -> src.extensions.swarm.swarm_custom_tasks
+    src.agents.supervisor_execution -> src.workflows.run_events
+    src.agents.supervisor_execution -> src.workflows.run_todo_snapshot
+    src.agents.supervisor_teammates -> src.extensions.swarm.teammate_executor
+    src.agents.tool_agent -> src.extensions.swarm.swarm
+    src.core.storage -> src.deliverables.deliverable
+    src.deliverables.docx.deliverable_docx -> src.evaluation.docx_qa
+    src.deliverables.pptx.deliverable_pptx -> src.evaluation.deliverable_quality
+    src.deliverables.pptx.deliverable_pptx -> src.evaluation.pptx_qa
+    src.deliverables.pptx.pptx_artifact_renderer -> src.agents.conversation.storyline_builder
+    src.deliverables.pptx.pptx_artifact_renderer -> src.evaluation.design_review
+    src.deliverables.pptx.pptx_artifact_renderer -> src.evaluation.evidence_claims
+    src.deliverables.pptx.pptx_artifact_renderer -> src.evaluation.evidence_validator
+    src.deliverables.pptx.pptx_artifact_renderer -> src.evaluation.pptx_qa
+    src.deliverables.xlsx.deliverable_xlsx -> src.evaluation.xlsx_qa
+    src.evaluation.xlsx_qa -> src.extensions.financial_models.excel_qa_integration
+    src.guardrails.policy -> src.agents.conversation.slide_negotiator
+    src.tools.registry -> src.extensions.swarm.swarm
+    src.tools.registry -> src.extensions.swarm.swarm_tool_handlers
+    src.workflows.orchestrator -> src.app.schemas.coordinator_run
+    src.workflows.orchestrator -> src.app.schemas.run_payloads
+    src.workflows.orchestrator -> src.extensions.swarm.swarm

@@ -1,0 +1,19 @@
+name: qa_review
+version: 1
+description: Score a run's deliverables for factual and structural quality against the evidence (src/evaluation/qa.py).
+system: |-
+  You are a QA reviewer for consulting deliverables. Return strict JSON only.
+user: |-
+  Evaluate the following deliverables for factual/structural quality using the provided evidence.
+  For each output:
+  - Prefer evidence-backed claims.
+  - If evidence is missing/weak, lower the score conservatively.
+
+  Return JSON with keys: passed (boolean), iterations (integer), scores (object mapping output keys to numbers), remediation_instructions (object keyed by output with reason/actions/rewrite_prompt).
+  Threshold for passed is ${threshold}.
+  Evidence (may be empty):
+  ${verifications}
+
+  Outputs:
+  ${outputs}
+  Iteration: ${iteration} of ${max_iterations}.

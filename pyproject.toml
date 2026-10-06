@@ -1,0 +1,56 @@
+# Tool settings only. Dependencies are pinned in requirements.txt / requirements-dev.txt.
+# The code is imported as the `src` package from the repo root (no install step needed).
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests/unit", "tests/integration"]
+addopts = "-q"
+asyncio_mode = "auto"
+markers = [
+    "slow: longer integration-style tests (minutes / heavy I/O); exclude with -m \"not slow\"",
+    "live_llm: requires real Anthropic API; opt-in only",
+    "redis: exercises real Redis-backed code paths via fakeredis; opt-in only",
+    "asyncio: marks tests as async (deselect with '-m \"not asyncio\"')",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+fail_under = 0
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM", "S"]
+ignore = [
+  "S101",   # assert statements (used in tests)
+  "S105",   # hardcoded passwords (false positives on config defaults)
+  "S106",
+  "S603",   # subprocess without shell=False (we do validate inputs)
+  "B008",   # do not perform function calls in argument defaults (FastAPI Depends pattern)
+  "SIM108", # use ternary operator (readability preference)
+  "SIM105", # prefer contextlib.suppress (try/except/pass is equally valid; keeps local scope)
+  "E501",   # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+# main.py loads .env files BEFORE importing app modules so Settings()
+# observes the final env-var state; that legitimately requires imports after code.
+"src/app/main.py" = ["E402"]
+# Tests frequently use assert statements, hardcoded creds, and deliberate bare
+# `raise` patterns that are harmless in a test context.
+"tests/*" = ["S101", "S105", "S106", "S107", "S108", "S110", "S112", "S311", "S324", "B017", "F841", "E741", "SIM105", "SIM117"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+no_strict_optional = true
+allow_untyped_defs = true
+warn_unused_ignores = false

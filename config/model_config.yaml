@@ -1,0 +1,34 @@
+# Which model service the app talks to.
+#
+# Environment variables (in .env) override this file:
+#   LLM_PROVIDER, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, LLM_PLANNING_MODEL, LLM_CRITIQUE_MODEL
+# API keys never go in this file. Use LLM_API_KEY (or ANTHROPIC_API_KEY for the anthropic provider) in .env.
+
+# anthropic          Anthropic Messages API (ANTHROPIC_API_KEY). Full feature set.
+# claude_cli         The locally signed-in Claude Code CLI. No API key; no tool calling. Personal local use.
+# openai_compatible  Any service with an OpenAI-style /chat/completions endpoint (OpenAI, Groq, Azure, local servers).
+provider: anthropic
+
+# Leave empty for the provider's default address. Examples for openai_compatible:
+#   https://api.openai.com/v1      https://api.groq.com/openai/v1      http://localhost:11434/v1
+base_url: ""
+
+# Model per tier. Empty values fall back: planning/critique -> default -> the provider's built-in default.
+# For anthropic and claude_cli the built-in defaults are the ANTHROPIC_* model settings
+# (claude-haiku-4-5, planning claude-opus-4-8, critique claude-sonnet-4-6).
+models:
+  default: ""
+  planning: ""
+  critique: ""
+
+# What the configured openai_compatible model can do. Features that are switched off degrade gracefully:
+# no tools -> agents write in a single call; no vision -> visual quality checks are skipped.
+openai_compatible:
+  supports_tools: true
+  supports_vision: true
+  # Newer OpenAI models expect "max_completion_tokens"; most other services expect "max_tokens".
+  max_tokens_param: max_tokens
+
+claude_cli:
+  path: claude
+  timeout_sec: 600

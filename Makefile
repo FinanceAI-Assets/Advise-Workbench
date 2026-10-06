@@ -1,0 +1,67 @@
+.PHONY: dev.secret db.up db.down db.migrate db.reset redis.up redis.down pptx.canvas.parity lint test coverage dev doctor
+
+# Check the environment, then run bridge + backend + frontend together (Ctrl+C stops all).
+dev:
+	./scripts/run_agent.sh
+
+# Environment and package prechecks only.
+doctor:
+	./scripts/run_agent.sh --check
+
+# Enforced lint gate (mirrors CI): no new silent exception swallows.
+lint:
+	ruff check src --select S110,S112
+	lint-imports
+
+# Full backend test suite — both suites, mirroring CI's two pytest steps.
+test:
+	pytest tests/unit -q && pytest tests/integration -q
+
+# Backend coverage report (term-missing) — same invocation as CI.
+coverage:
+	pytest tests/unit -q --cov=src --cov-report=term-missing
+
+# Append a random JWT_SECRET to repo-root .env if not already set (local dev only).
+dev.secret:
+	@set -e; ROOT="$$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; ENV="$$ROOT/.env"; \
+	if [ -f "$$ENV" ] && grep -q '^JWT_SECRET=' "$$ENV"; then \
+	  echo "Refusing: $$ENV already contains JWT_SECRET="; exit 1; \
+	fi; \
+	SECRET="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"; \
+	echo "JWT_SECRET=$$SECRET" >> "$$ENV"; \
+	echo "Appended JWT_SECRET to $$ENV"
+
+# Database targets (Postgres via docker-compose)
+db.up:
+	docker compose up -d postgres
+	@echo "Waiting for Postgres to be ready..."
+	@until docker compose exec postgres pg_isready -U advise_workbench -d advise_workbench -q 2>/dev/null; do sleep 1; done
+	@echo "Postgres ready. Run 'make db.migrate' to apply migrations."
+
+db.down:
+	docker compose stop postgres
+
+db.migrate:
+	alembic upgrade head
+
+db.reset:
+	docker compose stop postgres
+	docker compose rm -f postgres
+	docker compose up -d postgres
+	@until docker compose exec postgres pg_isready -U advise_workbench -d advise_workbench -q 2>/dev/null; do sleep 1; done
+	alembic upgrade head
+	@echo "Database reset and migrated."
+
+# Redis target (via docker-compose)
+redis.up:
+	docker compose up -d redis
+	@echo "Waiting for Redis to be ready..."
+	@until docker compose exec redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 1; done
+	@echo "Redis ready."
+
+redis.down:
+	docker compose stop redis
+
+pptx.canvas.parity:
+	python3 scripts/spikes/pptx_canvas_parity_spike.py --strict
+	python3 scripts/spikes/pptx_canvas_visual_diff_spike.py --strict

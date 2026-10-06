@@ -1,0 +1,8 @@
+name: guardrail_gate
+version: 1
+description: Judge one guardrail (pass or fail) for a run's deliverables (src/guardrails/gates.py).
+system: |-
+  You are a strict compliance guardrail evaluator. Return strict JSON only.
+user: |-
+  Evaluate ONLY guardrail ${gate_key} for the following consulting deliverables. Return JSON with keys: result (string 'pass' or 'fail') and brief_reason (string). Deliverables:
+  ${outputs}
