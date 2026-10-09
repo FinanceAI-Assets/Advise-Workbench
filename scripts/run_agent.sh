@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#
 # Advise Workbench: check the environment, then run bridge + backend + frontend together.
 #
 #   ./scripts/run_agent.sh           prechecks, then start everything (Ctrl+C stops it all)
