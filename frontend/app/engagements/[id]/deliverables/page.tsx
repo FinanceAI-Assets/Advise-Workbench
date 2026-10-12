@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight } from "lucide-react";
+import { Plus } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -137,13 +137,12 @@ export default function EngagementDeliverablesPage() {
           <p className="mt-1 text-sm text-[var(--text-muted)]">{data.subtitle}</p>
         </div>
         <Button
-          variant="secondary"
           type="button"
           className="flex shrink-0 items-center gap-2"
           onClick={() => router.push(`/engagements/${id}/conversation`)}
         >
-          <ArrowUpRight size={16} aria-hidden />
-          Open conversation
+          <Plus size={16} aria-hidden />
+          Create deliverable
         </Button>
       </header>
 

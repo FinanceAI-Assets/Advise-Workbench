@@ -49,6 +49,7 @@ function AssistantBubble({ message }: { message: ConversationMessage }) {
 
       {message.headline ? <p className="text-base font-semibold text-[var(--text-default)]">{message.headline}</p> : null}
       {message.intro ? <p className="text-sm text-[var(--text-muted)]">{message.intro}</p> : null}
+      {message.body ? <p className="whitespace-pre-wrap text-sm text-[var(--text-default)]">{message.body}</p> : null}
 
       {message.phases?.map((phase) => (
         <div key={phase.label}>

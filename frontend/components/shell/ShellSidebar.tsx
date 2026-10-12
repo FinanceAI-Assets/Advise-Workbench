@@ -21,27 +21,57 @@ import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
-// Conversation and Deliverables are engagement-scoped
-// (/engagements/[id]/conversation, /engagements/[id]/deliverables) rather
-// than standalone sections, so they're reached from an engagement, not a
-// top-level nav link.
-const links = [
-  { href: "/engagements", label: "Engagements", icon: Briefcase },
-  { href: "/admin/lp-library", label: "Leading Practice Library", icon: Library },
-  { href: "/admin/skills", label: "Skills", icon: LayoutGrid },
-  { href: "/reviews", label: "Reviews", icon: ClipboardCheck },
-];
-
 function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+
+  // Extract engagement ID from pathname if we're in an engagement context
+  const engagementMatch = pathname.match(/^\/engagements\/([^/]+)/);
+  const engagementId = engagementMatch?.[1];
+  const isConversation = /\/conversation(\/|$)/.test(pathname);
+  const isDeliverables = /\/deliverables(\/|$)/.test(pathname);
+
+  // Navigation items - always clickable and visible. Each item owns its own
+  // "active" test instead of a shared pathname.startsWith(href) check, since
+  // "/engagements" is a literal prefix of every engagement sub-route — a
+  // naive prefix match would keep "Engagements" highlighted at the same
+  // time as "Conversation" or "Deliverables".
+  const navLinks = [
+    {
+      href: "/engagements",
+      label: "Engagements",
+      icon: Briefcase,
+      active: pathname === "/engagements" || (Boolean(engagementId) && !isConversation && !isDeliverables),
+    },
+    {
+      href: engagementId ? `/engagements/${engagementId}/conversation` : "/conversation",
+      label: "Conversation",
+      icon: LayoutGrid,
+      active: isConversation,
+    },
+    {
+      href: engagementId ? `/engagements/${engagementId}/deliverables` : "/deliverables",
+      label: "Deliverables",
+      icon: LayoutGrid,
+      active: isDeliverables,
+    },
+    {
+      href: "/admin/lp-library",
+      label: "Leading Practice Library",
+      icon: Library,
+      active: pathname.startsWith("/admin/lp-library"),
+    },
+    { href: "/admin/skills", label: "Skills", icon: LayoutGrid, active: pathname.startsWith("/admin/skills") },
+    { href: "/reviews", label: "Reviews", icon: ClipboardCheck, active: pathname.startsWith("/reviews") },
+  ];
+
   return (
     <>
       <p className="mb-1 px-2 text-2xs font-semibold uppercase tracking-wide text-[var(--primary-600)]">
         Workspace
       </p>
-      {links.map((item) => {
+      {navLinks.map((item) => {
         const Icon = item.icon;
-        const active = pathname.startsWith(item.href);
+
         return (
           <Link
             key={`${item.href}:${item.label}`}
@@ -49,7 +79,7 @@ function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
             onClick={onNavigate}
             className={cn(
               "flex min-h-11 items-center gap-2 rounded-md border-l-2 px-2 py-2 text-sm transition !no-underline",
-              active
+              item.active
                 ? "border-l-[var(--accent-green)] bg-[var(--primary-800)] !text-white shadow-sm"
                 : "border-l-transparent !text-[var(--primary-200)] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
             )}
@@ -234,23 +264,18 @@ export function ShellSidebar({
             {desktopCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
         </div>
-        {!desktopCollapsed ? (
-          <div className="mb-6 shrink-0 px-0">
-            <WorkspacePicker />
-          </div>
-        ) : null}
-        {desktopCollapsed ? (
-          <div className="min-h-0 flex-1" aria-hidden />
-        ) : (
-          <nav className="shell-sidebar-nav flex-1 space-y-1">
-            <NavLinkList />
-          </nav>
-        )}
-        {!desktopCollapsed ? (
-          <div className="mt-auto shrink-0 border-t border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] pt-3">
-            <SidebarUserFooter />
-          </div>
-        ) : null}
+        {/* Always show WorkspacePicker */}
+        <div className="mb-6 shrink-0 px-0">
+          <WorkspacePicker />
+        </div>
+        {/* Always show navigation items */}
+        <nav className="shell-sidebar-nav flex-1 space-y-1">
+          <NavLinkList />
+        </nav>
+        {/* Always show user footer */}
+        <div className="mt-auto shrink-0 border-t border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] pt-3">
+          <SidebarUserFooter />
+        </div>
         {desktopCollapsed ? (
           <button
             type="button"

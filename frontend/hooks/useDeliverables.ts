@@ -10,6 +10,7 @@ import type {
   DeliverablesDetail,
   EngagementFile,
   Slide,
+  SlideEvidenceLink,
   VersionHistoryEntry,
 } from "@/types/api";
 
@@ -40,6 +41,18 @@ type RunArtifactsResponse = {
 type CanvasHistoryItem = { id: string; version: string; current: boolean; meta: string };
 type CanvasHistoryResponse = { items: CanvasHistoryItem[] };
 
+// Raw shape of one row from GET /api/runs/{pid}/{rid}/evidence-claims — see
+// build_claims_from_evidence_report in src/evaluation/evidence_claims.py.
+type RawEvidenceClaim = {
+  id?: string;
+  slide_index?: number;
+  slide_title?: string;
+  claim?: string;
+  claim_type?: string;
+  status?: "unsupported" | "grounded";
+  citation?: string | null;
+};
+
 function statusFromQuality(quality: string | undefined): ArtifactStatus {
   if (quality === "passed") return "Approved";
   if (quality === "review_recommended" || quality === "completed_with_guardrail_failures") return "Changes requested";
@@ -48,12 +61,15 @@ function statusFromQuality(quality: string | undefined): ArtifactStatus {
 
 // Extra, non-mock fields the Deliverables page uses to build a
 // per-slide-index detail callback for ArtifactViewer (so browsing slides
-// shows real content, not just the initially-active one).
+// shows real content, not just the initially-active one), and per-slide
+// evidence links (so the "Evidence linked to this slide" panel reflects
+// whichever slide is currently selected, not just slide 0).
 export type DeliverablesWithRaw = DeliverablesDetail & {
   rawSlides: RawPptxSlide[];
   slideBreadcrumb: string;
   slideSourcesSummary: string;
   slideFooterMeta: string;
+  claimsBySlideIndex: Record<number, SlideEvidenceLink[]>;
 };
 
 export function useDeliverablesQuery(pid: string, runId?: string, enabled = true) {
@@ -93,8 +109,26 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
       const hasPptx = slides.length > 0;
       const narrative = bag.narrative_md || bag.sop_markdown || "";
       const hasDocx = Boolean(narrative);
-      const claimsCount = evidenceData.claims?.length ?? 0;
+      const claims = (evidenceData.claims ?? []) as RawEvidenceClaim[];
+      const claimsCount = claims.length;
       const status = statusFromQuality(bag.quality_status);
+
+      // slide_index from evidence_claims.py is 1-based; group into the
+      // slide's own evidence links so SlideEvidencePanel reflects whichever
+      // slide is currently selected, not just the first one.
+      const claimsBySlideIndex: Record<number, SlideEvidenceLink[]> = {};
+      claims.forEach((claim, i) => {
+        const slideIdx = (claim.slide_index ?? 1) - 1;
+        const bucket = claimsBySlideIndex[slideIdx] ?? (claimsBySlideIndex[slideIdx] = []);
+        bucket.push({
+          id: claim.id ?? `claim-${i}`,
+          index: bucket.length + 1,
+          label: claim.claim ?? "Untitled claim",
+          description: claim.citation ? `Source: ${claim.citation}` : claim.claim_type ?? "Unverified claim",
+          icon: claim.citation ? "library" : "doc",
+          verified: claim.status === "grounded",
+        });
+      });
 
       const files: EngagementFile[] = [];
       if (hasPptx) {
@@ -133,7 +167,7 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
         engagementId: pid,
         engagementName,
         title: "Deliverables & artifacts",
-        subtitle: "Review the actual output, trace its sources and export the approved version.",
+        subtitle: "Review the actual output, trace its sources and export the approved version—not just the conversation.",
         tabCounts: { all: files.length, powerpoint: hasPptx ? 1 : 0, word: hasDocx ? 1 : 0, evidenceRegister: claimsCount ? 1 : 0 },
         files,
         versions,
@@ -141,6 +175,7 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
         slideBreadcrumb,
         slideSourcesSummary: sourcesSummary,
         slideFooterMeta,
+        claimsBySlideIndex,
         pptx: {
           name: "Deliverable deck",
           versionLabel: `PPTX · ${versions[0]?.version ?? "v0.1"}`,
@@ -155,7 +190,7 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
             sourcesSummary,
             slideFooterMeta
           ),
-          evidenceLinks: [],
+          evidenceLinks: claimsBySlideIndex[activeSlideIndex] ?? [],
         },
         docx: {
           name: "Deliverable document",

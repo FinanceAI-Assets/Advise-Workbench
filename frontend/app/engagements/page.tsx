@@ -11,6 +11,7 @@ import {
   RecentActivityPanel,
 } from "@/components/engagements";
 import { Button } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -20,10 +21,10 @@ import {
   useNextActionsQuery,
   useRecentActivityQuery,
 } from "@/hooks/useEngagements";
+import { useCreateProjectMutation } from "@/hooks/useProjects";
 import { useAuth } from "@/lib/auth-context";
 
 const PAGE_SIZE = 5;
-const TOTAL_ENGAGEMENTS = 8;
 
 export default function EngagementsPage() {
   const router = useRouter();
@@ -36,6 +37,7 @@ export default function EngagementsPage() {
   const stats = useEngagementStatsQuery(Boolean(token));
   const nextActions = useNextActionsQuery(Boolean(token));
   const recentActivity = useRecentActivityQuery(Boolean(token));
+  const createEngagement = useCreateProjectMutation();
 
   useEffect(() => {
     setHydrated(true);
@@ -45,6 +47,11 @@ export default function EngagementsPage() {
     if (!ready) return;
     if (!token) router.replace("/login?next=/engagements");
   }, [ready, token, router]);
+
+  async function handleNewEngagement() {
+    const id = await createEngagement.mutateAsync("New engagement");
+    router.push(`/engagements/${id}`);
+  }
 
   const rows = useMemo(() => {
     const items = engagements.data ?? [];
@@ -74,9 +81,14 @@ export default function EngagementsPage() {
             Move from a grounded brief to a reviewed deliverable. Keep every advisory decision connected to evidence.
           </p>
         </div>
-        <Button type="button" className="flex shrink-0 items-center gap-2">
+        <Button
+          type="button"
+          className="flex shrink-0 items-center gap-2"
+          disabled={createEngagement.isPending}
+          onClick={() => void handleNewEngagement()}
+        >
           <Plus size={16} aria-hidden />
-          New engagement
+          {createEngagement.isPending ? "Creating…" : "New engagement"}
         </Button>
       </header>
 
@@ -117,9 +129,15 @@ export default function EngagementsPage() {
             My team
           </Button>
           <span className="ml-auto text-xs text-[var(--text-muted)]">
-            Showing {rows.length} of {TOTAL_ENGAGEMENTS} engagements
+            Showing {rows.length} of {engagements.data?.length ?? 0} engagements
           </span>
         </div>
+
+        {createEngagement.isError ? (
+          <p className="text-sm text-[#8C5B12]">
+            {createEngagement.error instanceof Error ? createEngagement.error.message : "Failed to create engagement."}
+          </p>
+        ) : null}
 
         {engagements.isPending ? (
           <div className="space-y-2" aria-busy>
@@ -127,6 +145,22 @@ export default function EngagementsPage() {
             <Skeleton className="h-16 w-full" />
             <Skeleton className="h-16 w-full" />
           </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title={query ? "No engagements match your search" : "No engagements yet"}
+            description={
+              query
+                ? "Try a different search term."
+                : "Create your first engagement to start a conversation and generate deliverables."
+            }
+          >
+            {!query ? (
+              <Button type="button" disabled={createEngagement.isPending} onClick={() => void handleNewEngagement()}>
+                <Plus size={16} aria-hidden />
+                New engagement
+              </Button>
+            ) : null}
+          </EmptyState>
         ) : (
           <EngagementsTable rows={rows} />
         )}

@@ -19,12 +19,17 @@ const STATUS_CLASS: Record<string, string> = {
 export function ArtifactViewer({
   pptx,
   getSlideDetail,
+  onSlideChange,
 }: {
   pptx: DeliverablesDetail["pptx"];
   // Optional: when the caller holds the raw pptx_slides.json array (real
   // run data), it supplies this to resolve full content for any slide the
   // user browses to, not just the one `pptx.slideDetail` was built for.
   getSlideDetail?: (index: number) => DeliverablesDetail["pptx"]["slideDetail"];
+  // Optional: lets the caller (e.g. the Deliverables page) keep its own
+  // evidence/sources panel in sync with whichever slide is on screen, since
+  // the selected index otherwise lives only in this component's state.
+  onSlideChange?: (index: number) => void;
 }) {
   const [activeIndex, setActiveIndex] = useState(pptx.activeSlideIndex);
   const activeSlide = pptx.slides[activeIndex];
@@ -40,6 +45,11 @@ export function ArtifactViewer({
             sources: "Full detail not available for this slide.",
             pageLabel: `${String(activeSlide.index).padStart(2, "0")} / ${pptx.slides.length}`,
           };
+
+  function selectSlide(index: number) {
+    setActiveIndex(index);
+    onSlideChange?.(index);
+  }
 
   return (
     <Card className="space-y-4">
@@ -64,7 +74,7 @@ export function ArtifactViewer({
 
       <SlideCanvas slide={slide} />
 
-      <SlideThumbnailNav slides={pptx.slides} activeIndex={activeIndex} onSelect={setActiveIndex} />
+      <SlideThumbnailNav slides={pptx.slides} activeIndex={activeIndex} onSelect={selectSlide} />
     </Card>
   );
 }
