@@ -10,7 +10,7 @@ export function Button({ className, variant = "primary", ...props }: Props) {
   return (
     <button
       className={cn(
-        "px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 active:brightness-90",
+        "rounded-md px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 active:brightness-90",
         variant === "primary" &&
           "bg-[var(--accent-green)] text-white hover:bg-[var(--accent-green-dark)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--coral-black)]",
         variant === "secondary" &&

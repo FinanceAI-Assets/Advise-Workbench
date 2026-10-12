@@ -7,10 +7,13 @@ mounted with prefix="/projects" in app/api/routes.py.
 
 # Importing the submodules registers their routes on the shared router.
 # Order mirrors the original module: crud, conversation, preferences, tasks.
+# engagement_meta is additive (new routes only, no change to any existing
+# submodule's routes).
 from src.app.api.projects import (  # noqa: F401
     conversation,
     conversation_turns,
     crud,
+    engagement_meta,
     preferences,
     scheduled_tasks,
 )

@@ -1,22 +1,12 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { ShellSidebar } from "@/components/shell/ShellSidebar";
 import { ShellTopbar } from "@/components/shell/ShellTopbar";
-import { cn } from "@/lib/utils";
 
-const noShellRoutes = ["/login"];
-
-const MATRIX_LS_KEYS = ["advise_workbench.matrixTheme", "advise_workbench.matrixThemeLeftPane"] as const;
-
-function readMatrixThemeFromStorage(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    MATRIX_LS_KEYS.some((k) => window.localStorage.getItem(k) === "true")
-  );
-}
+const noShellRoutes = ["/login", "/admin/console"];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -27,32 +17,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   // mismatch. localStorage is unavailable during SSR.
   const [hydrated, setHydrated] = useState(false);
   const [desktopNavCollapsed, setDesktopNavCollapsed] = useState(false);
-  const [matrixTheme, setMatrixTheme] = useState(false);
 
   useEffect(() => {
     setDesktopNavCollapsed(
       window.localStorage.getItem("advise_workbench.desktopNavCollapsed") === "true",
     );
-    setMatrixTheme(readMatrixThemeFromStorage());
     setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    if (noShell) {
-      document.documentElement.classList.remove("matrix-app-html");
-      return;
-    }
-    document.documentElement.classList.toggle("matrix-app-html", matrixTheme);
-    return () => document.documentElement.classList.remove("matrix-app-html");
-  }, [matrixTheme, noShell]);
-
-  const persistMatrixTheme = useCallback((enabled: boolean) => {
-    setMatrixTheme(enabled);
-    if (typeof window === "undefined") return;
-    const v = enabled ? "true" : "false";
-    window.localStorage.setItem("advise_workbench.matrixTheme", v);
-    window.localStorage.setItem("advise_workbench.matrixThemeLeftPane", v);
   }, []);
 
   useEffect(() => {
@@ -83,13 +53,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div
-      className={cn(
-        "flex min-h-screen",
-        !matrixTheme && "bg-[var(--primary-50)] text-[var(--primary-900)]",
-        matrixTheme && "matrix-app",
-      )}
-    >
+    <div className="flex min-h-screen bg-[var(--primary-50)] text-[var(--primary-900)]">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--primary-900)] focus:shadow-lg focus:outline-2 focus:outline-[var(--accent-blue)]"
@@ -101,8 +65,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         onMobileClose={() => setMobileNavOpen(false)}
         desktopCollapsed={desktopNavCollapsed}
         onDesktopToggle={() => setDesktopNavCollapsed((prev) => !prev)}
-        matrixTheme={matrixTheme}
-        onMatrixThemeChange={persistMatrixTheme}
       />
       <div className="app-shell-body relative z-[1] min-w-0 flex-1">
         <ShellTopbar onMenuClick={() => setMobileNavOpen(true)} />

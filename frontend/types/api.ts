@@ -3,6 +3,627 @@
 export type ProjectRow = { id: string; name: string };
 export type ProjectsListResponse = { items: ProjectRow[] };
 
+export type EngagementStage = "Brief" | "Sources" | "Drafting" | "In review" | "Approved";
+
+export type EngagementRow = {
+  id: string;
+  name: string;
+  code: string;
+  type: string;
+  stage: EngagementStage;
+  progress: number;
+  owner: string;
+  nextTask: string;
+  dueDate: string;
+};
+
+export type EngagementStat = {
+  id: string;
+  label: string;
+  value: number;
+  helper: string;
+  helperTone?: "default" | "warning" | "success";
+};
+
+export type NextAction = {
+  id: string;
+  title: string;
+  description: string;
+  due: string;
+  actionLabel?: string;
+  icon: "comment" | "review";
+};
+
+export type ActivityItem = {
+  id: string;
+  title: string;
+  meta: string;
+  icon: "deck" | "library";
+};
+
+export type EngagementStepStatus = "complete" | "in-progress" | "upcoming";
+export type EngagementStepIcon = "number" | "cycle";
+
+export type EngagementStep = {
+  id: string;
+  index: number;
+  label: string;
+  status: EngagementStepStatus;
+  helper: string;
+  icon?: EngagementStepIcon;
+};
+
+export type EngagementBrief = {
+  updated: string;
+  summary: string;
+  context: string;
+  sponsorObjective: string;
+  scope: string;
+  successMeasures: string;
+  classification: string;
+};
+
+export type MilestoneStatus = "Complete" | "Drafting" | "Scheduled";
+
+export type Milestone = {
+  id: string;
+  name: string;
+  owner: string;
+  target: string;
+  status: MilestoneStatus;
+};
+
+export type TeamMember = {
+  id: string;
+  name: string;
+  roleAndAccess: string;
+};
+
+export type EvidenceSource = {
+  id: string;
+  label: string;
+  value: string;
+};
+
+export type Deliverable = {
+  id: string;
+  name: string;
+  meta: string;
+  icon: "deck" | "doc" | "evidence";
+  status?: string;
+};
+
+export type EngagementDetail = {
+  id: string;
+  code: string;
+  name: string;
+  subtitle: string;
+  dateRange: string;
+  lead: string;
+  teamMemberCount: number;
+  steps: EngagementStep[];
+  tabCounts: { sources: number; deliverables: number; team: number };
+  brief: EngagementBrief;
+  milestones: Milestone[];
+  teamMembers: TeamMember[];
+  teamNote: string;
+  evidenceSourceCount: number;
+  evidenceSources: EvidenceSource[];
+  evidenceWarning: { title: string; description: string } | null;
+  deliverables: Deliverable[];
+};
+
+export type ConversationPhase = {
+  label: string;
+  description: string;
+  citations: number[];
+};
+
+export type ConversationMessage = {
+  id: string;
+  role: "user" | "assistant";
+  author: string;
+  timestamp: string;
+  badge?: string;
+  body?: string;
+  headline?: string;
+  intro?: string;
+  phases?: ConversationPhase[];
+  evidenceGap?: { title: string; description: string } | null;
+};
+
+export type EngagementContextSummary = {
+  classification: string;
+  name: string;
+  description: string;
+  lead: string;
+  teamNote: string;
+};
+
+export type ActiveSkill = {
+  name: string;
+  version: string;
+  meta: string;
+  formats: string[];
+};
+
+export type PracticeContext = {
+  name: string;
+  meta: string;
+  practiceHref: string;
+};
+
+export type RecentConversationItem = {
+  id: string;
+  label: string;
+  active?: boolean;
+};
+
+export type EvidenceMatch = {
+  id: string;
+  index: number;
+  relevance: number;
+  title: string;
+  source: string;
+  quote: string;
+  attribution: string;
+};
+
+export type ConversationDetail = {
+  engagementId: string;
+  engagementCode: string;
+  engagementName: string;
+  title: string;
+  subtitle: string;
+  scopeSummary: string;
+  context: EngagementContextSummary;
+  skill: ActiveSkill;
+  practice: PracticeContext;
+  recent: RecentConversationItem[];
+  messages: ConversationMessage[];
+  evidence: EvidenceMatch[];
+  evidenceShown: number;
+  evidenceTotal: number;
+  sourcesInScope: number;
+};
+
+export type ArtifactFileType = "pptx" | "docx" | "evidence";
+export type ArtifactStatus = "Changes requested" | "Draft" | "Approved";
+
+export type EngagementFile = {
+  id: string;
+  type: ArtifactFileType;
+  name: string;
+  meta: string;
+  status?: ArtifactStatus;
+};
+
+export type VersionHistoryEntry = {
+  id: string;
+  version: string;
+  current?: boolean;
+  meta: string;
+};
+
+export type SlidePhase = { label: string; title: string; description: string };
+
+export type Slide = {
+  id: string;
+  index: number;
+  title: string;
+};
+
+export type SlideDetail = {
+  breadcrumb: string;
+  headline: string;
+  phases: SlidePhase[];
+  sources: string;
+  footerMeta: string;
+  pageLabel: string;
+};
+
+export type SlideEvidenceLink = {
+  id: string;
+  index: number;
+  label: string;
+  description: string;
+  icon: "library" | "doc";
+  verified: boolean;
+};
+
+export type DocSection = { heading: string; body: string };
+
+export type WordArtifactPreview = {
+  breadcrumb: string;
+  title: string;
+  meta: string;
+  sections: DocSection[];
+  footerMeta: string;
+  pageLabel: string;
+};
+
+export type DeliverablesDetail = {
+  engagementId: string;
+  engagementName: string;
+  title: string;
+  subtitle: string;
+  tabCounts: { all: number; powerpoint: number; word: number; evidenceRegister: number };
+  files: EngagementFile[];
+  versions: VersionHistoryEntry[];
+  pptx: {
+    name: string;
+    versionLabel: string;
+    status: ArtifactStatus;
+    slides: Slide[];
+    activeSlideIndex: number;
+    slideDetail: SlideDetail;
+    evidenceLinks: SlideEvidenceLink[];
+  };
+  docx: {
+    name: string;
+    status: ArtifactStatus;
+    versionLabel: string;
+    preview: WordArtifactPreview;
+    citationSummary: string;
+    exportWarning: { title: string; description: string } | null;
+    generatedFootnote: string;
+  };
+};
+
+export type PracticeCategory = { id: string; label: string; count: number };
+
+export type PracticeCardSummary = {
+  id: string;
+  title: string;
+  description: string;
+  status: "Approved";
+  maturity: string;
+  category: string;
+  versionLabel: string;
+};
+
+export type PracticeDetail = {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  status: "Approved";
+  versionLabel: string;
+  maturity: string;
+  recommendedWhen: string;
+  coreGuidance: string[];
+  sourceAttribution: string;
+  practiceOwner: string;
+  approvedMeta: string;
+  sourceQuality: string;
+};
+
+export type LPLibraryDetail = {
+  totalPractices: number;
+  categories: PracticeCategory[];
+  activeCategoryId: string;
+  matchingCount: number;
+  cards: PracticeCardSummary[];
+  practices: Record<string, PracticeDetail>;
+};
+
+export type SkillCardSummary = {
+  id: string;
+  name: string;
+  description: string;
+  versionLabel: string;
+  formats: string;
+  published: boolean;
+};
+
+export type SkillDetail = {
+  id: string;
+  code: string;
+  name: string;
+  versionLabel: string;
+  category: string;
+  evidenceRequired: boolean;
+  description: string;
+  howItWorks: string[];
+  requiredInputs: string;
+  expectedOutputs: string;
+  evidencePolicy: string;
+  maintainedBy: string;
+  lastPublished: string;
+  runInEngagement: string;
+};
+
+export type SkillsDetail = {
+  totalPublished: number;
+  cards: SkillCardSummary[];
+  skills: Record<string, SkillDetail>;
+};
+
+export type ReviewCommentStatus = "Open" | "Resolved";
+
+export type ReviewComment = {
+  id: string;
+  title: string;
+  status: ReviewCommentStatus;
+  attribution: string;
+  body: string;
+};
+
+export type EvidenceCheckResult = "Passed" | "Gap";
+
+export type EvidenceCheckRow = {
+  id: string;
+  check: string;
+  result: EvidenceCheckResult;
+  resultLabel: string;
+  action: string;
+};
+
+export type ApprovalEvent = {
+  id: string;
+  title: string;
+  attribution: string;
+  icon: "check" | "comment" | "edit";
+};
+
+export type ReviewDetail = {
+  id: string;
+  code: string;
+  engagementName: string;
+  artifactName: string;
+  versionLabel: string;
+  owner: string;
+  reviewer: string;
+  dueDate: string;
+  steps: EngagementStep[];
+  slide: SlideDetail;
+  slideCommentCount: number;
+  evidenceChecksRunMeta: string;
+  evidenceChecks: EvidenceCheckRow[];
+  comments: ReviewComment[];
+  openCount: number;
+  resolvedCount: number;
+  approverName: string;
+  approverRole: string;
+  approvalStatus: string;
+  approvalTimeline: ApprovalEvent[];
+};
+
+// --- Admin console -------------------------------------------------------
+
+export type AdminStatTone = "default" | "warning" | "success";
+
+export type AdminStat = {
+  id: string;
+  label: string;
+  value: string;
+  helper: string;
+  helperTone?: AdminStatTone;
+};
+
+export type PendingApprovalRow = {
+  id: string;
+  item: string;
+  typeVersion: string;
+  assignedTo: string;
+  due: string;
+  state: string;
+};
+
+export type IngestionHealthItem = {
+  id: string;
+  title: string;
+  meta: string;
+  status: "Healthy" | "Attention";
+  icon: "library" | "upload" | "plug";
+};
+
+export type RiskQueueRow = {
+  id: string;
+  riskScope: string;
+  severity: "High" | "Medium" | "Low";
+  owner: string;
+  control: string;
+};
+
+export type ControlAuditItem = {
+  id: string;
+  label: string;
+  state: string;
+};
+
+export type AdminOverviewDetail = {
+  stats: AdminStat[];
+  pendingApprovals: PendingApprovalRow[];
+  pendingApprovalsTotal: number;
+  ingestionHealth: IngestionHealthItem[];
+  ingestionUpdatedMeta: string;
+  ingestionWarning: { title: string; description: string } | null;
+  riskQueue: RiskQueueRow[];
+  riskQueueOpenCount: number;
+  riskQueueFootnote: string;
+  controlsAudit: ControlAuditItem[];
+  controlsAuditEvent: string;
+};
+
+export type AdminEngagementRow = {
+  id: string;
+  name: string;
+  code: string;
+  ownerAccess: string;
+  classification: string;
+  retention: string;
+  deliverables: string;
+  controlState: string;
+};
+
+export type SelectedEngagementMember = { id: string; name: string; role: string; permission: string };
+
+export type SelectedEngagementDetail = {
+  id: string;
+  code: string;
+  name: string;
+  accessGroup: string;
+  contentAccess: string;
+  retentionPolicy: string;
+  scheduledDisposition: string;
+  members: SelectedEngagementMember[];
+};
+
+export type DeliverableLifecycleItem = {
+  id: string;
+  name: string;
+  meta: string;
+  state: string;
+  icon: "deck" | "doc" | "evidence";
+};
+
+export type AdminEngagementsDetail = {
+  tabCounts: { engagements: number; deliverables: number; retentionExceptions: number; exportRequests: number };
+  matchingCount: number;
+  totalCount: number;
+  rows: AdminEngagementRow[];
+  selected: SelectedEngagementDetail;
+  deliverableLifecycle: DeliverableLifecycleItem[];
+};
+
+export type PracticeInventoryRow = {
+  id: string;
+  practiceSource: string;
+  version: string;
+  indexing: string;
+  lifecycle: string;
+};
+
+export type IngestionJobDetail = {
+  id: string;
+  filename: string;
+  meta: string;
+  status: string;
+  extractionMeta: string;
+  indexValidationMeta: string;
+  provenanceMeta: string;
+  warning: { title: string; description: string } | null;
+};
+
+export type SourceQualityCheck = { id: string; label: string; state: string };
+
+export type QualityReviewDetail = {
+  id: string;
+  code: string;
+  title: string;
+  versionLabel: string;
+  approvalState: string;
+  taxonomy: string;
+  maturity: string;
+  practiceOwner: string;
+  approver: string;
+  sourceQualityChecks: SourceQualityCheck[];
+  warning: { title: string; description: string } | null;
+  footnote: string;
+};
+
+export type AdminLibraryDetail = {
+  pipelineSteps: EngagementStep[];
+  practiceInventoryTotal: string;
+  practiceInventory: PracticeInventoryRow[];
+  latestIngestionJob: IngestionJobDetail;
+  qualityReview: QualityReviewDetail;
+};
+
+export type SkillRegistryItem = {
+  id: string;
+  name: string;
+  candidateMeta: string;
+  publishedMeta: string;
+};
+
+export type PermissionRow = { id: string; role: string; useSkill: string; defineApprove: string };
+
+export type SkillDefinitionDetail = {
+  id: string;
+  code: string;
+  name: string;
+  versionLabel: string;
+  owner: string;
+  approvalState: string;
+  instructionContract: string[];
+  requiredInputSchema: string;
+  outputSchema: string;
+  retrievalScope: string;
+  evidenceThreshold: string;
+  permissions: PermissionRow[];
+  changelog: string;
+};
+
+export type TestChecklistRow = { id: string; label: string; state: string };
+
+export type TestResultsDetail = {
+  id: string;
+  passCount: number;
+  totalCount: number;
+  failLabel: string;
+  runMeta: string;
+  checklist: TestChecklistRow[];
+  failure: { title: string; description: string } | null;
+};
+
+export type ReleaseApprovalCheck = { id: string; label: string; state: string };
+
+export type ReleaseApprovalDetail = {
+  reviewerName: string;
+  reviewerRole: string;
+  checks: ReleaseApprovalCheck[];
+  footnote: string;
+};
+
+export type AdminSkillsManagementDetail = {
+  publishedCount: number;
+  candidateCount: number;
+  registry: SkillRegistryItem[];
+  definition: SkillDefinitionDetail;
+  testResults: TestResultsDetail;
+  releaseApproval: ReleaseApprovalDetail;
+};
+
+export type ReviewQueueRow = {
+  id: string;
+  itemReference: string;
+  reviewer: string;
+  type: string;
+  state: string;
+};
+
+export type SelectedReviewGovernanceDetail = {
+  id: string;
+  code: string;
+  title: string;
+  riskLevel: string;
+  badges: string[];
+  artifactOwner: string;
+  assignedApprover: string;
+  riskDescription: string;
+  warning: { title: string; description: string } | null;
+  footnote: string;
+};
+
+export type PolicyControlItem = { id: string; label: string; state: string };
+
+export type RoleAccessRow = { id: string; role: string; allowed: string; restricted: string };
+
+export type AuditTrailEvent = { id: string; title: string; attribution: string; icon: "check" | "history" | "send" | "comment" };
+
+export type AdminReviewsGovernanceDetail = {
+  tabCounts: { reviewQueue: number; riskRegister: number; policies: number };
+  queue: ReviewQueueRow[];
+  selectedReview: SelectedReviewGovernanceDetail;
+  policyControls: PolicyControlItem[];
+  policyCode: string;
+  exportPermissionsNote: string;
+  roleAccess: RoleAccessRow[];
+  auditTrail: AuditTrailEvent[];
+};
+
 export type RunRow = {
   id: string;
   status: string;

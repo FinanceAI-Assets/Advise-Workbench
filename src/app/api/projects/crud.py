@@ -15,6 +15,7 @@ from src.core.db.models import (
     Conversation,
     ConversationMessage,
     DPDPRightsRequest,
+    EngagementMeta,
     Membership,
     MemoryEvent,
     MemoryItem,
@@ -60,6 +61,24 @@ def list_projects(user: User = Depends(get_current_user), db: Session = Depends(
         select(Project).join(Membership, Membership.project_id == Project.id).where(Membership.user_id == user.id)
     ).all()
     return {"items": [{"id": p.id, "name": p.name} for p in rows]}
+
+
+@router.get("/{pid}")
+def get_project(
+    pid: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Minimal single-project read, scoped to the caller's membership.
+
+    Added so project-scoped UI (the Engagement detail page) can resolve a
+    single project's name without re-fetching the full list.
+    """
+    require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
+    project = db.scalar(select(Project).where(Project.id == pid))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"id": project.id, "name": project.name, "created_at": project.created_at.isoformat()}
 
 
 @router.post("")
@@ -115,6 +134,7 @@ def delete_project(
     db.execute(delete(Run).where(Run.project_id == pid))
     db.execute(delete(ConsentLedger).where(ConsentLedger.project_id == pid))
     db.execute(delete(DPDPRightsRequest).where(DPDPRightsRequest.project_id == pid))
+    db.execute(delete(EngagementMeta).where(EngagementMeta.project_id == pid))
     db.execute(delete(Project).where(Project.id == pid))
     db.commit()
 

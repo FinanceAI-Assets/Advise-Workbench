@@ -1,0 +1,13 @@
+export { EngagementStatCard } from "@/components/engagements/EngagementStatCard";
+export { EngagementStageBadge } from "@/components/engagements/EngagementStageBadge";
+export { EngagementProgressBar } from "@/components/engagements/EngagementProgressBar";
+export { EngagementsTable } from "@/components/engagements/EngagementsTable";
+export { NextActionsPanel } from "@/components/engagements/NextActionsPanel";
+export { RecentActivityPanel } from "@/components/engagements/RecentActivityPanel";
+export { EngagementStepper } from "@/components/engagements/EngagementStepper";
+export { EngagementTabs, type EngagementTabKey } from "@/components/engagements/EngagementTabs";
+export { EngagementBriefCard } from "@/components/engagements/EngagementBriefCard";
+export { MilestonesTable } from "@/components/engagements/MilestonesTable";
+export { TeamAccessPanel } from "@/components/engagements/TeamAccessPanel";
+export { EvidenceReadinessPanel } from "@/components/engagements/EvidenceReadinessPanel";
+export { DeliverablesStrip } from "@/components/engagements/DeliverablesStrip";

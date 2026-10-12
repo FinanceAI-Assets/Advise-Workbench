@@ -1,5 +1,5 @@
 import React from "react";
-import { Inter, Open_Sans, JetBrains_Mono, Source_Code_Pro, VT323 } from "next/font/google";
+import { Inter, Open_Sans, JetBrains_Mono } from "next/font/google";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { QueryProvider } from "@/components/providers/QueryProvider";
@@ -23,22 +23,11 @@ const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
 });
 
-const matrixBody = Source_Code_Pro({
-  subsets: ["latin"],
-  variable: "--font-matrix-body",
-});
-
-const matrixDisplay = VT323({
-  subsets: ["latin"],
-  weight: "400",
-  variable: "--font-matrix-display",
-});
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${openSans.variable} ${inter.variable} ${jetbrainsMono.variable} ${matrixBody.variable} ${matrixDisplay.variable}`}
+      className={`${openSans.variable} ${inter.variable} ${jetbrainsMono.variable}`}
     >
       <body suppressHydrationWarning>
         <ErrorBoundary>

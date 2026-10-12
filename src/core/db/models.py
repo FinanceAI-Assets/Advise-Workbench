@@ -60,6 +60,29 @@ class ProjectBrand(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
+class EngagementMeta(Base):
+    """Additive engagement metadata (code/type/stage/progress) layered on top of a Project.
+
+    Mirrors ProjectBrand's shape/placement: one optional side-row per project,
+    read with defaults when absent so every Project can be treated as a valid
+    "Engagement" row by the frontend without requiring a human to seed it.
+    """
+
+    __tablename__ = "engagement_meta"
+    __table_args__ = (Index("ix_engagement_meta_project_id", "project_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    progress: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_task: Mapped[str | None] = mapped_column(Text, nullable=True)
+    due_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
 class Membership(Base):
     __tablename__ = "memberships"
     __table_args__ = (

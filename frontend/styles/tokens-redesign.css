@@ -19,7 +19,7 @@
      Accent Theme Variants — customize primary color throughout UI
      ========================================================================= */
 
-  --accent-green: #2d7a3b; /* Default (existing deloitte-green) */
+  /* --accent-green is defined in tokens.css; not redeclared here (see file header). */
   --accent-blue: #0072b1; /* Info/primary action */
   --accent-black: #000000; /* Bold, high contrast */
   --accent-amber: #d4a574; /* Warm highlight */

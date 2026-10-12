@@ -1,276 +1,151 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { Bookmark, Check, Search } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
-import { ProjectPicker } from "@/components/admin/ProjectPicker";
+import { PracticeCard, PracticeDetailPanel, TaxonomyPanel } from "@/components/lp-library";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
-import { Textarea } from "@/components/ui/Textarea";
+import { NoticeCard } from "@/components/ui/NoticeCard";
+import { Select } from "@/components/ui/Select";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { useLpLibraryQuery } from "@/hooks/useLpLibrary";
 import { useAuth } from "@/lib/auth-context";
-import { extractApiErrorMessage } from "@/lib/api-error";
-
-type LPItem = {
-  id: string;
-  path: string;
-  heading: string;
-  text: string;
-  relevance_score: number;
-};
-
-type BookmarkRow = { item_id: string; note?: string; added_by?: string };
-
-const SNIPPET_PREVIEW = 400;
 
 export default function LPLibraryPage() {
-  const { api, token } = useAuth();
-  const [projectId, setProjectId] = useState("");
-  const [query, setQuery] = useState("");
-  const [items, setItems] = useState<LPItem[]>([]);
-  const [bookmarks, setBookmarks] = useState<BookmarkRow[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [searchBusy, setSearchBusy] = useState(false);
-  const [refreshBusy, setRefreshBusy] = useState(false);
-  const [bookmarksBusy, setBookmarksBusy] = useState(false);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [bookmarkNote, setBookmarkNote] = useState("");
+  const router = useRouter();
+  const { token, ready } = useAuth();
+  const [hydrated, setHydrated] = useState(false);
+  const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null);
+  const [activePracticeId, setActivePracticeId] = useState<string | null>(null);
 
-  const headingById = useMemo(() => {
-    const m: Record<string, string> = {};
-    for (const it of items) {
-      m[it.id] = it.heading || "(untitled section)";
-    }
-    return m;
-  }, [items]);
+  const library = useLpLibraryQuery(Boolean(token));
 
-  const search = useCallback(async () => {
-    if (!projectId.trim() || !query.trim()) return;
-    setError(null);
-    setSearchBusy(true);
-    try {
-      const res = await api(
-        `/api/lp-library/search?project_id=${encodeURIComponent(projectId.trim())}&q=${encodeURIComponent(query.trim())}`
-      );
-      const data = (await res.json().catch(() => ({}))) as { detail?: unknown; items?: LPItem[] };
-      if (!res.ok) {
-        setError(extractApiErrorMessage(data, "LP search failed"));
-        return;
-      }
-      setItems(Array.isArray(data.items) ? data.items : []);
-    } finally {
-      setSearchBusy(false);
-    }
-  }, [api, projectId, query]);
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
-  const refreshIndex = useCallback(async () => {
-    if (!projectId.trim()) return;
-    setError(null);
-    setRefreshBusy(true);
-    try {
-      const res = await api(`/api/lp-library/refresh?project_id=${encodeURIComponent(projectId.trim())}`, {
-        method: "POST",
-      });
-      const data = (await res.json().catch(() => ({}))) as { detail?: unknown };
-      if (!res.ok) {
-        setError(extractApiErrorMessage(data, "Index refresh failed"));
-        return;
-      }
-      await search();
-    } finally {
-      setRefreshBusy(false);
-    }
-  }, [api, projectId, search]);
+  useEffect(() => {
+    if (!ready) return;
+    if (!token) router.replace("/login?next=/admin/lp-library");
+  }, [ready, token, router]);
 
-  const loadBookmarks = useCallback(async () => {
-    if (!projectId.trim()) return;
-    setError(null);
-    setBookmarksBusy(true);
-    try {
-      const res = await api(`/api/lp-library/bookmarks?project_id=${encodeURIComponent(projectId.trim())}`);
-      const data = (await res.json().catch(() => ({}))) as {
-        detail?: unknown;
-        items?: BookmarkRow[];
-      };
-      if (!res.ok) {
-        setError(extractApiErrorMessage(data, "Bookmarks load failed"));
-        return;
-      }
-      setBookmarks(Array.isArray(data.items) ? data.items : []);
-    } finally {
-      setBookmarksBusy(false);
-    }
-  }, [api, projectId]);
-
-  async function bookmark(itemId: string) {
-    if (!projectId.trim()) return;
-    setError(null);
-    const res = await api("/api/lp-library/bookmarks", {
-      method: "POST",
-      body: JSON.stringify({
-        project_id: projectId.trim(),
-        item_id: itemId,
-        note: bookmarkNote.trim(),
-      }),
-    });
-    const data = (await res.json().catch(() => ({}))) as { detail?: unknown };
-    if (!res.ok) {
-      setError(extractApiErrorMessage(data, "Bookmark failed"));
-      return;
-    }
-    setBookmarkNote("");
-    await loadBookmarks();
-  }
-
-  async function removeBookmark(itemId: string) {
-    if (!projectId.trim()) return;
-    setError(null);
-    const res = await api(
-      `/api/lp-library/bookmarks/${encodeURIComponent(itemId)}?project_id=${encodeURIComponent(projectId.trim())}`,
-      { method: "DELETE" }
-    );
-    const data = (await res.json().catch(() => ({}))) as { detail?: unknown };
-    if (!res.ok) {
-      setError(extractApiErrorMessage(data, "Bookmark delete failed"));
-      return;
-    }
-    await loadBookmarks();
-  }
-
-  if (!token) {
+  if (!hydrated || !ready || !token) {
     return (
-      <main className="space-y-4 p-4">
-        <p className="text-sm text-[var(--text-muted)]">Sign in to use the LP Library.</p>
+      <main style={{ padding: 24 }}>
+        <p>Redirecting…</p>
       </main>
     );
   }
 
+  if (library.isPending || !library.data) {
+    return (
+      <main className="space-y-6">
+        <Skeleton className="h-4 w-48" />
+        <Skeleton className="h-9 w-96" />
+        <div className="grid gap-4 lg:grid-cols-[260px_1fr_340px]">
+          <Skeleton className="h-96 w-full" />
+          <Skeleton className="h-96 w-full" />
+          <Skeleton className="h-96 w-full" />
+        </div>
+      </main>
+    );
+  }
+
+  const data = library.data;
+  const activeCategory = activeCategoryId ?? data.activeCategoryId;
+  const activePractice = activePracticeId ?? data.cards[0]?.id ?? "";
+  const practiceDetail = data.practices[activePractice];
+
   return (
-    <main className="space-y-4 p-2 sm:p-4">
-      <div>
-        <h2 className="text-2xl font-semibold">LP Library Browser</h2>
-        <p className="text-sm text-[var(--text-muted)]">
-          Search indexed leading practices for a project and bookmark snippets. Titles for bookmarks resolve when the item
-          appears in your latest search results.
-        </p>
+    <main className="space-y-6">
+      <nav className="text-xs uppercase tracking-wide text-[var(--text-muted)]" aria-label="Breadcrumb">
+        User workspace / Leading Practice Library
+      </nav>
+
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-[var(--text-default)]">Leading Practice Library</h1>
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
+            Reusable, approved guidance with versioned provenance. Add the right practice to your engagement—not an unverified
+            answer.
+          </p>
+        </div>
+        <Button variant="secondary" type="button" className="flex shrink-0 items-center gap-2">
+          <Bookmark size={16} aria-hidden />
+          My saved practices
+        </Button>
+      </header>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[260px] flex-1">
+          <Search
+            size={16}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+            aria-hidden
+          />
+          <Input defaultValue="operating model" placeholder="Search: operating model" className="pl-9" />
+        </div>
+        <Select defaultValue="all" className="w-auto">
+          <option value="all">Maturity: All</option>
+          <option value="managed">Maturity: Managed</option>
+          <option value="optimized">Maturity: Optimized</option>
+        </Select>
+        <Button variant="secondary" type="button" className="flex items-center gap-2">
+          <Check size={16} aria-hidden />
+          Approved only
+        </Button>
+        <Select defaultValue="relevance" className="w-auto">
+          <option value="relevance">Sort: Relevance</option>
+          <option value="recent">Sort: Most recent</option>
+        </Select>
+        <span className="ml-auto text-xs text-[var(--text-muted)]">{data.matchingCount} matching practices</span>
       </div>
 
-      <Card className="space-y-3 p-4">
-        <ProjectPicker value={projectId} onChange={setProjectId} />
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="min-w-[240px] flex-1">
-            <label htmlFor="lp-query" className="mb-1 block text-xs font-medium text-[var(--text-caption)]">Query</label>
-            <Input
-              id="lp-query"
-              placeholder="Search LP snippets"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              disabled={!projectId}
-            />
-          </div>
-          <Button type="button" onClick={() => void search()} disabled={!projectId || !query.trim() || searchBusy}>
-            {searchBusy ? "Searching…" : "Search"}
-          </Button>
-          <Button type="button" variant="secondary" onClick={() => void refreshIndex()} disabled={!projectId || refreshBusy}>
-            {refreshBusy ? "Refreshing…" : "Refresh index"}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void loadBookmarks()}
-            disabled={!projectId || bookmarksBusy}
-          >
-            {bookmarksBusy ? "Loading…" : "Load bookmarks"}
-          </Button>
-        </div>
-        <div>
-          <label htmlFor="lp-bookmark-note" className="mb-1 block text-xs font-medium text-[var(--text-caption)]">
-            Optional note for next bookmark
-          </label>
-          <Textarea
-            id="lp-bookmark-note"
-            rows={2}
-            placeholder="e.g. Use for stakeholder comms tone"
-            value={bookmarkNote}
-            onChange={(e) => setBookmarkNote(e.target.value)}
-            disabled={!projectId}
-          />
-        </div>
-      </Card>
+      <div className="grid gap-4 lg:grid-cols-[260px_1fr_340px]">
+        <TaxonomyPanel categories={data.categories} activeId={activeCategory} onSelect={setActiveCategoryId} />
 
-      {error ? <p className="text-sm text-[var(--error)]">{error}</p> : null}
-
-      <section>
-        <h3 className="text-lg font-semibold">Results</h3>
-        {!items.length ? (
-          <p className="mt-2 text-sm text-[var(--text-caption)]">Run a search to see snippets.</p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {items.map((it) => {
-              const isOpen = Boolean(expanded[it.id]);
-              const long = it.text.length > SNIPPET_PREVIEW;
-              const shown = isOpen || !long ? it.text : `${it.text.slice(0, SNIPPET_PREVIEW)}…`;
-              return (
-                <li key={it.id} className="rounded-lg border border-[var(--surface-border-strong)] bg-[var(--surface-default)] p-3">
-                  <p className="font-medium text-[var(--text-default)]">{it.heading || "(untitled section)"}</p>
-                  <p className="text-xs text-[var(--text-caption)]">
-                    {it.path} · score {it.relevance_score.toFixed(2)} · id{" "}
-                    <code className="rounded bg-[var(--surface-muted)] px-1">{it.id}</code>
-                  </p>
-                  <p className="my-2 whitespace-pre-wrap text-sm text-[var(--text-muted)]">{shown}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {long ? (
-                      <Button type="button" variant="ghost" className="text-xs" onClick={() => setExpanded((e) => ({ ...e, [it.id]: !isOpen }))}>
-                        {isOpen ? "Show less" : "Show full text"}
-                      </Button>
-                    ) : null}
-                    <Button type="button" variant="secondary" onClick={() => void bookmark(it.id)} disabled={!projectId}>
-                      Bookmark
-                    </Button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      <section>
-        <h3 className="text-lg font-semibold">Bookmarks</h3>
-        {!bookmarks.length ? (
-          <p className="mt-2 text-sm text-[var(--text-caption)]">No bookmarks loaded yet.</p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {bookmarks.map((b) => (
-              <li key={b.item_id} className="rounded-lg border border-[var(--surface-border-strong)] bg-[var(--surface-default)] p-3 text-sm">
-                <p className="font-medium text-[var(--text-default)]">{headingById[b.item_id] ?? `Snippet ${b.item_id}`}</p>
-                <p className="text-xs text-[var(--text-caption)]">
-                  <code className="rounded bg-[var(--surface-muted)] px-1">{b.item_id}</code>
-                  {b.added_by ? ` · saved by ${b.added_by}` : null}
-                </p>
-                {b.note ? <p className="mt-1 text-[var(--text-muted)]">{b.note}</p> : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="mt-2 text-[var(--error)]"
-                  onClick={() => void removeBookmark(b.item_id)}
-                >
-                  Remove
-                </Button>
-              </li>
+        <div className="space-y-3">
+          <div className="space-y-3">
+            {data.cards.map((card) => (
+              <PracticeCard
+                key={card.id}
+                practice={card}
+                active={card.id === activePractice}
+                onSelect={() => setActivePracticeId(card.id)}
+              />
             ))}
-          </ul>
-        )}
-      </section>
+          </div>
+          <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+            <span>
+              Showing {data.cards.length} of {data.cards.length} matches
+            </span>
+            <Button variant="secondary" type="button" className="text-sm">
+              Clear filters
+            </Button>
+          </div>
+        </div>
 
-      {projectId ? (
-        <p className="text-xs text-[var(--text-caption)]">
-          Open project:{" "}
-          <Link href={`/projects/${projectId}`} className="text-[var(--accent-blue)] underline">
-            {projectId}
-          </Link>
-        </p>
-      ) : null}
+        {practiceDetail ? (
+          <PracticeDetailPanel practice={practiceDetail} />
+        ) : (
+          <div className="rounded-lg border border-[var(--surface-border)] bg-white p-6 text-sm text-[var(--text-muted)]">
+            This practice preview isn&apos;t wired up yet in this demo.
+          </div>
+        )}
+      </div>
+
+      <NoticeCard
+        icon={<Check size={18} aria-hidden />}
+        title="Use with context, not as a prescription"
+        description="Practice recommendations are illustrative. Validate applicability against engagement evidence and sponsor objectives."
+      />
+
+      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--surface-border)] pt-4 text-xs text-[var(--text-muted)]">
+        <span>Illustrative content only · No real client or confidential information</span>
+        <span>Advise Workbench · Secure advisory environment</span>
+      </footer>
     </main>
   );
 }
