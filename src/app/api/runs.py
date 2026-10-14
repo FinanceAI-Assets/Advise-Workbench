@@ -848,6 +848,11 @@ def start_run(
     if isinstance(sel, dict) and sel.get("option_id"):
         plan["selected_strategy"] = sel
     deck_outline = confirmed_plan.get("deck_outline_preview")
+    if not (isinstance(deck_outline, dict) and deck_outline.get("slides")):
+        # A structure agreed slide by slide in the conversation must drive the deck.
+        from src.agents.conversation.slide_negotiator import agreed_deck_outline
+
+        deck_outline = agreed_deck_outline(db, project_id=body.project_id)
     if isinstance(deck_outline, dict) and deck_outline.get("slides"):
         plan["deck_outline_preview"] = deck_outline
     document_outline = confirmed_plan.get("document_outline_preview")

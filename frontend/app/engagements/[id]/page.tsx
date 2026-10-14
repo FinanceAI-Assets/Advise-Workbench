@@ -15,24 +15,49 @@ import {
   MilestonesTable,
   TeamAccessPanel,
 } from "@/components/engagements";
+import {
+  ActivitySection,
+  BriefSection,
+  DraftSection,
+  ExportSection,
+  ReviewSection,
+  SourcesSection,
+  TeamSection,
+} from "@/components/engagements/EngagementSections";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useEngagementDetailQuery } from "@/hooks/useEngagements";
 import { useAuth } from "@/lib/auth-context";
 
+type StepView = "brief" | "draft" | "review" | "export";
+
+// Stepper step -> the view it opens. "Sources" shares the Sources tab.
+const STEP_VIEW: Record<string, EngagementTabKey | StepView> = {
+  brief: "brief",
+  sources: "sources",
+  draft: "draft",
+  review: "review",
+  export: "export",
+};
+
 export default function EngagementDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { token, ready } = useAuth();
   const [hydrated, setHydrated] = useState(false);
-  const [tab, setTab] = useState<EngagementTabKey>("overview");
+  const [tab, setTab] = useState<EngagementTabKey | StepView>("overview");
 
   const id = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? params.id[0] ?? "" : "";
   const detail = useEngagementDetailQuery(id, Boolean(token));
 
   useEffect(() => {
     setHydrated(true);
+    // Deep links such as ?tab=sources open that view.
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested && ["sources", "team", "activity", "brief", "draft", "review", "export"].includes(requested)) {
+      setTab(requested as EngagementTabKey | StepView);
+    }
   }, []);
 
   useEffect(() => {
@@ -103,7 +128,7 @@ export default function EngagementDetailPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button variant="secondary" type="button" className="flex items-center gap-2">
+          <Button variant="secondary" type="button" className="flex items-center gap-2" onClick={() => setTab("team")}>
             <UserPlus size={16} aria-hidden />
             Manage access
           </Button>
@@ -123,9 +148,13 @@ export default function EngagementDetailPage() {
         </div>
       </header>
 
-      <EngagementStepper steps={data.steps} />
+      <EngagementStepper steps={data.steps} onSelect={(stepId) => setTab(STEP_VIEW[stepId] ?? "overview")} />
 
-      <EngagementTabs tabs={tabs} active={tab} onChange={setTab} />
+      <EngagementTabs
+        tabs={tabs}
+        active={tab as EngagementTabKey}
+        onChange={(key) => (key === "deliverables" ? router.push(`/engagements/${id}/deliverables`) : setTab(key))}
+      />
 
       {tab === "overview" ? (
         <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
@@ -139,15 +168,18 @@ export default function EngagementDetailPage() {
               sourceCount={data.evidenceSourceCount}
               sources={data.evidenceSources}
               warning={data.evidenceWarning}
+              onViewAll={() => setTab("sources")}
             />
           </div>
         </section>
-      ) : (
-        <EmptyState
-          title={`${tabs.find((t) => t.key === tab)?.label} is coming soon`}
-          description="This tab isn't wired up yet in this preview."
-        />
-      )}
+      ) : null}
+      {tab === "sources" ? <SourcesSection id={id} detail={data} /> : null}
+      {tab === "team" ? <TeamSection id={id} detail={data} /> : null}
+      {tab === "activity" ? <ActivitySection id={id} /> : null}
+      {tab === "brief" ? <BriefSection id={id} detail={data} onContinue={() => setTab("sources")} /> : null}
+      {tab === "draft" ? <DraftSection id={id} detail={data} /> : null}
+      {tab === "review" ? <ReviewSection detail={data} /> : null}
+      {tab === "export" ? <ExportSection id={id} /> : null}
 
       {tab === "overview" ? <DeliverablesStrip deliverables={data.deliverables} /> : null}
     </main>

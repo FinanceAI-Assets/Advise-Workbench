@@ -11,7 +11,13 @@ const STATUS_CLASS: Record<string, string> = {
   Approved: "border-[var(--surface-border)] bg-[#EFF6E6] text-[#356B12]",
 };
 
-export function WordArtifactPanel({ docx }: { docx: DeliverablesDetail["docx"] }) {
+export function WordArtifactPanel({
+  docx,
+  onDownload,
+}: {
+  docx: DeliverablesDetail["docx"];
+  onDownload?: () => void;
+}) {
   return (
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
@@ -43,7 +49,14 @@ export function WordArtifactPanel({ docx }: { docx: DeliverablesDetail["docx"] }
       </div>
 
       <p className="text-xs text-[var(--text-muted)]">{docx.citationSummary}</p>
-      <Button variant="secondary" type="button" disabled className="flex w-full items-center justify-center gap-2 text-sm">
+      <Button
+        variant="secondary"
+        type="button"
+        disabled={!onDownload}
+        onClick={onDownload}
+        title={onDownload ? undefined : "Available after independent approval"}
+        className="flex w-full items-center justify-center gap-2 text-sm"
+      >
         <Download size={16} aria-hidden />
         Download DOCX
       </Button>

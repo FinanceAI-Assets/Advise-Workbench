@@ -1,16 +1,26 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ShellSidebar } from "@/components/shell/ShellSidebar";
 import { ShellTopbar } from "@/components/shell/ShellTopbar";
+import { useAuth } from "@/lib/auth-context";
 
 const noShellRoutes = ["/login", "/admin/console"];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const noShell = noShellRoutes.some((prefix) => pathname.startsWith(prefix));
+  const router = useRouter();
+  const { ready, token } = useAuth();
+
+  // One guard for every page: no session means sign in first.
+  useEffect(() => {
+    if (ready && !token && !pathname.startsWith("/login")) {
+      router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+    }
+  }, [ready, token, pathname, router]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Persisted UI prefs are read in a mount effect (not in useState initializers)
   // so the first client render matches the server HTML and hydration does not

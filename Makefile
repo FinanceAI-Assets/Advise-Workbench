@@ -65,3 +65,10 @@ redis.down:
 pptx.canvas.parity:
 	python3 scripts/spikes/pptx_canvas_parity_spike.py --strict
 	python3 scripts/spikes/pptx_canvas_visual_diff_spike.py --strict
+
+# Illustrative workbench demo data (fictional names). Needs DEMO_SEED_PASSWORD for the demo accounts.
+seed.demo:
+	python -m scripts.seed_demo
+
+seed.demo.clear:
+	python -m scripts.seed_demo --clear

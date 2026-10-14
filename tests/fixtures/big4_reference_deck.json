@@ -1,0 +1,157 @@
+{
+  "_comment": "Reference deck for visual QA of the PPTX renderer: every rich slide type with realistic consulting content. Fictional client.",
+  "project_name": "Meridian Pharma",
+  "requested_outputs": ["pptx"],
+  "pptx_slides": [
+    {
+      "slide_type": "title",
+      "title": "Automating MIS and pharmacovigilance to decide faster and protect patients",
+      "subtitle": "Case for change and 90-day launch plan for the Executive Committee",
+      "eyebrow": "Meridian Pharma · Operations transformation"
+    },
+    {
+      "slide_type": "column_cards",
+      "title": "Manual work slows safety responses and executive decisions; a phased automation programme fixes both within a year",
+      "subtitle": "Executive summary",
+      "column_cards": [
+        {"heading": "Situation", "icon": "activity", "body": "Pharmacovigilance and MIS teams rely on manual intake, reconciliation and reporting across six disconnected systems."},
+        {"heading": "Complication", "icon": "alert", "body": "Serious cases take 18 days to process against a 7-day regulatory window; monthly MIS packs land 4 days after close."},
+        {"heading": "Resolution", "icon": "rocket", "body": "Automate case intake and MIS consolidation in four phases, starting with a 90-day pilot that pays back in year one."}
+      ],
+      "footer_note": "Source: Meridian operational baseline, Q3 2026 (illustrative)"
+    },
+    {
+      "slide_type": "stat_cards",
+      "title": "Manual processing leaves Meridian outside regulatory timelines and decision windows",
+      "subtitle": "Current-state baseline",
+      "stat_cards": [
+        {"stat": "18 days", "label": "Serious case processing", "description": "Median cycle time against a 7-day expedited reporting window", "icon": "clock"},
+        {"stat": "4 days", "label": "MIS reporting lag", "description": "Executive pack arrives four working days after month-end close", "icon": "line_chart"},
+        {"stat": "11%", "label": "Rework rate", "description": "Share of cases re-opened for data-quality corrections", "icon": "alert"}
+      ],
+      "footer_note": "Source: Safety database extract Jan–Sep 2026; finance close calendar (illustrative)"
+    },
+    {
+      "slide_type": "benchmark_bars",
+      "title": "Meridian trails industry benchmarks on every pharmacovigilance cycle-time measure",
+      "subtitle": "Cycle time vs. top-quartile peers (days)",
+      "unit": " d",
+      "value_label": "Meridian today",
+      "benchmark_label": "Top-quartile peer",
+      "series": [
+        {"label": "Case intake to triage", "value": 4, "benchmark": 1},
+        {"label": "Triage to medical review", "value": 6, "benchmark": 2},
+        {"label": "Review to submission", "value": 8, "benchmark": 4},
+        {"label": "Signal assessment", "value": 21, "benchmark": 10}
+      ],
+      "takeaway": "Closing half of the gap brings serious-case processing inside the 7-day window.",
+      "footer_note": "Source: Industry PV benchmarking survey 2025 (illustrative)"
+    },
+    {
+      "slide_type": "heat_map",
+      "title": "Effort concentrates in intake and reconciliation, where automation potential is highest",
+      "subtitle": "Manual effort by process step and function",
+      "rows": ["Case intake", "Data reconciliation", "Medical review", "Regulatory submission", "MIS consolidation"],
+      "cols": ["PV operations", "Medical", "Finance", "IT"],
+      "cells": [["high", "low", "low", "med"], ["high", "med", "high", "med"], ["med", "high", "low", "low"], ["med", "med", "low", "low"], ["low", "low", "high", "med"]],
+      "takeaway": "Intake and reconciliation hold roughly 60% of manual hours.",
+      "footer_note": "Source: Time-and-motion study, 42 staff, Aug 2026 (illustrative)"
+    },
+    {
+      "slide_type": "two_by_two",
+      "title": "Four automation use cases deliver high value at low complexity and should launch first",
+      "subtitle": "Use-case prioritisation",
+      "x_label": "Implementation complexity →",
+      "y_label": "Business value →",
+      "quadrants": [
+        {"pos": "tl", "label": "Launch first", "body": "Case intake extraction · MIS data consolidation · Duplicate detection · Narrative drafting"},
+        {"pos": "tr", "label": "Plan and invest", "body": "Signal detection models · Predictive MIS forecasting"},
+        {"pos": "bl", "label": "Quick fixes", "body": "Report templating · Workflow notifications"},
+        {"pos": "br", "label": "Deprioritise", "body": "Full ERP replacement · Custom safety database"}
+      ],
+      "takeaway": "Top-left use cases cover 70% of the value at 30% of the effort."
+    },
+    {
+      "slide_type": "harvey_balls",
+      "title": "A phased build on the existing safety platform outperforms both alternatives",
+      "subtitle": "Delivery option assessment",
+      "columns": ["Time to value", "Cost", "Regulatory risk", "Scalability", "Change effort"],
+      "rows": [
+        {"label": "Phased build on current platform", "scores": [4, 3, 4, 3, 3]},
+        {"label": "Replace safety system", "scores": [1, 1, 2, 4, 1]},
+        {"label": "Outsource PV operations", "scores": [3, 2, 1, 2, 2]}
+      ],
+      "takeaway": "Recommended: phased build, keeping the validated safety database.",
+      "footer_note": "Scoring: 4 = strongest. Workshop with PV, IT and Finance leads, Sep 2026."
+    },
+    {
+      "slide_type": "process_flow",
+      "title": "Four phases take Meridian from a contained pilot to an enterprise-scale capability",
+      "subtitle": "Programme approach",
+      "process_flow": {"steps": [
+        {"label": "Discover", "description": "Baseline volumes, map data flows, confirm use cases", "icon": "search"},
+        {"label": "Build", "description": "Stand up data foundation and intake automation", "icon": "database"},
+        {"label": "Pilot", "description": "Run serious-case intake and MIS pack in parallel", "icon": "shield_check"},
+        {"label": "Scale", "description": "Extend to all case types, markets and reports", "icon": "trend_up"}
+      ]},
+      "takeaway": "Each phase has an exit gate; funding for the next phase follows evidence."
+    },
+    {
+      "slide_type": "waterfall",
+      "title": "Automation releases $4.2M a year, paying back the $2.6M investment within 9 months",
+      "subtitle": "Annual run-rate business case ($M)",
+      "unit": "$M",
+      "bars": [
+        {"label": "Current cost", "kind": "start", "delta": 12.4},
+        {"label": "Intake automation", "delta": -1.9},
+        {"label": "Reconciliation", "delta": -1.4},
+        {"label": "MIS consolidation", "delta": -0.9},
+        {"label": "Run cost added", "delta": 0.6},
+        {"label": "Future cost", "kind": "total"}
+      ],
+      "takeaway": "Net saving $3.6M a year after new run costs.",
+      "footer_note": "Source: Finance model v0.3; FTE cost $85k loaded (illustrative)"
+    },
+    {
+      "slide_type": "gantt",
+      "title": "A 90-day plan proves the case on serious cases before committing to scale",
+      "subtitle": "90-day launch plan",
+      "periods": ["Weeks 1–3", "Weeks 4–6", "Weeks 7–9", "Weeks 10–13"],
+      "tasks": [
+        {"label": "Mobilise and baseline", "lane": "PMO", "start": 0.0, "end": 0.25},
+        {"label": "Data foundation", "lane": "IT", "start": 0.1, "end": 0.55},
+        {"label": "Intake automation build", "lane": "PV operations", "start": 0.25, "end": 0.7},
+        {"label": "Parallel-run pilot", "lane": "PV + Medical", "start": 0.6, "end": 0.95},
+        {"label": "Scale decision", "start": 0.97, "end": 0.97, "milestone": true}
+      ],
+      "takeaway": "Steering committee decides on scale-up in week 13 against agreed KPIs."
+    },
+    {
+      "slide_type": "maturity_curve",
+      "title": "The programme moves Meridian from reactive, manual operations to insight-led safety",
+      "subtitle": "Capability maturity journey",
+      "stages": ["Manual", "Digitised", "Automated", "Insight-led", "Predictive"],
+      "current_index": 1,
+      "target_index": 3,
+      "current_label": "Today",
+      "target_label": "12 months",
+      "takeaway": "Predictive signal detection follows once data quality is proven."
+    },
+    {
+      "slide_type": "big_number",
+      "title": "Faster processing brings every serious case inside the regulatory window",
+      "big_number": {"stat": "3x", "label": "faster serious-case processing", "context": "From 18 days today to 6 days at the end of the pilot, inside the 7-day expedited window."},
+      "footer_note": "Pilot target, subject to parallel-run validation"
+    },
+    {
+      "slide_type": "column_cards",
+      "title": "Three decisions from the Executive Committee today unlock the 90-day pilot",
+      "subtitle": "Decisions requested",
+      "column_cards": [
+        {"heading": "Approve pilot funding", "icon": "dollar", "body": "$0.8M for the 90-day pilot, released against the phase-1 exit gate."},
+        {"heading": "Name accountable owners", "icon": "users", "body": "Head of PV as business owner; CIO delegate for the data foundation."},
+        {"heading": "Confirm governance", "icon": "shield_check", "body": "Monthly steering committee with QPPV sign-off on every automated step."}
+      ]
+    }
+  ]
+}

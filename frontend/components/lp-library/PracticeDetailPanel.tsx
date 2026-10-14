@@ -1,11 +1,9 @@
 "use client";
 
-import { Plus } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { EngagementTabs } from "@/components/engagements";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import type { PracticeDetail } from "@/types/api";
 
@@ -20,7 +18,7 @@ function MetaField({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function PracticeDetailPanel({ practice }: { practice: PracticeDetail }) {
+export function PracticeDetailPanel({ practice, actions }: { practice: PracticeDetail; actions?: ReactNode }) {
   const [tab, setTab] = useState<PracticeTabKey>("overview");
 
   return (
@@ -75,13 +73,19 @@ export function PracticeDetailPanel({ practice }: { practice: PracticeDetail }) 
             <MetaField label="Approved" value={practice.approvedMeta} />
             <MetaField label="Source quality" value={practice.sourceQuality} />
           </div>
-          <Button type="button" className="flex items-center gap-2">
-            <Plus size={16} aria-hidden />
-            Add to Northstar conversation
-          </Button>
+          {actions}
+        </div>
+      ) : tab === "evidence" ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <MetaField label="Source attribution" value={practice.sourceAttribution || "—"} />
+          <MetaField label="Source quality" value={practice.sourceQuality || "—"} />
         </div>
       ) : (
-        <p className="text-sm text-[var(--text-muted)]">This tab isn&apos;t wired up yet in this preview.</p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <MetaField label="Current version" value={practice.versionLabel} />
+          <MetaField label="Approved" value={practice.approvedMeta || "—"} />
+          <MetaField label="Practice owner" value={practice.practiceOwner || "—"} />
+        </div>
       )}
     </Card>
   );

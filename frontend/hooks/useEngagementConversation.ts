@@ -48,9 +48,10 @@ export function toConversationMessage(raw: RawConversationMessage): Conversation
   return {
     id: String(raw.id),
     role: raw.role,
-    author: raw.role === "user" ? "You" : "Advise",
+    author: raw.role === "user" ? "You" : "Sheldon",
     timestamp: formatTimestamp(raw.created_at),
     body,
+    metadata: raw.metadata ?? {},
   };
 }
 
@@ -75,18 +76,23 @@ export function useConversationQuery(pid: string, enabled = true) {
   });
 }
 
+// How often to check whether Sheldon has replied.
+const REPLY_POLL_MS = 700;
+
 export function useSendMessageMutation(pid: string) {
   const { api } = useAuth();
   const qc = useQueryClient();
 
   return useMutation({
     mutationFn: async (content: string) => {
-      const sent = await sendConversationMessage(api, pid, content);
+      const sent = await sendConversationMessage(api, pid, content, undefined, REPLY_POLL_MS);
       if (!sent.ok) throw new Error(extractApiErrorMessage(sent.data, "Conversation send failed"));
+      // Wait for the refreshed thread before finishing, so the sent message never blinks out.
+      await qc.invalidateQueries({ queryKey: ["conversation", pid] });
+      void qc.invalidateQueries({ queryKey: ["runs", pid] });
+      void qc.invalidateQueries({ queryKey: ["run-progress", pid] });
+      void qc.invalidateQueries({ queryKey: ["conversation-usage", pid] });
       return sent.data;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["conversation", pid] });
     },
   });
 }

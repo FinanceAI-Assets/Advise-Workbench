@@ -12,7 +12,10 @@ export function ConversationComposer({
   sourceCount,
   onSend,
   busy,
+  draft,
 }: {
+  // Text to place in the box; change `draft.id` to apply the same text again.
+  draft?: { id: number; text: string };
   skillLabel: string;
   sourceCount: number;
   // Optional: when supplied, Send becomes real — it fires onSend(text) and
@@ -22,6 +25,11 @@ export function ConversationComposer({
   busy?: boolean;
 }) {
   const [value, setValue] = useState("");
+  const [appliedDraft, setAppliedDraft] = useState(0);
+  if (draft && draft.id !== appliedDraft) {
+    setAppliedDraft(draft.id);
+    setValue(draft.text);
+  }
 
   const submit = () => {
     const text = value.trim();
@@ -41,10 +49,9 @@ export function ConversationComposer({
             submit();
           }
         }}
-        placeholder="Ask a follow-up or refine the roadmap…"
+        placeholder="Message Sheldon…"
         rows={3}
         className="border-0 p-0 focus:ring-0"
-        disabled={busy}
       />
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--surface-border)] pt-3">
         <div className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
@@ -55,7 +62,7 @@ export function ConversationComposer({
           <span>{sourceCount} sources in scope</span>
         </div>
         <Button type="button" className="flex items-center gap-2 text-sm" disabled={!value.trim() || busy} onClick={submit}>
-          {busy ? "Sending…" : "Send"}
+          {busy ? "Sheldon is replying…" : "Send"}
         </Button>
       </div>
       <p className="text-2xs text-[var(--text-muted)]">

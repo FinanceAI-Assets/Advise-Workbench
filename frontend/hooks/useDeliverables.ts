@@ -24,6 +24,7 @@ type RunRow = { id: string; status: string; created_at: string | null; instructi
 type RunArtifactsBag = {
   pptx_slides?: RawPptxSlide[];
   narrative_md?: string;
+  docx_base64?: string;
   sop_markdown?: string;
   evidence_claims?: { claims?: Array<Record<string, unknown>>; summary?: Record<string, number> };
   ready_downloads?: string[];
@@ -65,6 +66,7 @@ function statusFromQuality(quality: string | undefined): ArtifactStatus {
 // evidence links (so the "Evidence linked to this slide" panel reflects
 // whichever slide is currently selected, not just slide 0).
 export type DeliverablesWithRaw = DeliverablesDetail & {
+  runId: string;
   rawSlides: RawPptxSlide[];
   slideBreadcrumb: string;
   slideSourcesSummary: string;
@@ -108,7 +110,7 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
       const slides = Array.isArray(bag.pptx_slides) ? bag.pptx_slides : [];
       const hasPptx = slides.length > 0;
       const narrative = bag.narrative_md || bag.sop_markdown || "";
-      const hasDocx = Boolean(narrative);
+      const hasDocx = Boolean(narrative) || Boolean(bag.docx_base64);
       const claims = (evidenceData.claims ?? []) as RawEvidenceClaim[];
       const claimsCount = claims.length;
       const status = statusFromQuality(bag.quality_status);
@@ -165,6 +167,7 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
 
       return {
         engagementId: pid,
+        runId: run.id,
         engagementName,
         title: "Deliverables & artifacts",
         subtitle: "Review the actual output, trace its sources and export the approved version—not just the conversation.",
@@ -200,7 +203,9 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
             breadcrumb: `${engagementName.toUpperCase()} / NARRATIVE`,
             title: "Deliverable document",
             meta: `Run ${run.id} · ${run.status}`,
-            sections: splitMarkdownSections(narrative),
+            sections: narrative
+              ? splitMarkdownSections(narrative)
+              : [{ heading: "Preview not available", body: "Download the document to read it." }],
             footerMeta: "Internal · Human review required",
             pageLabel: "",
           },

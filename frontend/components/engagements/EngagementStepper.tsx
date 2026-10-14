@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/Button";
 import { Check, RefreshCw } from "lucide-react";
 
 import { Card } from "@/components/ui/Card";
@@ -10,12 +11,24 @@ const CIRCLE_CLASS: Record<EngagementStep["status"], string> = {
   upcoming: "border-[var(--surface-border)] text-[var(--text-muted)]",
 };
 
-export function EngagementStepper({ steps }: { steps: EngagementStep[] }) {
+export function EngagementStepper({
+  steps,
+  onSelect,
+}: {
+  steps: EngagementStep[];
+  onSelect?: (stepId: string) => void;
+}) {
   return (
     <Card className="flex flex-wrap items-center gap-4 p-4">
       {steps.map((step, i) => (
         <div key={step.id} className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={!onSelect}
+            onClick={() => onSelect?.(step.id)}
+            className="flex items-center gap-2 p-1 text-left font-normal disabled:cursor-default disabled:opacity-100"
+          >
             <span
               className={cn(
                 "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold",
@@ -34,7 +47,7 @@ export function EngagementStepper({ steps }: { steps: EngagementStep[] }) {
               <p className="text-sm font-semibold text-[var(--text-default)]">{step.label}</p>
               <p className="text-xs text-[var(--text-muted)]">{step.helper}</p>
             </div>
-          </div>
+          </Button>
           {i < steps.length - 1 ? <span className="text-[var(--text-muted)]">›</span> : null}
         </div>
       ))}

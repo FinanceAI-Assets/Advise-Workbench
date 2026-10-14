@@ -9,8 +9,8 @@ export function SlideCanvas({ slide }: { slide: SlideDetail }) {
       </div>
       <h3 className="text-xl font-semibold text-[var(--text-default)]">{slide.headline}</h3>
       <div className="grid gap-4 sm:grid-cols-3">
-        {slide.phases.map((phase) => (
-          <div key={phase.label} className="space-y-1 rounded-md border-t-2 border-t-[var(--accent-green)] bg-[var(--surface-muted)] p-3">
+        {slide.phases.map((phase, i) => (
+          <div key={i} className="space-y-1 rounded-md border-t-2 border-t-[var(--accent-green)] bg-[var(--surface-muted)] p-3">
             <p className="text-xs font-semibold text-[var(--accent-green-dark)]">{phase.label}</p>
             <p className="text-sm font-semibold text-[var(--text-default)]">{phase.title}</p>
             <p className="text-xs text-[var(--text-muted)]">{phase.description}</p>

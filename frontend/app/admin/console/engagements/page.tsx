@@ -1,60 +1,33 @@
 "use client";
 
-import { Download } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useState } from "react";
 
 import { AdminEngagementsTable, DeliverableLifecyclePanel, SelectedEngagementPanel } from "@/components/admin-console";
 import { EngagementTabs } from "@/components/engagements";
-import { Button } from "@/components/ui/Button";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { useAdminEngagementsQuery } from "@/hooks/useAdminEngagements";
-import { useAuth } from "@/lib/auth-context";
+import { ExportButton, ReasonAction, RecordsTable } from "@/components/workbench/AdminControls";
+import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
+import { useAdminEngagementsQuery } from "@/hooks/useAdminConsole";
 
-type AdminEngagementsTabKey = "engagements" | "deliverables" | "retention-exceptions" | "export-requests";
+type TabKey = "engagements" | "deliverables" | "retention-exceptions" | "export-requests";
 
 export default function AdminConsoleEngagementsPage() {
-  const router = useRouter();
-  const { token, ready } = useAuth();
-  const [hydrated, setHydrated] = useState(false);
-  const [tab, setTab] = useState<AdminEngagementsTabKey>("engagements");
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabKey>("engagements");
+  const [query, setQuery] = useState("");
+  const [classification, setClassification] = useState("all");
+  const [selected, setSelected] = useState("");
+  const [days, setDays] = useState("365");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("Contributor");
+  const engagements = useAdminEngagementsQuery(query, selected);
 
-  const engagements = useAdminEngagementsQuery(Boolean(token));
-
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!ready) return;
-    if (!token) router.replace("/login?next=/admin/console/engagements");
-  }, [ready, token, router]);
-
-  if (!hydrated || !ready || !token) {
-    return (
-      <main style={{ padding: 24 }}>
-        <p>Redirecting…</p>
-      </main>
-    );
-  }
-
-  if (engagements.isPending || !engagements.data) {
-    return (
-      <main className="space-y-6">
-        <Skeleton className="h-4 w-48" />
-        <Skeleton className="h-9 w-96" />
-        <Skeleton className="h-64 w-full" />
-      </main>
-    );
-  }
-
+  if (engagements.isPending && !engagements.data) return <PageSkeleton />;
   const data = engagements.data;
-  const activeEngagementId = activeId ?? data.selected.id;
-  const showingSelected = activeEngagementId === data.selected.id;
+  if (!data) return <ErrorNote error={engagements.error} />;
+  const rows = data.rows.filter((row) => classification === "all" || row.classification === classification);
+  const current = data.selected;
 
   const tabs = [
     { key: "engagements" as const, label: "Engagements", count: data.tabCounts.engagements },
@@ -64,63 +37,146 @@ export default function AdminConsoleEngagementsPage() {
   ];
 
   return (
-    <main className="space-y-6">
-      <nav className="text-xs uppercase tracking-wide text-[var(--text-muted)]" aria-label="Breadcrumb">
-        Admin console / Engagements &amp; deliverables
-      </nav>
-
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--text-default)]">Engagement oversight</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Manage ownership, access and lifecycle controls. Content and artifact approvals remain with assigned engagement
-            reviewers.
-          </p>
-        </div>
-        <Button variant="secondary" type="button" className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-          <Download size={16} aria-hidden />
-          Export inventory
-        </Button>
-      </header>
-
+    <PageFrame
+      breadcrumb="Admin console / Engagements & deliverables"
+      title="Engagement oversight"
+      subtitle="Manage ownership, access and lifecycle controls. Content and artifact approvals remain with assigned engagement reviewers."
+      actions={<ExportButton report="engagements" label="Export inventory" />}
+    >
       <EngagementTabs tabs={tabs} active={tab} onChange={setTab} />
 
-      {tab !== "engagements" ? (
-        <EmptyState
-          title={`${tabs.find((t) => t.key === tab)?.label} view is coming soon`}
-          description="This filtered view isn't wired up yet in this preview."
-        />
-      ) : (
+      {tab === "engagements" ? (
         <>
           <div className="flex flex-wrap items-center gap-3">
-            <Input placeholder="Search engagement, owner or ID" className="min-w-[260px] flex-1" />
-            <Select defaultValue="all" className="w-auto">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search engagement or ID"
+              className="min-w-[260px] flex-1"
+            />
+            <Select
+              aria-label="Classification"
+              value={classification}
+              onChange={(e) => setClassification(e.target.value)}
+              className="w-auto"
+            >
               <option value="all">Classification: All</option>
-              <option value="internal">Classification: Internal</option>
-              <option value="restricted">Classification: Restricted</option>
+              <option value="Internal">Classification: Internal</option>
+              <option value="Restricted">Classification: Restricted</option>
             </Select>
-            <Button variant="secondary" type="button" className="whitespace-nowrap">
-              Lifecycle: Active
-            </Button>
             <span className="ml-auto text-xs text-[var(--text-muted)]">
-              {data.matchingCount} of {data.totalCount} engagements
+              {rows.length} of {data.totalCount} engagements
             </span>
           </div>
 
-          <AdminEngagementsTable rows={data.rows} activeId={activeEngagementId} onSelect={setActiveId} />
+          <AdminEngagementsTable rows={rows} activeId={current?.id ?? ""} onSelect={setSelected} />
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            {showingSelected ? (
-              <SelectedEngagementPanel engagement={data.selected} />
-            ) : (
-              <div className="rounded-lg border border-[var(--surface-border)] bg-white p-6 text-sm text-[var(--text-muted)]">
-                This engagement&apos;s detail isn&apos;t wired up yet in this demo.
-              </div>
-            )}
-            <DeliverableLifecyclePanel items={data.deliverableLifecycle} />
-          </div>
+          {current ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <SelectedEngagementPanel
+                engagement={current}
+                actions={
+                  <div className="flex flex-wrap items-start gap-2">
+                    <ReasonAction
+                      label="Manage access"
+                      build={(reason) => ({ path: `/engagements/${current.id}/members`, body: { email, role, reason } })}
+                    >
+                      <Input
+                        type="email"
+                        required
+                        aria-label="Organization member email"
+                        placeholder="name@deloitte.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                      <Select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value)}>
+                        {data.roles.map((option) => (
+                          <option key={option}>{option}</option>
+                        ))}
+                      </Select>
+                    </ReasonAction>
+                    <ReasonAction
+                      label="Adjust retention"
+                      build={(reason) => ({ path: `/engagements/${current.id}/retention`, body: { days: Number(days), reason } })}
+                    >
+                      <label className="grid gap-1.5 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                        Days after close (currently {current.retentionDays})
+                        <Input type="number" min={30} max={3650} required value={days} onChange={(e) => setDays(e.target.value)} />
+                      </label>
+                    </ReasonAction>
+                    <ReasonAction
+                      label={current.status === "archived" ? "Archived" : "Archive"}
+                      disabled={current.status === "archived" || !current.archiveReady}
+                      hint="Open reviews must be closed before archiving"
+                      build={(reason) => ({ path: `/engagements/${current.id}/archive`, body: { reason } })}
+                    />
+                  </div>
+                }
+              />
+              <DeliverableLifecyclePanel items={data.deliverableLifecycle} />
+            </div>
+          ) : null}
         </>
-      )}
-    </main>
+      ) : null}
+
+      {tab === "deliverables" ? (
+        <RecordsTable
+          title="Deliverable oversight"
+          columns={[
+            ["name", "Artifact"],
+            ["engagement", "Engagement"],
+            ["version", "Version"],
+            ["owner", "Owner"],
+            ["state", "State"],
+          ]}
+          rows={data.deliverables}
+          empty="No artifacts have been drafted yet."
+          action={(row) => <Link href={`/reviews/${row.id}`}>Open review</Link>}
+        />
+      ) : null}
+
+      {tab === "retention-exceptions" ? (
+        <RecordsTable
+          title="Exception requests"
+          columns={[
+            ["id", "Request"],
+            ["engagement", "Engagement"],
+            ["requested", "Requested retention"],
+            ["owner", "Owner"],
+            ["approver", "Approver"],
+            ["state", "State"],
+            ["justification", "Business justification"],
+          ]}
+          rows={data.retentionExceptions}
+          empty="No retention exceptions have been requested."
+        />
+      ) : null}
+
+      {tab === "export-requests" ? (
+        <RecordsTable
+          title="Requested packages"
+          columns={[
+            ["id", "Request"],
+            ["artifact", "Artifact"],
+            ["requestedBy", "Requested by"],
+            ["engagement", "Engagement"],
+            ["gates", "Gates"],
+            ["state", "State"],
+          ]}
+          rows={data.exportRequests}
+          empty="No export requests are waiting."
+          action={(row) =>
+            row.state === "Released" ? (
+              "Released"
+            ) : (
+              <ReasonAction
+                label="Approve export"
+                build={(reason) => ({ path: `/export-requests/${row.id}/approve`, body: { reason } })}
+              />
+            )
+          }
+        />
+      ) : null}
+    </PageFrame>
   );
 }

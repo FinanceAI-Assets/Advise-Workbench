@@ -6,7 +6,7 @@ from fastapi import Depends, Header, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
@@ -181,6 +181,28 @@ def require_project_role(project_id: str, allowed_roles: set[str], user: User, d
         raise HTTPException(status_code=403, detail="Insufficient project permissions")
 
 
+def require_admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+    """Platform administrators only. Reads the row fresh: the cached user has no admin flag."""
+    row = db.scalar(select(User).where(User.id == user.id))
+    if row is None or not row.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return row
+
+
+def allowed_email_domains() -> list[str]:
+    return [d.strip().lower().lstrip("@") for d in settings.auth_allowed_email_domains.split(",") if d.strip()]
+
+
+def require_allowed_email_domain(email: str) -> None:
+    """Refuse sign-in for addresses outside the organization's domains, before any account lookup."""
+    domains = allowed_email_domains()
+    if domains and email.rsplit("@", 1)[-1] not in domains:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Sign in with your @{domains[0]} account.",
+        )
+
+
 def ensure_user(email: str, password: str, db: Session) -> User:
     """Authenticate or provision a user.
 
@@ -188,7 +210,9 @@ def ensure_user(email: str, password: str, db: Session) -> User:
     to avoid account enumeration.
     """
     invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    existing = db.scalar(select(User).where(User.email == email))
+    email = email.strip().lower()
+    require_allowed_email_domain(email)
+    existing = db.scalar(select(User).where(func.lower(User.email) == email))
     if existing:
         if not verify_password(password, existing.hashed_password):
             raise invalid

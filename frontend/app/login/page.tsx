@@ -12,7 +12,7 @@ function LoginForm() {
   const { login, ready } = useAuth();
   const router = useRouter();
   const search = useSearchParams();
-  const next = search.get("next") || "/projects";
+  const next = search.get("next") || "/engagements";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,7 +44,7 @@ function LoginForm() {
       </div>
       <h1 className="text-xl font-semibold text-[var(--text-default)]">Sign in</h1>
       <p className="mt-2 text-sm text-[var(--text-muted)]">
-        First sign-in creates your account. Use a strong password for local development.
+        Sign in with your @deloitte.com account.
       </p>
       <form onSubmit={onSubmit} className="mt-6 grid gap-4">
         <label className="grid gap-1.5 text-sm font-medium text-[var(--text-default)]">
@@ -54,6 +54,7 @@ function LoginForm() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
+            placeholder="name@deloitte.com"
             autoComplete="email"
           />
         </label>

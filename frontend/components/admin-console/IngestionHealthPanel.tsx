@@ -1,7 +1,7 @@
+import type { ReactNode } from "react";
 import { AlertCircle, Library, Plug, Upload } from "lucide-react";
 
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { NoticeCard } from "@/components/ui/NoticeCard";
 import type { IngestionHealthItem } from "@/types/api";
@@ -21,10 +21,12 @@ export function IngestionHealthPanel({
   items,
   updatedMeta,
   warning,
+  actions,
 }: {
   items: IngestionHealthItem[];
   updatedMeta: string;
   warning: { title: string; description: string } | null;
+  actions?: ReactNode;
 }) {
   return (
     <Card className="space-y-4">
@@ -52,9 +54,7 @@ export function IngestionHealthPanel({
         })}
       </ul>
       {warning ? <NoticeCard tone="warning" icon={<AlertCircle size={18} aria-hidden />} title={warning.title} description={warning.description} /> : null}
-      <Button variant="secondary" type="button" className="w-full text-sm">
-        View ingestion jobs
-      </Button>
+      {actions}
     </Card>
   );
 }

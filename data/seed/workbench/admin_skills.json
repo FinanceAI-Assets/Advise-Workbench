@@ -1,0 +1,139 @@
+{
+  "publishedCount": 6,
+  "candidateCount": 3,
+  "registry": [
+    {
+      "id": "sk-008",
+      "name": "Roadmap builder",
+      "candidateMeta": "v2.2 candidate",
+      "publishedMeta": "v2.1 published"
+    },
+    {
+      "id": "sk-011",
+      "name": "Discovery synthesis",
+      "candidateMeta": "v1.6 published",
+      "publishedMeta": "No pending candidate"
+    },
+    {
+      "id": "sk-014",
+      "name": "Operating model advisor",
+      "candidateMeta": "v3.0 published",
+      "publishedMeta": "v3.1 in testing"
+    },
+    {
+      "id": "sk-017",
+      "name": "Governance designer",
+      "candidateMeta": "v1.4 published",
+      "publishedMeta": "No pending candidate"
+    },
+    {
+      "id": "sk-019",
+      "name": "Evidence checker",
+      "candidateMeta": "v2.2 published",
+      "publishedMeta": "v2.3 draft"
+    },
+    {
+      "id": "sk-022",
+      "name": "Executive storyteller",
+      "candidateMeta": "v1.9 published",
+      "publishedMeta": "No pending candidate"
+    }
+  ],
+  "definition": {
+    "id": "sk-008",
+    "code": "SK-008",
+    "name": "Roadmap builder",
+    "versionLabel": "v2.2 candidate",
+    "owner": "Maya Patel",
+    "approvalState": "Pending approval",
+    "instructionContract": [
+      "ROLE: Evidence-led transformation advisor.",
+      "INPUT: Engagement brief, permitted source set, time horizon.",
+      "METHOD: Retrieve approved practices; propose phased actions, named owners and measurable stage gates.",
+      "EVIDENCE: Cite every substantive claim. Label assumptions.",
+      "STOP: If evidence is insufficient, ask for clarification.",
+      "OUTPUT: PPTX roadmap and DOCX recommendations memo.",
+      "REVIEW: Human approval is mandatory before export."
+    ],
+    "requiredInputSchema": "brief · sources[] · horizon_days",
+    "outputSchema": "PPTX / 12 slides · DOCX / 6 pages",
+    "retrievalScope": "Engagement + approved library",
+    "evidenceThreshold": "Every claim cited or marked assumption",
+    "permissions": [
+      {
+        "id": "perm-1",
+        "role": "Lead / Contributor",
+        "useSkill": "Run in scoped engagement",
+        "defineApprove": "No"
+      },
+      {
+        "id": "perm-2",
+        "role": "Practice owner",
+        "useSkill": "Run & test",
+        "defineApprove": "Edit candidate"
+      },
+      {
+        "id": "perm-3",
+        "role": "Independent reviewer",
+        "useSkill": "Review test evidence",
+        "defineApprove": "Approve release"
+      }
+    ],
+    "changelog": "Change from v2.1: stricter missing-evidence stop condition and explicit accountable-owner checks. Submitted 08 Oct 2026 at 09:18."
+  },
+  "testResults": {
+    "id": "test-062",
+    "passCount": 17,
+    "totalCount": 18,
+    "failLabel": "1 failed",
+    "runMeta": "Last run: 08 Oct · 09:12 · Sandbox fixtures only",
+    "checklist": [
+      {
+        "id": "tc-1",
+        "label": "Citation grounding",
+        "state": "6 / 6 passed"
+      },
+      {
+        "id": "tc-2",
+        "label": "Output format validation",
+        "state": "4 / 4 passed"
+      },
+      {
+        "id": "tc-3",
+        "label": "Permission boundaries",
+        "state": "4 / 4 passed"
+      },
+      {
+        "id": "tc-4",
+        "label": "Insufficient evidence",
+        "state": "3 / 4 passed"
+      }
+    ],
+    "failure": {
+      "title": "Failed: missing benefits baseline",
+      "description": "The candidate drafted a benefits target instead of requesting evidence. Tighten the stop instruction."
+    }
+  },
+  "releaseApproval": {
+    "reviewerName": "Priya Shah",
+    "reviewerRole": "Independent approver",
+    "checks": [
+      {
+        "id": "ra-1",
+        "label": "Definition review",
+        "state": "Pending"
+      },
+      {
+        "id": "ra-2",
+        "label": "All tests passing",
+        "state": "Blocked"
+      },
+      {
+        "id": "ra-3",
+        "label": "Role separation",
+        "state": "Passed"
+      }
+    ],
+    "footnote": "v2.1 remains active for Northstar and all existing runs. v2.2 will not be served until approval."
+  }
+}

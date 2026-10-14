@@ -3,102 +3,63 @@
 import { ArrowUpRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   ActiveSkillPanel,
   ConversationComposer,
   ConversationThread,
+  ConversationUsageCard,
   EngagementContextPanel,
   PermissionAwareCard,
-  PracticeContextPanel,
+  RecentConversationsList,
 } from "@/components/conversation";
+import { RunProgressCard } from "@/components/conversation/RunProgressCard";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { Input } from "@/components/ui/Input";
+import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useConversationQuery, useSendMessageMutation } from "@/hooks/useEngagementConversation";
 import { useEngagementDetailQuery } from "@/hooks/useEngagements";
-import { useAuth } from "@/lib/auth-context";
-import type { ActiveSkill, PracticeContext } from "@/types/api";
+import {
+  useActivateConversationMutation,
+  useConversationContextQuery,
+  useSelectSkillMutation,
+  useStartConversationMutation,
+} from "@/hooks/useWorkbench";
 
-// Active skill and practice context have no backend equivalent yet (no
-// per-conversation skill-selection or practice-match endpoint) — kept as a
-// fixed default rather than fabricated-but-dynamic content, following the
-// same real-data-first / clearly-scoped-default split as useLpLibrary.ts and
-// useReview.ts. Everything else on this page (engagement context, messages,
-// evidence-shown count) is real.
-const DEFAULT_SKILL: ActiveSkill = {
-  name: "Roadmap builder",
-  version: "v2.1",
-  meta: "Evidence required · Human review before export",
-  formats: ["PPTX + DOCX"],
-};
-
-const DEFAULT_PRACTICE: PracticeContext = {
-  name: "Operating model design",
-  meta: "Playbook v3.2 · Managed maturity · Approved 06 Oct 2026",
-  practiceHref: "/admin/lp-library",
-};
-
-// Project-scoped conversation page, replacing the flat mock-era
-// /conversation route. Reads/sends through the real backend
-// (GET/POST /api/projects/{pid}/conversation...) via useEngagementConversation.ts
-// — same conversation turn mechanics as the original /projects/[pid] studio
-// (frontend/lib/conversationTurn.ts), rendered in the engagement-context +
-// conversation + evidence three-column layout.
+const DRAFT_REQUEST = "Create PPTX and DOCX drafts from this conversation, grounded in the permitted sources.";
+// Conversation for one engagement. Messages go through the existing
+// conversation pipeline (POST /api/projects/{pid}/conversation/messages); the
+// active thread, skill and source scope come from /api/engagements/{pid}/conversations.
 export default function EngagementConversationPage() {
   const params = useParams();
   const router = useRouter();
-  const { token, ready } = useAuth();
-  const [hydrated, setHydrated] = useState(false);
+  const id = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? (params.id[0] ?? "") : "";
 
-  const id = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? params.id[0] ?? "" : "";
-  const engagement = useEngagementDetailQuery(id, Boolean(token));
-  const conversation = useConversationQuery(id, Boolean(token));
+  const engagement = useEngagementDetailQuery(id);
+  const conversation = useConversationQuery(id);
+  const context = useConversationContextQuery(id);
   const sendMessage = useSendMessageMutation(id);
+  const startConversation = useStartConversationMutation(id);
+  const activate = useActivateConversationMutation(id);
+  const selectSkill = useSelectSkillMutation();
+  const [newTitle, setNewTitle] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ id: 0, text: "" });
 
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
+  if (conversation.isPending || engagement.isPending || context.isPending) return <PageSkeleton />;
 
-  useEffect(() => {
-    if (!ready) return;
-    if (!token) router.replace(`/login?next=/engagements/${id}/conversation`);
-  }, [ready, token, router, id]);
-
-  if (!hydrated || !ready || !token) {
-    return (
-      <main style={{ padding: 24 }}>
-        <p>Redirecting…</p>
-      </main>
-    );
-  }
-
-  if (conversation.isPending || engagement.isPending) {
-    return (
-      <main className="space-y-6">
-        <Skeleton className="h-4 w-48" />
-        <Skeleton className="h-9 w-96" />
-        <div className="grid gap-4 lg:grid-cols-[280px_1fr_340px]">
-          <Skeleton className="h-96 w-full" />
-          <Skeleton className="h-96 w-full" />
-          <Skeleton className="h-96 w-full" />
-        </div>
-      </main>
-    );
-  }
-
-  if (conversation.isError || !conversation.data) {
+  if (conversation.isError || !conversation.data || !engagement.data) {
     return (
       <main className="space-y-4">
         <EmptyState
           title="Conversation unavailable"
-          description="This engagement's conversation couldn't be loaded. It may not have one yet."
+          description="This engagement's conversation couldn't be loaded, or you don't have access to it."
         >
-          <Link href={`/engagements/${id}`}>
+          <Link href="/engagements">
             <Button type="button" variant="secondary">
-              Back to engagement
+              Back to engagements
             </Button>
           </Link>
         </EmptyState>
@@ -108,40 +69,33 @@ export default function EngagementConversationPage() {
 
   const data = conversation.data;
   const engagementData = engagement.data;
-  const engagementName = engagementData?.name ?? id;
-  const scopeSummary = engagementData
-    ? `Scope: ${engagementData.teamMemberCount} engagement${engagementData.teamMemberCount === 1 ? "" : "s"} · ${engagementData.evidenceSourceCount} approved library sources`
-    : "No scope information available";
+  const ctx = context.data;
+  const active = ctx?.items.find((item) => item.active);
+  const skill = ctx?.skill ?? null;
+  const sources = ctx?.sources ?? { documents: [], practices: [], total: 0 };
+  const scopeSummary = `Scope: ${sources.documents.length} engagement document${
+    sources.documents.length === 1 ? "" : "s"
+  } · ${sources.practices.length} approved library practice${sources.practices.length === 1 ? "" : "s"}`;
 
-  // Uploaded documents are real, but the backend has no per-conversation
-  // relevance-ranked retrieval endpoint yet — fabricating a relevance score
-  // or quote for a real filename would misrepresent it, so only indexed
-  // source names/counts are shown, not EvidenceMatch's full ranked shape.
-  const evidenceSources = engagementData?.evidenceSources ?? [];
+  async function createConversation(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newTitle?.trim()) return;
+    await startConversation.mutateAsync(newTitle.trim());
+    setNewTitle(null);
+  }
 
   return (
-    <main className="space-y-6">
-      <nav className="text-xs uppercase tracking-wide text-[var(--text-muted)]" aria-label="Breadcrumb">
-        <Link href={`/engagements/${id}`} className="!text-[var(--text-muted)] !no-underline hover:!text-[var(--text-default)]">
-          {engagementName.toUpperCase()}
-        </Link>{" "}
-        / CONVERSATION
-      </nav>
-
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--text-default)]">From evidence to advice</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Roadmap planning · Ask for advice, drafts or revisions — grounded in this engagement&apos;s sources.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="secondary"
-            type="button"
-            className="flex items-center gap-2"
-            onClick={() => router.push(`/engagements/${id}/conversation`)}
-          >
+    <PageFrame
+      breadcrumb={
+        <>
+          <Link href={`/engagements/${id}`}>{engagementData.name}</Link> / Conversation
+        </>
+      }
+      title={active?.label ?? "From evidence to advice"}
+      subtitle={`${engagementData.name} · ${engagementData.code} · Ask for advice, drafts or revisions grounded in this engagement's sources.`}
+      actions={
+        <>
+          <Button variant="secondary" type="button" className="flex items-center gap-2" onClick={() => setNewTitle("")}>
             <Plus size={16} aria-hidden />
             New conversation
           </Button>
@@ -154,72 +108,121 @@ export default function EngagementConversationPage() {
             <ArrowUpRight size={16} aria-hidden />
             View artifacts
           </Button>
-        </div>
-      </header>
+        </>
+      }
+    >
+      {newTitle !== null ? (
+        <Card>
+          <form onSubmit={(e) => void createConversation(e)} className="flex flex-wrap items-end gap-3">
+            <label className="grid flex-1 gap-1.5 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+              Conversation title
+              <Input
+                autoFocus
+                required
+                minLength={3}
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder="For example: Service ownership options"
+              />
+            </label>
+            <Button type="submit" disabled={startConversation.isPending}>
+              Start conversation
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => setNewTitle(null)}>
+              Cancel
+            </Button>
+            <p className="w-full text-xs text-[var(--text-muted)]">
+              Starts a new evidence-led thread without changing existing conversations.
+            </p>
+            <ErrorNote error={startConversation.error} />
+          </form>
+        </Card>
+      ) : null}
+
+      <RunProgressCard pid={id} />
 
       <div className="grid gap-4 lg:grid-cols-[280px_1fr_340px]">
         <div className="space-y-4">
-          {engagementData ? (
-            <EngagementContextPanel
-              context={{
-                classification: engagementData.brief.classification,
-                name: engagementData.name,
-                description: engagementData.brief.summary,
-                lead: engagementData.lead,
-                teamNote: `${engagementData.teamMemberCount} team member${engagementData.teamMemberCount === 1 ? "" : "s"} · Scoped access`,
-              }}
+          <EngagementContextPanel
+            context={{
+              classification: engagementData.brief.classification,
+              name: engagementData.name,
+              description: engagementData.brief.summary,
+              lead: engagementData.lead,
+              teamNote: engagementData.teamNote,
+            }}
+          />
+          {skill ? (
+            <ActiveSkillPanel
+              skill={skill}
+              options={ctx?.skills}
+              selectedId={skill.id}
+              onChange={(skillId) => selectSkill.mutate({ skillId, projectId: id })}
             />
           ) : null}
-          <ActiveSkillPanel skill={DEFAULT_SKILL} />
-          <PracticeContextPanel practice={DEFAULT_PRACTICE} />
+          {ctx && ctx.items.length > 0 ? (
+            <Card>
+              <RecentConversationsList items={ctx.items} onSelect={(cid) => activate.mutate(cid)} />
+            </Card>
+          ) : null}
         </div>
 
         <div className="space-y-4">
-          {data.messages.length ? (
-            <ConversationThread scopeSummary={scopeSummary} messages={data.messages} />
-          ) : (
-            <EmptyState title="No messages yet" description="Send the first message below to start this conversation." />
-          )}
-          <ConversationComposer
-            skillLabel={DEFAULT_SKILL.name}
-            sourceCount={engagementData?.evidenceSourceCount ?? 0}
+          <ConversationThread
+            scopeSummary={scopeSummary}
+            messages={data.messages}
+            pendingText={sendMessage.isPending ? sendMessage.variables : null}
             busy={sendMessage.isPending}
+            onCreateDrafts={() => sendMessage.mutate(DRAFT_REQUEST)}
+            onReply={(text) => sendMessage.mutate(text)}
+            onDraft={(text) => setDraft((prev) => ({ id: prev.id + 1, text }))}
+          />
+          <ConversationComposer
+            skillLabel={skill?.name ?? "Conversation"}
+            sourceCount={sources.total}
+            busy={sendMessage.isPending}
+            draft={draft}
             onSend={(text) => sendMessage.mutate(text)}
           />
-          {sendMessage.isError ? (
-            <p className="text-sm text-[#8C5B12]">
-              {sendMessage.error instanceof Error ? sendMessage.error.message : "Failed to send message."}
-            </p>
-          ) : null}
+          <ErrorNote error={sendMessage.error} />
         </div>
 
         <div className="space-y-4">
           <Card className="space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-[var(--text-default)]">Indexed sources</h2>
-              <span className="text-xs text-[var(--text-muted)]">{evidenceSources.length}</span>
+              <h2 className="text-base font-semibold text-[var(--text-default)]">Sources in scope</h2>
+              <span className="text-xs text-[var(--text-muted)]">{sources.total}</span>
             </div>
-            {evidenceSources.length ? (
+            {sources.total === 0 ? (
+              <p className="text-xs text-[var(--text-muted)]">No sources yet. Add documents or approved practices.</p>
+            ) : (
               <ul className="space-y-2">
-                {evidenceSources.map((source) => (
-                  <li key={source.id} className="border-b border-[var(--surface-border)] pb-2 last:border-b-0 last:pb-0">
-                    <p className="truncate text-sm font-medium text-[var(--text-default)]">{source.label}</p>
-                    <p className="text-xs text-[var(--text-muted)]">{source.value}</p>
+                {sources.practices.map((practice) => (
+                  <li key={practice.id} className="border-b border-[var(--surface-border)] pb-2 last:border-b-0">
+                    <Link href={`/library?practice=${practice.id}`} className="text-sm font-medium">
+                      {practice.title}
+                    </Link>
+                    <p className="text-xs text-[var(--text-muted)]">Approved library practice</p>
+                  </li>
+                ))}
+                {sources.documents.map((name) => (
+                  <li key={name} className="border-b border-[var(--surface-border)] pb-2 last:border-b-0 last:pb-0">
+                    <p className="truncate text-sm font-medium text-[var(--text-default)]">{name}</p>
+                    <p className="text-xs text-[var(--text-muted)]">Engagement document · Internal</p>
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-xs text-[var(--text-muted)]">No documents uploaded to this engagement yet.</p>
             )}
+            <Link href={`/engagements/${id}?tab=sources`} className="block !no-underline">
+              <Button variant="secondary" className="w-full justify-center">
+                Manage sources
+              </Button>
+            </Link>
           </Card>
           <PermissionAwareCard />
+          <ConversationUsageCard pid={id} busy={sendMessage.isPending} />
         </div>
       </div>
-
-      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--surface-border)] pt-4 text-xs text-[var(--text-muted)]">
-        <span>Illustrative content only · No real client or confidential information</span>
-        <span>Advise Workbench · Secure advisory environment</span>
-      </footer>
-    </main>
+    </PageFrame>
   );
 }

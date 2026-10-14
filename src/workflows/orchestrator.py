@@ -34,7 +34,7 @@ from src.evaluation.narrative_feedback import (
 )
 from src.core.run_control import RunAborted
 from src.core.security.sanitization import sanitize_memory_payload_dict
-from src.core.db.models import MemoryEvent, Project, ProjectMemoryProfile, Run, RunEvent, RunTask, UserProjectPreference, utcnow
+from src.core.db.models import Membership, MemoryEvent, Notification, Project, ProjectMemoryProfile, Run, RunEvent, RunTask, UserProjectPreference, utcnow
 from src.core.db.session import SessionLocal
 from src.app.schemas.coordinator_run import CoordinatorRunInput
 from src.app.schemas.run_payloads import GuardrailReportDoc, QaReportDoc
@@ -136,6 +136,28 @@ _PLAN_KEYS_TO_CLEAR_AFTER_SUCCESSFUL_EVALUATOR: tuple[str, ...] = (
     "pdf_narrative_feedback",
     "pptx_narrative_feedback",
 )
+
+
+def _notify_drafts_ready(session, *, project_id: str, run_id: str) -> None:
+    """Notify the engagement's leads that drafts are ready. A failure here must not fail the run."""
+    try:
+        owners = session.scalars(
+            select(Membership.user_id).where(Membership.project_id == project_id, Membership.role == "Owner")
+        ).all()
+        for user_id in owners:
+            session.add(
+                Notification(
+                    user_id=user_id,
+                    kind="system",
+                    title="Drafts are ready for review",
+                    body=f"{run_id} finished. Open the deliverables, check them and submit them for review.",
+                    link=f"/engagements/{project_id}/deliverables",
+                )
+            )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        logging.getLogger(__name__).warning("drafts-ready notification failed for run %s: %s", run_id, exc)
 
 
 def _strip_visual_remediation_from_plan(plan_json: str | None) -> str | None:
@@ -2130,6 +2152,7 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
             )
         append_run_event(session, run_id, "step", {"status": "review_ready"})
         append_run_event(session, run_id, "heartbeat", heartbeat_event(run_id=run_id, phase="review_ready"))
+        _notify_drafts_ready(session, project_id=project_id, run_id=run_id)
         if run_todos:
             todo_set_status(run_todos, "finalize", "done")
             _emit_and_sync_todo_snapshot(

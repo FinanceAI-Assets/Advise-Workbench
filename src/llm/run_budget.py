@@ -97,6 +97,35 @@ def run_llm_budget(max_tokens: int, *, run_id: str | None = None) -> Generator[N
                 _live_usage_registry.pop(run_id, None)
 
 
+# One-off captures (for example a single conversation reply), readable while they are in progress.
+_active_capture: contextvars.ContextVar[_RunTokenUsage | None] = contextvars.ContextVar("run_active_capture", default=None)
+_live_captures: dict[str, _RunTokenUsage] = {}
+_live_captures_lock = threading.Lock()
+
+
+@contextmanager
+def capture_usage(key: str) -> Generator[_RunTokenUsage, None, None]:
+    """Count the tokens charged inside this block. `get_live_capture(key)` reads the count while it runs."""
+    usage = _RunTokenUsage()
+    with _live_captures_lock:
+        _live_captures[key] = usage
+    tok = _active_capture.set(usage)
+    try:
+        yield usage
+    finally:
+        _active_capture.reset(tok)
+        with _live_captures_lock:
+            if _live_captures.get(key) is usage:
+                _live_captures.pop(key, None)
+
+
+def get_live_capture(key: str) -> dict[str, int] | None:
+    """Tokens used so far by an in-progress capture, or None when nothing is running under that key."""
+    with _live_captures_lock:
+        usage = _live_captures.get(key)
+    return usage.snapshot() if usage is not None else None
+
+
 def charge_llm_usage(
     *,
     input_tokens: int,
@@ -119,14 +148,14 @@ def charge_llm_usage(
             cache_read_tokens=cache_read_tokens,
             cache_creation_tokens=cache_creation_tokens,
         )
-    proj_usage = _active_project_usage.get()
-    if proj_usage is not None:
-        proj_usage.charge(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=cache_read_tokens,
-            cache_creation_tokens=cache_creation_tokens,
-        )
+    for extra in (_active_project_usage.get(), _active_capture.get()):
+        if extra is not None:
+            extra.charge(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_creation_tokens=cache_creation_tokens,
+            )
 
 
 def get_remaining_token_budget() -> int | None:

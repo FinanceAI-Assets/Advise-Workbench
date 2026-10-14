@@ -9,10 +9,12 @@ export function EvidenceReadinessPanel({
   sourceCount,
   sources,
   warning,
+  onViewAll,
 }: {
   sourceCount: number;
   sources: EvidenceSource[];
   warning: { title: string; description: string } | null;
+  onViewAll?: () => void;
 }) {
   return (
     <Card className="space-y-4">
@@ -37,7 +39,7 @@ export function EvidenceReadinessPanel({
           </div>
         </div>
       ) : null}
-      <Button variant="secondary" type="button" className="w-full text-sm">
+      <Button variant="secondary" type="button" className="w-full text-sm" onClick={onViewAll}>
         View all sources
       </Button>
     </Card>

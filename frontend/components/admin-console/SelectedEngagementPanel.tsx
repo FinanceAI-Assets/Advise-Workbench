@@ -1,6 +1,5 @@
-import { Archive, CalendarClock, UserCog } from "lucide-react";
+import type { ReactNode } from "react";
 
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import type { SelectedEngagementDetail } from "@/types/api";
 
@@ -13,7 +12,7 @@ function MetaField({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SelectedEngagementPanel({ engagement }: { engagement: SelectedEngagementDetail }) {
+export function SelectedEngagementPanel({ engagement, actions }: { engagement: SelectedEngagementDetail; actions?: ReactNode }) {
   return (
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
@@ -47,20 +46,7 @@ export function SelectedEngagementPanel({ engagement }: { engagement: SelectedEn
         </tbody>
       </table>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap text-sm">
-          <UserCog size={16} aria-hidden />
-          Manage access
-        </Button>
-        <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap text-sm">
-          <CalendarClock size={16} aria-hidden />
-          Adjust retention
-        </Button>
-        <Button variant="secondary" type="button" disabled className="flex items-center gap-2 whitespace-nowrap text-sm">
-          <Archive size={16} aria-hidden />
-          Archive
-        </Button>
-      </div>
+      {actions}
     </Card>
   );
 }

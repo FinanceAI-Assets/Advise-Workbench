@@ -542,6 +542,12 @@ def _resolve_presentation_title(
     return "Executive Briefing"
 
 
+def _visual_guide_block() -> str:
+    from src.deliverables.pptx.visual_guide import BIG4_RULES, visual_contract
+
+    return BIG4_RULES + "\n" + visual_contract()
+
+
 def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
     pm = _model(ctx)
     primary = _primary_skill(ctx) or {}
@@ -637,6 +643,7 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
         # Executive-deck consistency & altitude rules (applied on every pptx path).
         sb = _SkillBuild(
             system=sb.system + (
+                "\n\n" + _visual_guide_block() +
                 "\n\nCONSISTENCY & ALTITUDE RULES:\n"
                 "1. OWNERSHIP IS SINGLE-SOURCED. Take each step's owner verbatim from the process "
                 "model's step.role. State an activity's owner identically on every slide it appears "

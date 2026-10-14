@@ -1,4 +1,5 @@
 import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 
 import { SlideCanvas } from "@/components/deliverables";
 import { Badge } from "@/components/ui/Badge";
@@ -10,10 +11,14 @@ export function DraftPreviewPanel({
   slide,
   versionLabel,
   commentCount,
+  state = "Changes requested",
+  artifactHref,
 }: {
   slide: SlideDetail;
   versionLabel: string;
   commentCount: number;
+  state?: string;
+  artifactHref?: string;
 }) {
   return (
     <Card className="space-y-4">
@@ -24,11 +29,15 @@ export function DraftPreviewPanel({
         </span>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Badge className="border-[var(--surface-border)] bg-[#FCF3E2] text-[#8C5B12]">Changes requested</Badge>
-        <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap text-sm">
-          <ArrowUpRight size={16} aria-hidden />
-          Open full artifact
-        </Button>
+        <Badge className="border-[var(--surface-border)] bg-[#FCF3E2] text-[#8C5B12]">{state}</Badge>
+        {artifactHref ? (
+          <Link href={artifactHref} className="!no-underline">
+            <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap text-sm">
+              <ArrowUpRight size={16} aria-hidden />
+              Open full artifact
+            </Button>
+          </Link>
+        ) : null}
       </div>
 
       <SlideCanvas slide={slide} />

@@ -1,11 +1,23 @@
 import { LayoutGrid } from "lucide-react";
 
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
 import type { ActiveSkill } from "@/types/api";
 
-export function ActiveSkillPanel({ skill }: { skill: ActiveSkill }) {
+type SkillOption = { id: string; name: string; version: string };
+
+export function ActiveSkillPanel({
+  skill,
+  options = [],
+  selectedId,
+  onChange,
+}: {
+  skill: ActiveSkill;
+  options?: SkillOption[];
+  selectedId?: string;
+  onChange?: (skillId: string) => void;
+}) {
   return (
     <Card className="space-y-3">
       <h2 className="text-base font-semibold text-[var(--text-default)]">Active skill</h2>
@@ -23,9 +35,18 @@ export function ActiveSkillPanel({ skill }: { skill: ActiveSkill }) {
           </Badge>
         ))}
       </div>
-      <Button variant="secondary" type="button" className="text-sm">
-        Change skill
-      </Button>
+      {onChange && options.length > 1 ? (
+        <label className="grid gap-1.5 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+          Change skill
+          <Select value={selectedId} onChange={(e) => onChange(e.target.value)}>
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name} {option.version}
+              </option>
+            ))}
+          </Select>
+        </label>
+      ) : null}
     </Card>
   );
 }

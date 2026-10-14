@@ -16,6 +16,8 @@ def _auth_allow_self_signup_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.core.config import settings
 
     monkeypatch.setattr(settings, "auth_allow_self_signup", True)
+    # Tests sign in with example.com addresses; the domain rule has its own test.
+    monkeypatch.setattr(settings, "auth_allowed_email_domains", "")
 
 
 @pytest.fixture(autouse=True)

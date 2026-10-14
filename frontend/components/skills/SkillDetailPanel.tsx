@@ -1,11 +1,10 @@
 "use client";
 
-import { ChevronDown, Play, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { ShieldCheck } from "lucide-react";
+import { type ReactNode, useState } from "react";
 
 import { EngagementTabs } from "@/components/engagements";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { NoticeCard } from "@/components/ui/NoticeCard";
 import type { SkillDetail } from "@/types/api";
@@ -21,7 +20,7 @@ function MetaField({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SkillDetailPanel({ skill }: { skill: SkillDetail }) {
+export function SkillDetailPanel({ skill, actions }: { skill: SkillDetail; actions?: ReactNode }) {
   const [tab, setTab] = useState<SkillTabKey>("instructions");
 
   return (
@@ -84,23 +83,15 @@ export function SkillDetailPanel({ skill }: { skill: SkillDetail }) {
             <MetaField label="Last published" value={skill.lastPublished} />
           </div>
 
-          <div className="space-y-2 rounded-md bg-[var(--surface-muted)] p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Run in engagement</p>
-                <p className="text-sm font-medium text-[var(--text-default)]">{skill.runInEngagement}</p>
-              </div>
-              <ChevronDown size={16} className="text-[var(--text-muted)]" aria-hidden />
-            </div>
-          </div>
-
-          <Button type="button" className="flex items-center gap-2">
-            <Play size={16} aria-hidden />
-            Run in engagement
-          </Button>
+          {actions}
+        </div>
+      ) : tab === "inputs-outputs" ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <MetaField label="Required inputs" value={skill.requiredInputs} />
+          <MetaField label="Expected outputs" value={skill.expectedOutputs} />
         </div>
       ) : (
-        <p className="text-sm text-[var(--text-muted)]">This tab isn&apos;t wired up yet in this preview.</p>
+        <p className="text-sm text-[var(--text-default)]">{skill.evidencePolicy}</p>
       )}
     </Card>
   );

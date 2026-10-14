@@ -562,6 +562,30 @@ def download_run_pptx(
     )
 
 
+@router.get("/{project_id}/{run_id}/artifacts/docx/download")
+def download_run_docx(
+    project_id: str,
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream output.docx from the run workspace."""
+    require_project_role(project_id, {"Owner", "Editor", "Viewer"}, user, db)
+    run = db.scalar(select(Run).where(Run.id == run_id, Run.project_id == project_id))
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    docx_path = workspace_path(project_id) / "runs" / run_id / "output.docx"
+    if not docx_path.is_file():
+        raise HTTPException(status_code=404, detail="DOCX output not found for this run")
+    project = db.scalar(select(Project).where(Project.id == project_id))
+    name = _tokenize_filename(str(project.name or "").strip() if project else "") or "Deliverable"
+    return FileResponse(
+        path=str(docx_path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=f"{name}_Document.docx",
+    )
+
+
 @router.get("/{project_id}/{run_id}/handoff_bundle")
 def get_run_handoff_bundle(
     project_id: str,

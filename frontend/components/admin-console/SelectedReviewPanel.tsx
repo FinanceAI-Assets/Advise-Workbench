@@ -1,12 +1,12 @@
-import { AlertCircle, UserPlus } from "lucide-react";
+import type { ReactNode } from "react";
+import { AlertCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { NoticeCard } from "@/components/ui/NoticeCard";
 import type { SelectedReviewGovernanceDetail } from "@/types/api";
 
-export function SelectedReviewPanel({ review }: { review: SelectedReviewGovernanceDetail }) {
+export function SelectedReviewPanel({ review, actions }: { review: SelectedReviewGovernanceDetail; actions?: ReactNode }) {
   return (
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
@@ -41,15 +41,7 @@ export function SelectedReviewPanel({ review }: { review: SelectedReviewGovernan
         <NoticeCard tone="warning" icon={<AlertCircle size={18} aria-hidden />} title={review.warning.title} description={review.warning.description} />
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" className="flex items-center gap-2 whitespace-nowrap text-sm">
-          <UserPlus size={16} aria-hidden />
-          Assign reviewer
-        </Button>
-        <Button variant="secondary" type="button" disabled className="whitespace-nowrap text-sm">
-          Approve export
-        </Button>
-      </div>
+      {actions}
 
       <p className="text-xs text-[var(--text-muted)]">{review.footnote}</p>
     </Card>

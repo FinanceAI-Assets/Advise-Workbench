@@ -14,10 +14,12 @@ export function ReviewCommentsPanel({
   comments,
   openCount,
   resolvedCount,
+  onResolve,
 }: {
   comments: ReviewComment[];
   openCount: number;
   resolvedCount: number;
+  onResolve?: (commentId: string) => void;
 }) {
   const [tab, setTab] = useState<CommentTabKey>("open");
 
@@ -63,12 +65,18 @@ export function ReviewCommentsPanel({
             </div>
             <p className="text-xs text-[var(--text-muted)]">{comment.attribution}</p>
             <p className="text-sm text-[var(--text-default)]">{comment.body}</p>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-[var(--text-muted)]">Reply with your change…</span>
-              <Button variant="secondary" type="button" className="whitespace-nowrap text-xs">
-                Mark addressed
-              </Button>
-            </div>
+            {comment.status === "Open" && onResolve ? (
+              <div className="flex justify-end">
+                <Button
+                  variant="secondary"
+                  type="button"
+                  className="whitespace-nowrap text-xs"
+                  onClick={() => onResolve(comment.id)}
+                >
+                  Mark addressed
+                </Button>
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>

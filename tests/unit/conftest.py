@@ -46,6 +46,8 @@ def _auth_allow_self_signup_for_integration_tests(monkeypatch: pytest.MonkeyPatc
     from src.core.config import settings
 
     monkeypatch.setattr(settings, "auth_allow_self_signup", True)
+    # Tests sign in with example.com addresses; the domain rule has its own test.
+    monkeypatch.setattr(settings, "auth_allowed_email_domains", "")
     # Integration tests predate the collaborative storyline flow and only need a confirmed plan
     # to exercise downstream behaviour; the legacy discovery→plan path reaches ready_for_confirmation.
     monkeypatch.setattr(settings, "collaborative_building_enabled", False)

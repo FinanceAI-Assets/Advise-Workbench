@@ -1,9 +1,9 @@
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import type { ControlAuditItem } from "@/types/api";
 
-export function ControlsAuditPanel({ items, auditEvent }: { items: ControlAuditItem[]; auditEvent: string }) {
+export function ControlsAuditPanel({ items, auditEvent, actions }: { items: ControlAuditItem[]; auditEvent: string; actions?: ReactNode }) {
   return (
     <Card className="space-y-4">
       <h2 className="text-base font-semibold text-[var(--text-default)]">Controls &amp; audit</h2>
@@ -16,9 +16,7 @@ export function ControlsAuditPanel({ items, auditEvent }: { items: ControlAuditI
         ))}
       </ul>
       <p className="border-t border-[var(--surface-border)] pt-3 text-xs text-[var(--text-muted)]">{auditEvent}</p>
-      <Button variant="secondary" type="button" className="w-full text-sm">
-        Open governance
-      </Button>
+      {actions}
     </Card>
   );
 }

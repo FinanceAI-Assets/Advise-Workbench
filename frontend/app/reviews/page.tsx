@@ -1,99 +1,88 @@
 "use client";
 
-import { Save, Send } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useState } from "react";
 
-import { EngagementStepper } from "@/components/engagements";
-import { ApprovalPanel, DraftPreviewPanel, EvidenceChecksTable, ReviewCommentsPanel } from "@/components/reviews";
-import { Button } from "@/components/ui/Button";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { useReviewQuery } from "@/hooks/useReview";
-import { useAuth } from "@/lib/auth-context";
+import { EngagementTabs } from "@/components/engagements";
+import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
+import { useReviewsQuery } from "@/hooks/useWorkbench";
 
+type Scope = "mine" | "all";
+
+const STATE_TONE: Record<string, "success" | "warning" | "secondary"> = {
+  Approved: "success",
+  "Changes requested": "warning",
+};
+
+// Review queue: what is waiting on the signed-in user, and every review they can see.
 export default function ReviewsPage() {
-  const router = useRouter();
-  const { token, ready } = useAuth();
-  const [hydrated, setHydrated] = useState(false);
+  const reviews = useReviewsQuery();
+  const [scope, setScope] = useState<Scope>("mine");
 
-  const review = useReviewQuery(Boolean(token));
-
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!ready) return;
-    if (!token) router.replace("/login?next=/reviews");
-  }, [ready, token, router]);
-
-  if (!hydrated || !ready || !token) {
-    return (
-      <main style={{ padding: 24 }}>
-        <p>Redirecting…</p>
-      </main>
-    );
-  }
-
-  if (review.isPending || !review.data) {
-    return (
-      <main className="space-y-6">
-        <Skeleton className="h-4 w-48" />
-        <Skeleton className="h-9 w-96" />
-        <Skeleton className="h-20 w-full" />
-        <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
-          <Skeleton className="h-96 w-full" />
-          <Skeleton className="h-96 w-full" />
-        </div>
-      </main>
-    );
-  }
-
-  const data = review.data;
+  if (reviews.isPending) return <PageSkeleton />;
+  const all = reviews.data?.items ?? [];
+  const mine = new Set(reviews.data?.mine ?? []);
+  const rows = scope === "mine" ? all.filter((r) => mine.has(r.id)) : all;
 
   return (
-    <main className="space-y-6">
-      <nav className="text-xs uppercase tracking-wide text-[var(--text-muted)]" aria-label="Breadcrumb">
-        {data.engagementName} / Reviews / {data.code}
-      </nav>
-
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--text-default)]">Review: {data.artifactName}</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
-            {data.versionLabel} · Owner: {data.owner} · Reviewer: {data.reviewer} · Due {data.dueDate}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap">
-            <Save size={16} aria-hidden />
-            Save revision
-          </Button>
-          <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap">
-            <Send size={16} aria-hidden />
-            Submit revised draft
-          </Button>
-        </div>
-      </header>
-
-      <EngagementStepper steps={data.steps} />
-
-      <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
-        <div className="space-y-4">
-          <DraftPreviewPanel slide={data.slide} versionLabel={data.versionLabel} commentCount={data.slideCommentCount} />
-          <EvidenceChecksTable checks={data.evidenceChecks} runMeta={data.evidenceChecksRunMeta} />
-        </div>
-
-        <div className="space-y-4">
-          <ReviewCommentsPanel comments={data.comments} openCount={data.openCount} resolvedCount={data.resolvedCount} />
-          <ApprovalPanel
-            approverName={data.approverName}
-            approverRole={data.approverRole}
-            status={data.approvalStatus}
-            timeline={data.approvalTimeline}
-          />
-        </div>
-      </div>
-    </main>
+    <PageFrame
+      breadcrumb="User workspace / Reviews"
+      title="Reviews"
+      subtitle="Independent review of artifact versions. Approval is version-specific and cannot be given by the author."
+    >
+      <EngagementTabs
+        tabs={[
+          { key: "mine" as const, label: "Waiting on me", count: mine.size },
+          { key: "all" as const, label: "All reviews", count: all.length },
+        ]}
+        active={scope}
+        onChange={setScope}
+      />
+      <ErrorNote error={reviews.error} />
+      {rows.length === 0 ? (
+        <EmptyState
+          title={scope === "mine" ? "Nothing is waiting on you" : "No reviews yet"}
+          description="Submit a draft for review from an engagement's deliverables."
+        />
+      ) : (
+        <Card className="overflow-x-auto p-0">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-[var(--surface-muted)] text-xs text-[var(--text-muted)]">
+              <tr>
+                <th className="px-4 py-2 font-medium">Item / reference</th>
+                <th className="px-4 py-2 font-medium">Engagement</th>
+                <th className="px-4 py-2 font-medium">Type</th>
+                <th className="px-4 py-2 font-medium">Owner</th>
+                <th className="px-4 py-2 font-medium">Reviewer</th>
+                <th className="px-4 py-2 font-medium">Due</th>
+                <th className="px-4 py-2 font-medium">State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id} className="border-t border-[var(--surface-border)]">
+                  <td className="px-4 py-3">
+                    <Link href={`/reviews/${encodeURIComponent(row.id)}`} className="font-medium">
+                      {row.title} · {row.id}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3 text-[var(--text-muted)]">{row.engagement}</td>
+                  <td className="px-4 py-3">{row.type}</td>
+                  <td className="px-4 py-3">{row.owner}</td>
+                  <td className="px-4 py-3">{row.reviewer}</td>
+                  <td className="px-4 py-3">{row.dueDate}</td>
+                  <td className="px-4 py-3">
+                    <Badge variant={STATE_TONE[row.state] ?? "secondary"}>{row.state}</Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </PageFrame>
   );
 }

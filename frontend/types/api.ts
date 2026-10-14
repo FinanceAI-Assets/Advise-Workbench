@@ -31,13 +31,18 @@ export type NextAction = {
   description: string;
   due: string;
   actionLabel?: string;
+  href?: string;
   icon: "comment" | "review";
 };
+
+export type NextActionBuckets = { needsAction: NextAction[]; upcoming: NextAction[]; completed: NextAction[] };
 
 export type ActivityItem = {
   id: string;
   title: string;
   meta: string;
+  detail?: string;
+  kind?: string;
   icon: "deck" | "library";
 };
 
@@ -77,6 +82,11 @@ export type TeamMember = {
   id: string;
   name: string;
   roleAndAccess: string;
+  userId?: string;
+  email?: string;
+  role?: string;
+  permission?: string;
+  status?: string;
 };
 
 export type EvidenceSource = {
@@ -111,7 +121,31 @@ export type EngagementDetail = {
   evidenceSources: EvidenceSource[];
   evidenceWarning: { title: string; description: string } | null;
   deliverables: Deliverable[];
+  clientOrg?: string;
+  startDate?: string;
+  targetClose?: string;
+  stage?: EngagementStage;
+  status?: string;
+  retentionDays?: number;
+  documents?: string[];
+  practices?: Array<{ id: string; practiceId: string; title: string }>;
 };
+
+export type EngagementsPage = { items: EngagementRow[]; total: number; page: number; pageSize: number };
+
+export type ExportArtifact = {
+  id: string;
+  name: string;
+  version: string;
+  review: string;
+  export: string;
+  runId: string | null;
+  type: string;
+};
+
+export type ExportReadiness = { artifacts: ExportArtifact[]; ready: boolean; blockers: string[]; message: string };
+
+export type AuthUser = { id: string; email: string; name: string; jobTitle: string; isAdmin: boolean };
 
 export type ConversationPhase = {
   label: string;
@@ -130,6 +164,8 @@ export type ConversationMessage = {
   intro?: string;
   phases?: ConversationPhase[];
   evidenceGap?: { title: string; description: string } | null;
+  // Raw message metadata from the backend (for example the choices Sheldon offers).
+  metadata?: Record<string, unknown>;
 };
 
 export type EngagementContextSummary = {

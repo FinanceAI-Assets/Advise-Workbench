@@ -1,7 +1,10 @@
 "use client";
 
 import { Bell, Menu, Search } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
+
+import { useNotificationsQuery } from "@/hooks/useWorkbench";
 
 type AdminTopbarProps = {
   onMenuClick?: () => void;
@@ -21,6 +24,7 @@ function useClock(): string {
 
 export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
   const time = useClock();
+  const unread = useNotificationsQuery("unread").data?.counts.unread ?? 0;
 
   return (
     <header className="app-shell-topbar sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-[color:color-mix(in_srgb,var(--primary-700)_20%,transparent)] bg-white/95 px-4 backdrop-blur">
@@ -38,7 +42,7 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
           Administrator
         </span>
       </div>
-      <div className="relative hidden max-w-sm flex-1 sm:block">
+      <form action="/search" role="search" className="relative hidden max-w-sm flex-1 sm:block">
         <Search
           size={14}
           className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
@@ -46,6 +50,7 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
         />
         <input
           type="search"
+          name="q"
           placeholder="Search workbench"
           className="w-full rounded-md border border-[var(--surface-border)] bg-white py-1.5 pl-8 pr-10 text-sm text-[var(--text-default)] outline-none ring-[var(--accent-blue)] focus:ring-2"
           aria-label="Search workbench"
@@ -53,15 +58,20 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
         <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-2xs text-[var(--text-muted)]">
           ⌘K
         </kbd>
-      </div>
+      </form>
       <div className="flex shrink-0 items-center gap-3">
-        <button
-          type="button"
-          className="flex h-9 w-9 items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-default)]"
-          aria-label="Notifications"
+        <Link
+          href="/notifications"
+          className="relative flex h-9 w-9 items-center justify-center !text-[var(--text-muted)] hover:!text-[var(--text-default)]"
+          aria-label={unread ? `Notifications, ${unread} unread` : "Notifications"}
         >
           <Bell size={18} aria-hidden />
-        </button>
+          {unread ? (
+            <span className="absolute right-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--accent-green)] px-1 text-2xs font-semibold text-[var(--primary-950)]">
+              {unread}
+            </span>
+          ) : null}
+        </Link>
         <span className="hidden text-sm text-[var(--text-muted)] md:inline">{time}</span>
       </div>
     </header>

@@ -1,4 +1,5 @@
 import { ClipboardCheck, MessagesSquare } from "lucide-react";
+import Link from "next/link";
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -15,8 +16,11 @@ export function NextActionsPanel({ items }: { items: NextAction[] }) {
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-[var(--text-default)]">Your next actions</h2>
-        <span className="text-xs text-[var(--text-muted)]">{items.length} priorities</span>
+        <Link href="/engagements/next-actions" className="text-xs !text-[var(--text-muted)]">
+          {items.length} {items.length === 1 ? "priority" : "priorities"} · View all
+        </Link>
       </div>
+      {items.length === 0 ? <p className="text-sm text-[var(--text-muted)]">Nothing is waiting on you.</p> : null}
       <ul className="space-y-4">
         {items.map((item) => {
           const Icon = ICONS[item.icon];
@@ -29,10 +33,12 @@ export function NextActionsPanel({ items }: { items: NextAction[] }) {
                   <p className="text-xs text-[var(--text-muted)]">{item.description}</p>
                 </div>
               </div>
-              {item.actionLabel ? (
-                <Button variant="secondary" className="shrink-0 px-3 py-1.5 text-xs">
-                  {item.actionLabel}
-                </Button>
+              {item.actionLabel && item.href ? (
+                <Link href={item.href} className="shrink-0 !no-underline">
+                  <Button variant="secondary" className="px-3 py-1.5 text-xs">
+                    {item.actionLabel}
+                  </Button>
+                </Link>
               ) : item.due ? (
                 <Badge variant="warning" className="shrink-0 border-[var(--surface-border)] bg-[#FCF3E2] text-[#8C5B12]">
                   {item.due}

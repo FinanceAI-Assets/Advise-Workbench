@@ -18,6 +18,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 
+import { BrandMark } from "@/components/shell/BrandMark";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
@@ -72,8 +73,8 @@ function userInitials(label: string): string {
 }
 
 function AdminSidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
-  const { logout } = useAuth();
-  const displayName = "Jordan Kim";
+  const { email, user, logout } = useAuth();
+  const displayName = user?.name ?? email ?? "";
 
   return (
     <div className="space-y-1">
@@ -86,7 +87,7 @@ function AdminSidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
         Open user workspace
       </Link>
       <Link
-        href="/customize"
+        href="/help"
         onClick={onNavigate}
         className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm !text-[#C0C8BC] !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
       >
@@ -107,7 +108,7 @@ function AdminSidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
         </span>
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-[#FFFFFF]">{displayName}</p>
-          <p className="truncate text-xs text-[#A9B1A4]">Platform administrator</p>
+          <p className="truncate text-xs text-[#A9B1A4]">{user?.jobTitle || "Platform administrator"}</p>
         </div>
       </button>
     </div>
@@ -213,12 +214,7 @@ export function AdminSidebar({
           {desktopCollapsed ? (
             <span className="text-xs font-semibold text-[#C0C8BC]">AW</span>
           ) : (
-            <div className="text-sm">
-              <span className="text-lg font-semibold text-white">
-                Advise<span className="text-[var(--accent-green)]">•</span>
-              </span>
-              <p className="text-2xs font-semibold uppercase tracking-wide text-[var(--primary-600)]">Workbench</p>
-            </div>
+            <BrandMark />
           )}
           <button
             type="button"
@@ -289,9 +285,7 @@ export function AdminSidebar({
           ref={panelRef}
         >
           <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
-            <div id="admin-mobile-nav-title" className="text-lg font-semibold text-white">
-              Advise<span className="text-[var(--accent-green)]">•</span>
-            </div>
+            <BrandMark id="admin-mobile-nav-title" />
             <Button
               type="button"
               variant="ghost"

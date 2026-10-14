@@ -1,3 +1,4 @@
+export { ConversationUsageCard } from "@/components/conversation/ConversationUsageCard";
 export { EngagementContextPanel } from "@/components/conversation/EngagementContextPanel";
 export { ActiveSkillPanel } from "@/components/conversation/ActiveSkillPanel";
 export { PracticeContextPanel } from "@/components/conversation/PracticeContextPanel";

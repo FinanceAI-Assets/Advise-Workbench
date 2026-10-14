@@ -108,6 +108,17 @@ _NATIVE_SPECS = {
                        "current_index": 1, "target_index": 3},
     "heat_map": {"type": "heat_map", "rows": ["Vendor", "Finance"], "cols": ["Likelihood", "Impact"],
                  "cells": [["high", "high"], ["med", "low"]]},
+    "harvey_balls": {"type": "harvey_balls", "columns": ["Speed", "Cost", "Risk"],
+                     "rows": [{"label": "Option A", "scores": [4, 2, 1]}, {"label": "Option B", "scores": [3, 3, 0]}]},
+    "waterfall": {"type": "waterfall", "unit": "$M",
+                  "bars": [{"label": "Baseline", "kind": "start", "delta": 100}, {"label": "Automation", "delta": -30},
+                           {"label": "Reinvest", "delta": 10}, {"label": "Target", "kind": "total"}]},
+    "gantt": {"type": "gantt", "periods": ["M1", "M2", "M3"],
+              "tasks": [{"label": "Discover", "start": 0, "end": 0.3}, {"label": "Pilot", "start": 0.3, "end": 0.7},
+                        {"label": "Go-live", "start": 0.9, "end": 0.9, "milestone": True}]},
+    "benchmark_bars": {"type": "benchmark_bars", "unit": " days",
+                       "series": [{"label": "Case processing", "value": 18, "benchmark": 7},
+                                  {"label": "Reporting", "value": 4, "benchmark": 1}]},
 }
 
 
@@ -152,3 +163,31 @@ def test_native_figure_roundtrips_through_a_saved_pptx(tmp_path) -> None:
         # Native shapes, not an embedded raster image.
         media = [n for n in z.namelist() if n.startswith("ppt/media/")]
     assert not media
+
+
+@pytest.mark.parametrize("ftype", ["harvey_balls", "waterfall", "gantt", "benchmark_bars"])
+def test_new_native_figures_refuse_empty_data(ftype: str) -> None:
+    """Empty data must fail so the slide degrades visibly instead of showing a blank figure."""
+    prs, slide = _blank_slide()
+    with pytest.raises(ValueError):
+        draw_native_figure(slide, _colors(), {"type": ftype}, 0.5, 1.0, 12.0, 5.5)
+
+
+def test_waterfall_runs_from_start_to_total() -> None:
+    prs, slide = _blank_slide()
+    draw_native_figure(slide, _colors(), _NATIVE_SPECS["waterfall"], 0.5, 1.0, 12.0, 5.5)
+    texts = [sh.text_frame.text for sh in slide.shapes if sh.has_text_frame and sh.text_frame.text]
+    assert "$100M" in texts and "-$30M" in texts and "+$10M" in texts and "$80M" in texts
+
+
+def test_tinted_pack_icon_takes_the_brand_colour() -> None:
+    import io
+
+    from PIL import Image
+
+    from src.deliverables.figures.icon_library import available_icons, render_icon_png
+
+    assert {"users", "dollar", "clock", "ai", "health"} <= set(available_icons())
+    img = Image.open(io.BytesIO(render_icon_png("users", "#86BC25"))).convert("RGBA")
+    opaque = [px for px in img.getdata() if px[3] > 200]
+    assert opaque and all(px[:3] == (0x86, 0xBC, 0x25) for px in opaque[:50])

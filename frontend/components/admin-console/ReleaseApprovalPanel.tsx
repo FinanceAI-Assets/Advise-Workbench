@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/Button";
+import type { ReactNode } from "react";
 import { Card } from "@/components/ui/Card";
 import type { ReleaseApprovalDetail } from "@/types/api";
 
@@ -8,7 +8,7 @@ const STATE_CLASS: Record<string, string> = {
   Passed: "text-[#356B12]",
 };
 
-export function ReleaseApprovalPanel({ approval }: { approval: ReleaseApprovalDetail }) {
+export function ReleaseApprovalPanel({ approval, actions }: { approval: ReleaseApprovalDetail; actions?: ReactNode }) {
   return (
     <Card className="space-y-4">
       <h2 className="text-base font-semibold text-[var(--text-default)]">Release approval</h2>
@@ -27,9 +27,7 @@ export function ReleaseApprovalPanel({ approval }: { approval: ReleaseApprovalDe
         ))}
       </ul>
       <p className="text-xs text-[var(--text-muted)]">{approval.footnote}</p>
-      <Button type="button" disabled className="w-full text-sm">
-        Approve &amp; publish v2.2
-      </Button>
+      {actions}
     </Card>
   );
 }

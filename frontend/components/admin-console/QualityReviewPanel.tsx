@@ -1,11 +1,11 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
 import { useState } from "react";
 
 import { EngagementTabs } from "@/components/engagements";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { NoticeCard } from "@/components/ui/NoticeCard";
 import type { QualityReviewDetail } from "@/types/api";
@@ -21,7 +21,7 @@ function MetaField({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function QualityReviewPanel({ review }: { review: QualityReviewDetail }) {
+export function QualityReviewPanel({ review, actions }: { review: QualityReviewDetail; actions?: ReactNode }) {
   const [tab, setTab] = useState<QualityReviewTabKey>("metadata");
 
   return (
@@ -85,14 +85,7 @@ export function QualityReviewPanel({ review }: { review: QualityReviewDetail }) 
 
           <p className="text-xs text-[var(--text-muted)]">{review.footnote}</p>
 
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" type="button" className="whitespace-nowrap text-sm">
-              Request correction
-            </Button>
-            <Button type="button" disabled className="whitespace-nowrap text-sm">
-              Approve &amp; publish
-            </Button>
-          </div>
+          {actions}
         </div>
       ) : (
         <p className="text-sm text-[var(--text-muted)]">This tab isn&apos;t wired up yet in this preview.</p>

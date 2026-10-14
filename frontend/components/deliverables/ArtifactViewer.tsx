@@ -20,6 +20,9 @@ export function ArtifactViewer({
   pptx,
   getSlideDetail,
   onSlideChange,
+  reviewLabel = "Open review",
+  onOpenReview,
+  onDownload,
 }: {
   pptx: DeliverablesDetail["pptx"];
   // Optional: when the caller holds the raw pptx_slides.json array (real
@@ -30,6 +33,10 @@ export function ArtifactViewer({
   // evidence/sources panel in sync with whichever slide is on screen, since
   // the selected index otherwise lives only in this component's state.
   onSlideChange?: (index: number) => void;
+  // Review and download actions; each button is disabled until its handler is supplied.
+  reviewLabel?: string;
+  onOpenReview?: () => void;
+  onDownload?: () => void;
 }) {
   const [activeIndex, setActiveIndex] = useState(pptx.activeSlideIndex);
   const activeSlide = pptx.slides[activeIndex];
@@ -61,11 +68,24 @@ export function ArtifactViewer({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Badge className={STATUS_CLASS[pptx.status]}>{pptx.status}</Badge>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap text-sm">
+          <Button
+            variant="secondary"
+            type="button"
+            disabled={!onOpenReview}
+            onClick={onOpenReview}
+            className="flex items-center gap-2 whitespace-nowrap text-sm"
+          >
             <ClipboardCheck size={16} aria-hidden />
-            Open review
+            {reviewLabel}
           </Button>
-          <Button variant="secondary" type="button" disabled className="flex items-center gap-2 whitespace-nowrap text-sm">
+          <Button
+            variant="secondary"
+            type="button"
+            disabled={!onDownload}
+            onClick={onDownload}
+            title={onDownload ? undefined : "Available after independent approval"}
+            className="flex items-center gap-2 whitespace-nowrap text-sm"
+          >
             <Download size={16} aria-hidden />
             Download PPTX
           </Button>

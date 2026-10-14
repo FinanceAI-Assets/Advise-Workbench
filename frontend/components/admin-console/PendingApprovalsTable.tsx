@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/utils";
@@ -44,9 +45,9 @@ export function PendingApprovalsTable({ rows, total }: { rows: PendingApprovalRo
         </tbody>
       </table>
       <div className="p-4 pt-0">
-        <a href="#" className="text-sm font-medium !text-[var(--accent-green-dark)] !no-underline hover:underline">
+        <Link href="/admin/console/reviews" className="text-sm font-medium !text-[var(--accent-green-dark)] !no-underline hover:underline">
           Open full review queue →
-        </a>
+        </Link>
       </div>
     </Card>
   );

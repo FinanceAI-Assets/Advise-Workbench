@@ -2,7 +2,7 @@
 
 import { Plus, Search, SlidersHorizontal, ChevronLeft, ChevronRight } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   EngagementStatCard,
@@ -16,28 +16,28 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Skeleton } from "@/components/ui/Skeleton";
 import {
+  ENGAGEMENTS_PAGE_SIZE,
+  type EngagementListFilters,
   useEngagementStatsQuery,
   useEngagementsQuery,
   useNextActionsQuery,
   useRecentActivityQuery,
 } from "@/hooks/useEngagements";
-import { useCreateProjectMutation } from "@/hooks/useProjects";
 import { useAuth } from "@/lib/auth-context";
-
-const PAGE_SIZE = 5;
 
 export default function EngagementsPage() {
   const router = useRouter();
   const { token, ready } = useAuth();
   const [hydrated, setHydrated] = useState(false);
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("Active");
+  const [status, setStatus] = useState<EngagementListFilters["status"]>("active");
+  const [mine, setMine] = useState(false);
+  const [page, setPage] = useState(1);
 
-  const engagements = useEngagementsQuery(Boolean(token));
+  const engagements = useEngagementsQuery({ q: query, status, mine, page }, Boolean(token));
   const stats = useEngagementStatsQuery(Boolean(token));
   const nextActions = useNextActionsQuery(Boolean(token));
   const recentActivity = useRecentActivityQuery(Boolean(token));
-  const createEngagement = useCreateProjectMutation();
 
   useEffect(() => {
     setHydrated(true);
@@ -48,17 +48,10 @@ export default function EngagementsPage() {
     if (!token) router.replace("/login?next=/engagements");
   }, [ready, token, router]);
 
-  async function handleNewEngagement() {
-    const id = await createEngagement.mutateAsync("New engagement");
-    router.push(`/engagements/${id}`);
-  }
-
-  const rows = useMemo(() => {
-    const items = engagements.data ?? [];
-    if (!query) return items;
-    const q = query.toLowerCase();
-    return items.filter((row) => row.name.toLowerCase().includes(q) || row.owner.toLowerCase().includes(q));
-  }, [engagements.data, query]);
+  const rows = engagements.data?.items ?? [];
+  const total = engagements.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / ENGAGEMENTS_PAGE_SIZE));
+  const newEngagement = () => router.push("/engagements/new");
 
   if (!hydrated || !ready || !token) {
     return (
@@ -84,11 +77,10 @@ export default function EngagementsPage() {
         <Button
           type="button"
           className="flex shrink-0 items-center gap-2"
-          disabled={createEngagement.isPending}
-          onClick={() => void handleNewEngagement()}
+          onClick={newEngagement}
         >
           <Plus size={16} aria-hidden />
-          {createEngagement.isPending ? "Creating…" : "New engagement"}
+          New engagement
         </Button>
       </header>
 
@@ -114,30 +106,44 @@ export default function EngagementsPage() {
             />
             <Input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPage(1);
+              }}
               placeholder="Search engagements or owners"
               className="pl-9"
             />
           </div>
-          <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
-            <option value="Active">Status: Active</option>
-            <option value="All">Status: All</option>
-            <option value="Completed">Status: Completed</option>
+          <Select
+            aria-label="Status"
+            value={status}
+            onChange={(e) => {
+              setStatus(e.target.value as EngagementListFilters["status"]);
+              setPage(1);
+            }}
+            className="w-auto"
+          >
+            <option value="active">Status: Active</option>
+            <option value="all">Status: All</option>
+            <option value="archived">Status: Archived</option>
           </Select>
-          <Button variant="secondary" type="button" className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            type="button"
+            aria-pressed={mine}
+            className={`flex items-center gap-2 ${mine ? "border-[var(--accent-green)]" : ""}`}
+            onClick={() => {
+              setMine((prev) => !prev);
+              setPage(1);
+            }}
+          >
             <SlidersHorizontal size={16} aria-hidden />
-            My team
+            {mine ? "Engagements I lead" : "My team"}
           </Button>
           <span className="ml-auto text-xs text-[var(--text-muted)]">
-            Showing {rows.length} of {engagements.data?.length ?? 0} engagements
+            Showing {rows.length} of {total} engagements
           </span>
         </div>
-
-        {createEngagement.isError ? (
-          <p className="text-sm text-[#8C5B12]">
-            {createEngagement.error instanceof Error ? createEngagement.error.message : "Failed to create engagement."}
-          </p>
-        ) : null}
 
         {engagements.isPending ? (
           <div className="space-y-2" aria-busy>
@@ -155,7 +161,7 @@ export default function EngagementsPage() {
             }
           >
             {!query ? (
-              <Button type="button" disabled={createEngagement.isPending} onClick={() => void handleNewEngagement()}>
+              <Button type="button" onClick={newEngagement}>
                 <Plus size={16} aria-hidden />
                 New engagement
               </Button>
@@ -168,12 +174,26 @@ export default function EngagementsPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
           <span>Only engagements you have access to are shown.</span>
           <div className="flex items-center gap-3">
-            <Button variant="ghost" type="button" disabled className="flex items-center gap-1 px-2 py-1 text-xs">
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((prev) => prev - 1)}
+              className="flex items-center gap-1 px-2 py-1 text-xs"
+            >
               <ChevronLeft size={14} aria-hidden />
               Previous
             </Button>
-            <span>1 of 2</span>
-            <Button variant="ghost" type="button" className="flex items-center gap-1 px-2 py-1 text-xs">
+            <span>
+              {page} of {pageCount}
+            </span>
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={page >= pageCount}
+              onClick={() => setPage((prev) => prev + 1)}
+              className="flex items-center gap-1 px-2 py-1 text-xs"
+            >
               Next
               <ChevronRight size={14} aria-hidden />
             </Button>
@@ -185,7 +205,7 @@ export default function EngagementsPage() {
         {nextActions.isPending ? (
           <Skeleton className="h-48 w-full" />
         ) : (
-          <NextActionsPanel items={nextActions.data ?? []} />
+          <NextActionsPanel items={nextActions.data?.needsAction ?? []} />
         )}
         {recentActivity.isPending ? (
           <Skeleton className="h-48 w-full" />

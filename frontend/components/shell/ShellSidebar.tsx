@@ -7,6 +7,7 @@ import {
   HelpCircle,
   Library,
   LayoutGrid,
+  LogOut,
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,6 +18,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 
+import { BrandMark } from "@/components/shell/BrandMark";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
@@ -55,12 +57,12 @@ function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
       active: isDeliverables,
     },
     {
-      href: "/admin/lp-library",
+      href: "/library",
       label: "Leading Practice Library",
       icon: Library,
-      active: pathname.startsWith("/admin/lp-library"),
+      active: pathname.startsWith("/library"),
     },
-    { href: "/admin/skills", label: "Skills", icon: LayoutGrid, active: pathname.startsWith("/admin/skills") },
+    { href: "/skills", label: "Skills", icon: LayoutGrid, active: pathname.startsWith("/skills") },
     { href: "/reviews", label: "Reviews", icon: ClipboardCheck, active: pathname.startsWith("/reviews") },
   ];
 
@@ -103,44 +105,55 @@ function userInitials(label: string): string {
 }
 
 function SidebarUserFooter({ onNavigate }: { onNavigate?: () => void }) {
-  const { email, logout } = useAuth();
-  const displayName = email ?? "Alex Chen";
+  const { email, user, logout } = useAuth();
+  const displayName = user?.name ?? email ?? "";
 
   return (
     <div className="space-y-1">
+      {user?.isAdmin ? (
+        <Link
+          href="/admin/console"
+          onClick={onNavigate}
+          className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm !text-[#C0C8BC] !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
+        >
+          <ShieldCheck size={16} />
+          Switch to admin console
+        </Link>
+      ) : null}
       <Link
-        href="/admin/console"
-        onClick={onNavigate}
-        className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm !text-[#C0C8BC] !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
-      >
-        <ShieldCheck size={16} />
-        Switch to admin console
-      </Link>
-      <Link
-        href="/customize"
+        href="/help"
         onClick={onNavigate}
         className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm !text-[#C0C8BC] !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
       >
         <HelpCircle size={16} />
         Help &amp; documentation
       </Link>
-      <button
-        type="button"
-        onClick={() => {
-          onNavigate?.();
-          logout();
-        }}
-        title="Sign out"
-        className="mt-2 flex w-full items-center gap-2 rounded-md px-2 pt-2 text-left hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)]"
+      <Link
+        href="/profile"
+        onClick={onNavigate}
+        title="Your profile"
+        className="mt-2 flex w-full items-center gap-2 rounded-md px-2 pt-2 text-left !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)]"
       >
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--primary-800)_78%,black)] text-xs font-semibold text-[#FFFFFF]">
           {userInitials(displayName)}
         </span>
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-[#FFFFFF]">{displayName}</p>
-          <p className="truncate text-xs text-[#A9B1A4]">Engagement lead</p>
+          <p className="truncate text-xs text-[#A9B1A4]">{user?.jobTitle || "Workspace member"}</p>
         </div>
-      </button>
+      </Link>
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={() => {
+          onNavigate?.();
+          logout();
+        }}
+        className="flex min-h-9 w-full items-center gap-2 px-2 py-0 text-left font-normal text-[#C0C8BC] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:text-white"
+      >
+        <LogOut size={16} />
+        Sign out
+      </Button>
     </div>
   );
 }
@@ -247,12 +260,7 @@ export function ShellSidebar({
           {desktopCollapsed ? (
             <span className="text-xs font-semibold text-[#C0C8BC]">AW</span>
           ) : (
-            <div className="text-sm">
-              <span className="text-lg font-semibold text-white">
-                Advise<span className="text-[var(--accent-green)]">•</span>
-              </span>
-              <p className="text-2xs font-semibold uppercase tracking-wide text-[var(--primary-600)]">Workbench</p>
-            </div>
+            <BrandMark />
           )}
           <button
             type="button"
@@ -321,9 +329,7 @@ export function ShellSidebar({
           ref={panelRef}
         >
           <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
-            <div id="mobile-nav-title" className="text-lg font-semibold text-white">
-              Advise<span className="text-[var(--accent-green)]">•</span>
-            </div>
+            <BrandMark id="mobile-nav-title" />
             <Button
               type="button"
               variant="ghost"

@@ -1,12 +1,12 @@
+import type { ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { NoticeCard } from "@/components/ui/NoticeCard";
 import type { TestResultsDetail } from "@/types/api";
 
-export function TestResultsPanel({ results }: { results: TestResultsDetail }) {
+export function TestResultsPanel({ results, actions }: { results: TestResultsDetail; actions?: ReactNode }) {
   return (
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
@@ -40,9 +40,7 @@ export function TestResultsPanel({ results }: { results: TestResultsDetail }) {
         />
       ) : null}
 
-      <Button variant="secondary" type="button" className="w-full text-sm">
-        Rerun tests
-      </Button>
+      {actions}
     </Card>
   );
 }

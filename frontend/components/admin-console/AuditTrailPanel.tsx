@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { CheckCircle2, History, MessageSquare, Send } from "lucide-react";
 
 import { Card } from "@/components/ui/Card";
@@ -33,9 +34,9 @@ export function AuditTrailPanel({ events }: { events: AuditTrailEvent[] }) {
           );
         })}
       </ul>
-      <a href="#" className="text-sm font-medium !text-[var(--accent-green-dark)] !no-underline hover:underline">
+      <Link href="/admin/console/reviews?tab=audit" className="text-sm font-medium !text-[var(--accent-green-dark)] !no-underline hover:underline">
         View full audit trail →
-      </a>
+      </Link>
     </Card>
   );
 }

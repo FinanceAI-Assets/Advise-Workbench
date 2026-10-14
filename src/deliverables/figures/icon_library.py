@@ -15,11 +15,17 @@ from __future__ import annotations
 
 import io
 import logging
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from src.deliverables.figures.svg_render import render_svg_to_png
 
 logger = logging.getLogger(__name__)
+
+# Pre-rendered Lucide icons (scripts/build_icon_pack.mjs): black strokes on transparent,
+# tinted at render time, so icons work without an SVG library.
+_PACK_DIR = Path(__file__).resolve().parents[1] / "assets" / "icons"
 
 _STROKE = 'fill="none" stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"'
 
@@ -61,6 +67,24 @@ ICON_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("review", "approve", "sign", "iterate", "refine", "feedback"), "cycle"),
     (("stabilize", "optimize", "scale", "improve"), "trend_up"),
     (("govern", "control", "monitor", "assure", "support", "sustain"), "scale"),
+    # Consulting topics, after the process-step verbs above: the subject a card or KPI is about.
+    (("pharmacovigil", "adverse event", "drug safety", "patient safety"), "health"),
+    (("pharma", "drug", "medicine"), "pill"),
+    (("clinical", "patient", "healthcare", "health"), "stethoscope"),
+    (("regulat", "complian", "audit", "risk"), "shield_check"),
+    (("cost", "saving", "budget", "spend", "financ", "roi", "revenue", "margin", "profit", "invest"), "dollar"),
+    (("speed", "faster", "time", "cycle time", "turnaround", "delay", "days", "hours"), "clock"),
+    (("ai", "machine learning", "genai", "intelligen", "automat", "agent"), "ai"),
+    (("people", "team", "talent", "workforce", "staff", "stakeholder", "user"), "users"),
+    (("customer", "client", "partner", "vendor", "supplier"), "handshake"),
+    (("decision", "insight", "dashboard", "kpi", "mis "), "line_chart"),
+    (("quality", "accuracy", "error", "defect"), "check"),
+    (("integrat", "platform", "system", "technolog", "erp", "cloud"), "network"),
+    (("operat", "process", "workflow", "efficien"), "workflow"),
+    (("goal", "objective", "outcome", "target"), "target"),
+    (("issue", "gap", "challenge", "pain", "problem"), "alert"),
+    (("opportunit", "idea", "innovat"), "lightbulb"),
+    (("timeline", "phase", "milestone", "90-day", "90 day", "wave"), "milestone"),
 )
 
 
@@ -75,8 +99,41 @@ def icon_for_label(step_label: str, fallback: str = "dot") -> str:
     return fallback
 
 
+def available_icons() -> list[str]:
+    """Icon names the renderer can draw (the pre-rendered pack plus the built-in SVGs)."""
+    pack = sorted(p.stem for p in _PACK_DIR.glob("*.png")) if _PACK_DIR.is_dir() else []
+    return sorted(set(pack) | set(_ICON_BODIES))
+
+
+@lru_cache(maxsize=256)
+def _tinted_pack_icon(name: str, color_hex: str) -> bytes | None:
+    path = _PACK_DIR / f"{name}.png"
+    if not path.is_file():
+        return None
+    try:
+        from PIL import Image
+
+        mask = Image.open(path).convert("RGBA").getchannel("A")
+        hexv = color_hex.lstrip("#")
+        rgb = tuple(int(hexv[i : i + 2], 16) for i in (0, 2, 4))
+        tinted = Image.new("RGBA", mask.size, rgb + (0,))
+        tinted.putalpha(mask)
+        buf = io.BytesIO()
+        tinted.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("icon pack tint failed for %s: %s", name, exc)
+        return None
+
+
 def render_icon_png(name: str, color_hex: str, *, size_px: int = 128) -> bytes | None:
-    """Rasterize a named icon at ``color_hex`` to PNG bytes, or None on any failure."""
+    """Rasterize a named icon at ``color_hex`` to PNG bytes, or None on any failure.
+
+    Uses the pre-rendered icon pack first (no SVG library needed), then the built-in SVGs.
+    """
+    packed = _tinted_pack_icon(name, color_hex)
+    if packed is not None:
+        return packed
     body = _ICON_BODIES.get(name)
     if body is None:
         return None
@@ -107,7 +164,8 @@ def place_step_icon(
     from pptx.enum.text import PP_ALIGN
     from pptx.util import Inches, Pt
 
-    name = (explicit_icon or "").strip() or icon_for_label(label)
+    explicit = (explicit_icon or "").strip().lower().replace("-", "_")
+    name = explicit if explicit in available_icons() else icon_for_label(label)
     png = render_icon_png(name, color_hex)
     if png:
         try:
