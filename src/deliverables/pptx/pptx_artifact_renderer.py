@@ -234,7 +234,7 @@ def _delete_last_slide(prs: Any) -> None:
 
 def _compose_figure_slide(
     prs: Any, colors: dict[str, str], slide_dict: dict[str, Any], slide_type: str, footer: str = "",
-    footer_fn: Any = None,
+    footer_fn: Any = None, header_fn: Any = None,
 ) -> bool:
     """Render a figure slide (title bar + figure). Returns True on success.
 
@@ -257,6 +257,18 @@ def _compose_figure_slide(
     slide.background.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
     primary = _hex_to_rgb(colors.get("primary", "#86BC25"))
 
+    has_footer = bool(footer or footer_fn)
+    if header_fn is not None:
+        # The active composer's own frame, section label and headline, so figure slides
+        # look like every other slide in the deck. The figure fills the band below.
+        content_top = float(header_fn(slide))
+        side = 0.62
+        fig_x, fig_y = side, content_top + 0.05
+        fig_w = SLIDE_W - 2 * side
+        fig_h = SLIDE_H - fig_y - 1.15
+        return _draw_figure_body(prs, slide, colors, spec, slide_dict, fig_x, fig_y, fig_w, fig_h, footer, footer_fn,
+                                 takeaway_y=SLIDE_H - 1.05, takeaway_x=side)
+
     # Top brand bar + title (mirrors the content-slide chrome).
     bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(SLIDE_W), Inches(0.12))
     bar.fill.solid()
@@ -278,12 +290,25 @@ def _compose_figure_slide(
     fig_w = CONTENT_W
     fig_h = fig_w * (5.0 / 11.0)
     fig_y = MARGIN_V + TITLE_H + GUTTER
-    has_footer = bool(footer or footer_fn)
     max_h = SLIDE_H - fig_y - (0.9 if has_footer else 0.5)  # leave room for the takeaway and footer
     if fig_h > max_h:
         fig_h = max_h
         fig_w = fig_h * (11.0 / 5.0)
     fig_x = (SLIDE_W - fig_w) / 2
+    return _draw_figure_body(prs, slide, colors, spec, slide_dict, fig_x, fig_y, fig_w, fig_h, footer, footer_fn,
+                             takeaway_y=SLIDE_H - (0.85 if has_footer else 0.55), takeaway_x=MARGIN_H)
+
+
+def _draw_figure_body(
+    prs: Any, slide: Any, colors: dict[str, str], spec: dict[str, Any], slide_dict: dict[str, Any],
+    fig_x: float, fig_y: float, fig_w: float, fig_h: float, footer: str, footer_fn: Any,
+    *, takeaway_y: float, takeaway_x: float,
+) -> bool:
+    """Draw the figure (native first, raster fallback), the takeaway line and the footer."""
+    import io as _io
+
+    from src.deliverables.figures.figure_engine import render_figure
+    from src.deliverables.pptx.pptx_native_figures import draw_native_figure
 
     native_ok = False
     try:
@@ -302,8 +327,8 @@ def _compose_figure_slide(
 
     takeaway = str(slide_dict.get("takeaway") or slide_dict.get("footer_note") or "").strip()
     if takeaway:
-        tk_y = SLIDE_H - (0.85 if has_footer else 0.55)
-        tk = slide.shapes.add_textbox(Inches(MARGIN_H), Inches(tk_y), Inches(CONTENT_W), Inches(0.4))
+        tk = slide.shapes.add_textbox(Inches(takeaway_x), Inches(takeaway_y), Inches(SLIDE_W - 2 * takeaway_x),
+                                      Inches(0.4))
         tkf = tk.text_frame
         tkf.word_wrap = True
         tkf.text = takeaway
@@ -1499,7 +1524,19 @@ def _render_pptx_with_artifact_tool_impl(
                         def footer_fn(sl, _page=idx + 1):
                             _components.footer_band(sl, composer.theme, composer.deck_label, _page, total_slides)
 
-                    if _compose_figure_slide(prs, fig_colors, slide_dict, slide_type, footer=footer, footer_fn=footer_fn):
+                        def header_fn(sl, _sd=slide_dict):
+                            _components.slide_border_frame(sl, composer.theme)
+                            return _components.header_block(
+                                sl, composer.theme,
+                                title=str(_sd.get("title") or "")[:110],
+                                eyebrow=str(_sd.get("subtitle") or _sd.get("eyebrow") or "")[:140],
+                                emphasis=_sd.get("emphasis"),
+                            )
+                    else:
+                        header_fn = None
+
+                    if _compose_figure_slide(prs, fig_colors, slide_dict, slide_type, footer=footer, footer_fn=footer_fn,
+                                             header_fn=header_fn):
                         continue
                     # Fall through to a degraded layout if the figure couldn't render.
                     slide_dict, slide_type = _classic_fallback(
@@ -1543,6 +1580,9 @@ def _render_pptx_with_artifact_tool_impl(
         )
 
         # Save PPTX
+        from src.deliverables.pptx.pptx_layouts import tidy_presentation
+
+        tidy_presentation(prs)
         prs.save(str(output_path))
         logger.info("PPTX rendered: %s", output_path)
 

@@ -19,6 +19,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    job_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    is_admin: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
 
 
 class RefreshToken(Base):
@@ -56,6 +59,39 @@ class ProjectBrand(Base):
     logo_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     footer_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class EngagementMeta(Base):
+    """Additive engagement metadata (code/type/stage/progress) layered on top of a Project.
+
+    Mirrors ProjectBrand's shape/placement: one optional side-row per project,
+    read with defaults when absent so every Project can be treated as a valid
+    "Engagement" row by the frontend without requiring a human to seed it.
+    """
+
+    __tablename__ = "engagement_meta"
+    __table_args__ = (Index("ix_engagement_meta_project_id", "project_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    progress: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_task: Mapped[str | None] = mapped_column(Text, nullable=True)
+    due_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    client_org: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    brief: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sponsor_objective: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    success_measures: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_close: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    classification: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
@@ -293,6 +329,7 @@ class Conversation(Base):
     project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="Creative Studio")
+    skill_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
@@ -456,3 +493,108 @@ class WikiIndex(Base):
     last_updated: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     category_counts: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # JSON: {entity: N, concept: M, ...}
+
+
+class ActivityEvent(Base):
+    """Workbench activity feed: recent activity, the engagement activity tab and the admin audit trail."""
+
+    __tablename__ = "activity_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("projects.id"), nullable=True, index=True)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
+
+
+class Review(Base):
+    """A review of one artifact version; `payload_json` holds the evidence checks and slide preview."""
+
+    __tablename__ = "reviews"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("projects.id"), nullable=True, index=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    artifact_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    version_label: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    owner_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("users.id"), nullable=True)
+    reviewer_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("users.id"), nullable=True, index=True)
+    due_date: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="Awaiting review")
+    risk: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ReviewComment(Base):
+    __tablename__ = "review_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), ForeignKey("reviews.id"), nullable=False, index=True)
+    author: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    anchor: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="Open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    link: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class LpPractice(Base):
+    """Leading Practice catalog entry; `payload_json` holds the detail panel content."""
+
+    __tablename__ = "lp_practices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    maturity: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    version_label: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Approved")
+    owner: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class SavedPractice(Base):
+    __tablename__ = "saved_practices"
+    __table_args__ = (UniqueConstraint("user_id", "practice_id", name="uq_saved_practices_user_practice"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False, index=True)
+    practice_id: Mapped[str] = mapped_column(String(64), ForeignKey("lp_practices.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class WorkbenchRecord(Base):
+    """Generic seeded record for workbench inventories that have no workflow of their own
+    (milestones, next actions, skill metadata, ingestion jobs, policies, role matrix, ...)."""
+
+    __tablename__ = "workbench_records"
+    __table_args__ = (UniqueConstraint("collection", "record_id", name="uq_workbench_records_collection_record"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    collection: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    record_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

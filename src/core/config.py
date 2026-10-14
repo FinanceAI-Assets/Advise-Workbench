@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     model_forecast_rate_limit: str = "20/minute"  # all 6 forecast methods
     scheduler_enabled: bool = True
     auth_allow_self_signup: bool = False
+    # Comma-separated email domains that may sign in. Empty allows any domain.
+    auth_allowed_email_domains: str = "deloitte.com"
     # Comma-separated emails permitted to mutate the shared leading_practice wiki.
     # Empty in development = any authenticated user (matches historical behavior);
     # in staging/production, an empty list blocks all LP mutations.

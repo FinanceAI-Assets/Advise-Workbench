@@ -23,18 +23,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Slide type display labels
-SLIDE_TYPE_LABELS: dict[str, str] = {
-    "title": "Title slide",
-    "bullets": "Bullet points",
-    "stat_cards": "Stat / metric cards",
-    "column_cards": "Column cards",
-    "stack_layers": "Stacked layers / journey",
-    "table": "Comparison table",
-    "chart": "Chart / graph",
-    "big_number": "Big-number highlight",
-    "process_flow": "Process flow",
-    "section_divider": "Section divider",
-}
+from src.deliverables.pptx.visual_guide import type_labels as _type_labels
+
+SLIDE_TYPE_LABELS: dict[str, str] = _type_labels()
 
 # Narrative arc → default slide blueprints (title + purpose, filled in by LLM).
 ARC_BLUEPRINTS: dict[str, list[dict[str, str]]] = {
@@ -279,6 +270,40 @@ def assemble_outline_from_decisions(db: Session, *, project_id: str) -> list[dic
         }
         for i, s in enumerate(agreed)
     ]
+
+
+def agreed_deck_outline(db: Session, *, project_id: str) -> dict[str, Any] | None:
+    """The deck structure the user agreed slide by slide, ready to drive generation.
+
+    Returns None when fewer than three slides were agreed. The storyline the user picked
+    (for example ``case_led``) travels with it as ``narrative_arc``.
+    """
+    slides = assemble_outline_from_decisions(db, project_id=project_id)
+    if len(slides) < 3:
+        return None
+    arc = ""
+    row = (
+        db.query(MemoryItem)
+        .filter(
+            MemoryItem.project_id == project_id,
+            MemoryItem.memory_type == "decision",
+            MemoryItem.key == "storyline_arc",
+            MemoryItem.is_archived.is_(False),
+        )
+        .order_by(MemoryItem.updated_at.desc())
+        .first()
+    )
+    if row is not None:
+        try:
+            arc = str((json.loads(row.value) or {}).get("arc") or "").strip().lower()
+        except (ValueError, AttributeError):
+            arc = ""
+    return {
+        "slides": slides,
+        "rationale": "Assembled from collaboratively agreed slide decisions.",
+        "source": "collaborative_decisions",
+        "narrative_arc": arc,
+    }
 
 
 def parse_slide_feedback(user_message: str) -> str:

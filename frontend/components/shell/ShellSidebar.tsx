@@ -1,52 +1,89 @@
 "use client";
 
 import {
-  BookOpen,
-  Brain,
-  CalendarClock,
-  FolderOpen,
-  Lock,
-  Puzzle,
-  SlidersHorizontal,
+  Briefcase,
+  ChevronsUpDown,
+  ClipboardCheck,
+  HelpCircle,
+  Library,
+  LayoutGrid,
+  LogOut,
+  ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  User,
   X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 
-import { MatrixThemeToggle } from "@/components/project-studio/MatrixThemeToggle";
+import { BrandMark } from "@/components/shell/BrandMark";
 import { Button } from "@/components/ui/Button";
+import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
-
-const links = [
-  { href: "/projects", label: "Projects", icon: FolderOpen },
-  { href: "/admin/skills", label: "Skills", icon: Puzzle },
-  { href: "/admin/lp-library", label: "LP Library", icon: BookOpen },
-  { href: "/admin/dpdp", label: "DPDP", icon: Lock },
-  { href: "/tasks", label: "Scheduled Tasks", icon: CalendarClock },
-  { href: "/customize", label: "Customize", icon: SlidersHorizontal },
-  { href: "/memory", label: "Memory", icon: Brain },
-];
 
 function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+
+  // Extract engagement ID from pathname if we're in an engagement context
+  const engagementMatch = pathname.match(/^\/engagements\/([^/]+)/);
+  const engagementId = engagementMatch?.[1];
+  const isConversation = /\/conversation(\/|$)/.test(pathname);
+  const isDeliverables = /\/deliverables(\/|$)/.test(pathname);
+
+  // Navigation items - always clickable and visible. Each item owns its own
+  // "active" test instead of a shared pathname.startsWith(href) check, since
+  // "/engagements" is a literal prefix of every engagement sub-route — a
+  // naive prefix match would keep "Engagements" highlighted at the same
+  // time as "Conversation" or "Deliverables".
+  const navLinks = [
+    {
+      href: "/engagements",
+      label: "Engagements",
+      icon: Briefcase,
+      active: pathname === "/engagements" || (Boolean(engagementId) && !isConversation && !isDeliverables),
+    },
+    {
+      href: engagementId ? `/engagements/${engagementId}/conversation` : "/conversation",
+      label: "Conversation",
+      icon: LayoutGrid,
+      active: isConversation,
+    },
+    {
+      href: engagementId ? `/engagements/${engagementId}/deliverables` : "/deliverables",
+      label: "Deliverables",
+      icon: LayoutGrid,
+      active: isDeliverables,
+    },
+    {
+      href: "/library",
+      label: "Leading Practice Library",
+      icon: Library,
+      active: pathname.startsWith("/library"),
+    },
+    { href: "/skills", label: "Skills", icon: LayoutGrid, active: pathname.startsWith("/skills") },
+    { href: "/reviews", label: "Reviews", icon: ClipboardCheck, active: pathname.startsWith("/reviews") },
+  ];
+
   return (
     <>
-      {links.map((item) => {
+      <p className="mb-1 px-2 text-2xs font-semibold uppercase tracking-wide text-[var(--primary-600)]">
+        Workspace
+      </p>
+      {navLinks.map((item) => {
         const Icon = item.icon;
-        const active = pathname.startsWith(item.href);
+
         return (
           <Link
             key={`${item.href}:${item.label}`}
             href={item.href}
             onClick={onNavigate}
             className={cn(
-              "flex min-h-11 items-center gap-2 px-2 py-2 text-sm transition !no-underline",
-              active
-                ? "bg-[color:color-mix(in_srgb,var(--accent-blue)_30%,black)] !text-white shadow-sm"
-                : "!text-[#d9dee3] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
+              "flex min-h-11 items-center gap-2 rounded-md border-l-2 px-2 py-2 text-sm transition !no-underline",
+              item.active
+                ? "border-l-[var(--accent-green)] bg-[var(--primary-800)] !text-white shadow-sm"
+                : "border-l-transparent !text-[var(--primary-200)] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
             )}
           >
             <Icon size={18} />
@@ -58,13 +95,87 @@ function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+function userInitials(label: string): string {
+  const parts = label.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  return parts
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join("");
+}
+
+function SidebarUserFooter({ onNavigate }: { onNavigate?: () => void }) {
+  const { email, user, logout } = useAuth();
+  const displayName = user?.name ?? email ?? "";
+
+  return (
+    <div className="space-y-1">
+      {user?.isAdmin ? (
+        <Link
+          href="/admin/console"
+          onClick={onNavigate}
+          className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm !text-[#C0C8BC] !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
+        >
+          <ShieldCheck size={16} />
+          Switch to admin console
+        </Link>
+      ) : null}
+      <Link
+        href="/help"
+        onClick={onNavigate}
+        className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm !text-[#C0C8BC] !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
+      >
+        <HelpCircle size={16} />
+        Help &amp; documentation
+      </Link>
+      <Link
+        href="/profile"
+        onClick={onNavigate}
+        title="Your profile"
+        className="mt-2 flex w-full items-center gap-2 rounded-md px-2 pt-2 text-left !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)]"
+      >
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--primary-800)_78%,black)] text-xs font-semibold text-[#FFFFFF]">
+          {userInitials(displayName)}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-[#FFFFFF]">{displayName}</p>
+          <p className="truncate text-xs text-[#A9B1A4]">{user?.jobTitle || "Workspace member"}</p>
+        </div>
+      </Link>
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={() => {
+          onNavigate?.();
+          logout();
+        }}
+        className="flex min-h-9 w-full items-center gap-2 px-2 py-0 text-left font-normal text-[#C0C8BC] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:text-white"
+      >
+        <LogOut size={16} />
+        Sign out
+      </Button>
+    </div>
+  );
+}
+
+function WorkspacePicker() {
+  return (
+    <button
+      type="button"
+      className="flex min-h-11 w-full items-center gap-2 rounded-md border border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-800)] px-3 py-2 text-sm font-semibold text-white"
+    >
+      <User size={16} className="shrink-0 text-[var(--accent-green)]" />
+      <span className="flex-1 text-left">User workspace</span>
+      <ChevronsUpDown size={14} className="shrink-0 text-[var(--primary-400)]" />
+    </button>
+  );
+}
+
 type ShellSidebarProps = {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   desktopCollapsed?: boolean;
   onDesktopToggle?: () => void;
-  matrixTheme?: boolean;
-  onMatrixThemeChange?: (enabled: boolean) => void;
 };
 
 export function ShellSidebar({
@@ -72,8 +183,6 @@ export function ShellSidebar({
   onMobileClose,
   desktopCollapsed = false,
   onDesktopToggle,
-  matrixTheme = false,
-  onMatrixThemeChange,
 }: ShellSidebarProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const lastActiveElRef = useRef<HTMLElement | null>(null);
@@ -139,36 +248,23 @@ export function ShellSidebar({
     };
   }, [mobileOpen, onMobileClose]);
 
-  const matrixToggleDesktop =
-    onMatrixThemeChange != null ? (
-      <MatrixThemeToggle
-        id="matrix-theme-sidebar-desktop"
-        enabled={matrixTheme}
-        onChange={onMatrixThemeChange}
-        crt={matrixTheme}
-        variant="sidebar"
-      />
-    ) : null;
-
   return (
     <>
       <aside
         className={cn(
-          "shell-sidebar relative hidden h-screen shrink-0 flex-col border-r border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-950)] p-4 text-[#f3f6f8] transition-[width] lg:flex",
+          "shell-sidebar sticky top-0 hidden h-screen shrink-0 flex-col border-r border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-950)] p-4 text-[#FFFFFF] transition-[width] lg:flex",
           desktopCollapsed ? "w-[72px]" : "w-[260px]"
         )}
       >
-        <div className="mb-6 flex shrink-0 items-center justify-between gap-2 px-2 text-sm font-semibold">
+        <div className="mb-4 flex shrink-0 items-start justify-between gap-2 px-2">
           {desktopCollapsed ? (
-            <span className="text-xs text-[#d9dee3]">Advise Workbench</span>
+            <span className="text-xs font-semibold text-[#C0C8BC]">AW</span>
           ) : (
-            <span>
-              <span className="text-[var(--accent-green)]">Deloitte</span> Advise Workbench
-            </span>
+            <BrandMark />
           )}
           <button
             type="button"
-            className="flex h-9 w-9 items-center justify-center border border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--primary-800)_78%,black)] text-[#f3f6f8]"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--primary-800)_78%,black)] text-[#FFFFFF]"
             onClick={onDesktopToggle}
             aria-label={desktopCollapsed ? "Expand navigation" : "Collapse navigation"}
             aria-expanded={!desktopCollapsed}
@@ -176,45 +272,22 @@ export function ShellSidebar({
             {desktopCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
         </div>
-        {desktopCollapsed ? (
-          <div className="min-h-0 flex-1" aria-hidden />
-        ) : (
-          <nav className="shell-sidebar-nav min-h-0 flex-1 space-y-1 overflow-y-auto">
-            <NavLinkList />
-          </nav>
-        )}
-        {matrixToggleDesktop ? (
-          <div
-            className={cn(
-              "shell-sidebar-footer mt-auto shrink-0 border-t border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] pt-3",
-              desktopCollapsed && "flex justify-center px-0 pt-2"
-            )}
-          >
-            {desktopCollapsed ? (
-              <label className="flex cursor-pointer flex-col items-center gap-1" title="Matrix theme">
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={matrixTheme}
-                  onChange={(e) => onMatrixThemeChange?.(e.target.checked)}
-                  aria-checked={matrixTheme}
-                  aria-label="Matrix theme"
-                  className={cn(
-                    "h-5 w-5 cursor-pointer",
-                    matrixTheme ? "matrix-crt-checkbox" : "rounded border-2 border-[#5a6b78] accent-[var(--accent-green)]"
-                  )}
-                />
-                <span className="text-[10px] uppercase tracking-wide text-[#9aa5b1]">MX</span>
-              </label>
-            ) : (
-              matrixToggleDesktop
-            )}
-          </div>
-        ) : null}
+        {/* Always show WorkspacePicker */}
+        <div className="mb-6 shrink-0 px-0">
+          <WorkspacePicker />
+        </div>
+        {/* Always show navigation items */}
+        <nav className="shell-sidebar-nav flex-1 space-y-1">
+          <NavLinkList />
+        </nav>
+        {/* Always show user footer */}
+        <div className="mt-auto shrink-0 border-t border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] pt-3">
+          <SidebarUserFooter />
+        </div>
         {desktopCollapsed ? (
           <button
             type="button"
-            className="absolute -right-3 top-4 flex h-7 w-7 items-center justify-center rounded-full border border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-900)] text-[#f3f6f8] shadow"
+            className="absolute -right-3 top-4 flex h-7 w-7 items-center justify-center rounded-full border border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-900)] text-[#FFFFFF] shadow"
             onClick={onDesktopToggle}
             aria-label="Expand navigation"
             aria-expanded={false}
@@ -247,7 +320,7 @@ export function ShellSidebar({
         </Button>
         <div
           className={cn(
-            "absolute left-0 top-0 flex h-full w-[min(280px,92vw)] flex-col border-r border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-950)] p-4 text-[#f3f6f8] shadow-xl transition-transform motion-reduce:transition-none",
+            "absolute left-0 top-0 flex h-full w-[min(280px,92vw)] flex-col border-r border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-950)] p-4 text-[#FFFFFF] shadow-xl transition-transform motion-reduce:transition-none",
             mobileOpen ? "translate-x-0" : "-translate-x-full"
           )}
           role="dialog"
@@ -256,33 +329,26 @@ export function ShellSidebar({
           ref={panelRef}
         >
           <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
-            <div id="mobile-nav-title" className="text-sm font-semibold">
-              <span className="text-[var(--accent-green)]">Deloitte</span> Advise Workbench
-            </div>
+            <BrandMark id="mobile-nav-title" />
             <Button
               type="button"
               variant="ghost"
-              className="flex h-11 w-11 items-center justify-center p-0 text-[#f3f6f8] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:text-[#f3f6f8] bg-transparent"
+              className="flex h-11 w-11 items-center justify-center p-0 text-[#FFFFFF] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:text-[#FFFFFF] bg-transparent"
               onClick={onMobileClose}
               aria-label="Close menu"
             >
-              <X size={20} className="text-[#f3f6f8]" />
+              <X size={20} className="text-[#FFFFFF]" />
             </Button>
+          </div>
+          <div className="mb-4 shrink-0">
+            <WorkspacePicker />
           </div>
           <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             <NavLinkList onNavigate={onMobileClose} />
           </nav>
-          {onMatrixThemeChange ? (
-            <div className="shell-sidebar-footer mt-auto shrink-0 border-t border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] pt-3">
-              <MatrixThemeToggle
-                id="matrix-theme-sidebar-mobile"
-                enabled={matrixTheme}
-                onChange={onMatrixThemeChange}
-                crt={matrixTheme}
-                variant="sidebar"
-              />
-            </div>
-          ) : null}
+          <div className="mt-auto shrink-0 border-t border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] pt-3">
+            <SidebarUserFooter onNavigate={onMobileClose} />
+          </div>
         </div>
       </div>
     </>

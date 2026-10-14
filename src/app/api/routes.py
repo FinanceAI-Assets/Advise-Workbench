@@ -1,28 +1,38 @@
 from fastapi import APIRouter
 
 from src.app.api import (
+    admin_console,
     agent_bash,
     auth,
     documents,
     dpdp,
     drawio_collab,
+    engagements,
     formats,
+    library,
     lp_library,
     memory,
     model_realtime_ws,
     models,
     projects,
+    reviews,
     run_artifacts,
     runs,
     skills,
     swarm,
     tasks,
+    workbench,
 )
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(projects.router, prefix="/projects", tags=["projects"])
 router.include_router(agent_bash.router, prefix="/projects", tags=["agent-bash"])
+router.include_router(engagements.router, prefix="/engagements", tags=["engagements"])
+router.include_router(reviews.router, prefix="/reviews", tags=["reviews"])
+router.include_router(library.router, tags=["library"])
+router.include_router(workbench.router, tags=["workbench"])
+router.include_router(admin_console.router, prefix="/admin", tags=["admin-console"])
 router.include_router(documents.router, prefix="/documents", tags=["documents"])
 router.include_router(runs.router, prefix="/runs", tags=["runs"])
 router.include_router(swarm.router, prefix="/runs", tags=["swarm"])

@@ -99,3 +99,34 @@ cd frontend && npm run lint && npm run test:vitest && npm run build
 ```
 
 Run the backend tests in a clean checkout or without a `.env` that points at a local bridge: `src/app/main.py` loads `.env` over the test settings, and some tests then wait on a bridge that is not running.
+
+## 9. Workbench UI: database upgrade and sample data
+
+The workbench UI (engagements, reviews, library, skills, admin console) needs migration `023_workbench_ui`.
+
+**Upgrade an existing local database.** A database created by the app itself has no Alembic history, so mark it first. Back the file up before you start.
+
+```bash
+cp advise_workbench.db advise_workbench.db.bak
+alembic stamp 021_conversation_turns     # only if the database has no alembic_version table
+alembic upgrade head
+```
+
+A new database needs only `alembic upgrade head`, or nothing at all: the app creates every table on first start.
+
+**Load the sample workspace.** This adds six fictional users, eight engagements, reviews, the practice catalog, skills and the admin reference data shown in the design.
+
+```bash
+DEMO_SEED_PASSWORD='<choose a password>' make seed.demo
+make seed.demo.clear        # removes only what the seed created
+```
+
+| Sign in as | Role |
+|---|---|
+| `alex.chen@deloitte.com` | Engagement lead (owner of review RV-104) |
+| `priya.shah@deloitte.com` | Independent reviewer |
+| `jordan.kim@deloitte.com` | Platform administrator (admin console) |
+
+Sign-in is limited to the domains in `AUTH_ALLOWED_EMAIL_DOMAINS` (default `deloitte.com`); the demo accounts are created on the first of them. They are fictional, so load them only into a local or demonstration database.
+
+To make one of your own accounts an administrator, set `is_admin` on its row in `users`. The seed refuses to run when `ADVISE_WORKBENCH_ENV` is `production`.

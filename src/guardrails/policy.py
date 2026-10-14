@@ -165,6 +165,12 @@ def _storyline_arc_from_memory(
     return ""
 
 
+def _outline_types() -> str:
+    from src.deliverables.pptx.visual_guide import outline_type_choices
+
+    return outline_type_choices()
+
+
 def generate_deck_outline_preview(
     *,
     instruction: str,
@@ -235,7 +241,9 @@ def generate_deck_outline_preview(
         "for a PowerPoint deck. Return JSON with keys:\n"
         "  slides: [{title: string, slide_type: string, purpose: string}]\n"
         "  rationale: string (1 sentence explaining the deck structure)\n"
-        "slide_type must be one of: title, bullets, stat_cards, column_cards, stack_layers, table, chart, big_number, process_flow, section_divider.\n"
+        f"slide_type must be one of: {_outline_types()}. Prefer the visual that shows the slide's logic "
+        "(two_by_two to prioritise, harvey_balls to compare options, waterfall for a business case, gantt for a plan, "
+        "benchmark_bars against peers, heat_map for where effort sits); use bullets at most once.\n"
         "purpose: 1 sentence (≤20 words) describing what the slide communicates.\n"
         "Titles must be specific and reference the client or their context when available — "
         "avoid generic headers like 'Introduction' or 'Our Approach'.\n"

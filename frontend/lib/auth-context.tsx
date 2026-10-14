@@ -13,6 +13,7 @@ import {
 import { getApiBase } from "./api";
 import { extractApiErrorMessage, parseResponseBodyLoose } from "./api-error";
 import { apiFetch } from "./apiClient";
+import type { AuthUser } from "@/types/api";
 
 const TOKEN_KEY = "advise_workbench_token";
 const REFRESH_KEY = "advise_workbench_refresh";
@@ -21,6 +22,8 @@ const EMAIL_KEY = "advise_workbench_email";
 type AuthContextValue = {
   token: string | null;
   email: string | null;
+  user: AuthUser | null;
+  setUser: (user: AuthUser | null) => void;
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
@@ -32,6 +35,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -49,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(EMAIL_KEY);
     setToken(null);
     setEmail(null);
+    setUser(null);
   }, []);
 
   const refreshAccessToken = useCallback(async (): Promise<string | null> => {
@@ -117,9 +122,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [token, refreshAccessToken]
   );
 
+  // Load the signed-in user's profile (name, title, admin flag) whenever the session changes.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void api("/api/auth/me")
+      .then(async (res) => (res.ok ? ((await res.json()) as AuthUser) : null))
+      .then((profile) => {
+        if (!cancelled) setUser(profile);
+      })
+      .catch(() => {
+        if (!cancelled) setUser(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // `api` changes identity with the token; the token is the real dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   const value = useMemo(
-    () => ({ token, email, ready, login, logout, api }),
-    [token, email, ready, login, logout, api]
+    () => ({ token, email, user, setUser, ready, login, logout, api }),
+    [token, email, user, ready, login, logout, api]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

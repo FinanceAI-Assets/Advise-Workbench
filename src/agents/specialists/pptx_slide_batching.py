@@ -35,6 +35,12 @@ def strip_title_override(user_core: str) -> str:
     return "\n".join(cleaned_lines)
 
 
+def _big4_prompt_block() -> str:
+    from src.deliverables.pptx.visual_guide import BIG4_RULES, visual_contract
+
+    return BIG4_RULES + "\n" + visual_contract() + "\n"
+
+
 def generate_slides_batched(
     ctx: AgentContext,
     *,
@@ -89,17 +95,20 @@ def generate_slides_batched(
             )
             batch_instruction = (
                 f"Generate slides {batch_start + 1}–{batch_end} of {n_total} for this deck.\n"
-                f"Follow this outline for these slides (titles and slide_types are authoritative):\n"
+                f"Follow this outline for these slides (titles are authoritative):\n"
                 f"{outline_desc}\n\n"
                 "Return ONLY valid JSON: {\"slides\": [...]}\n"
-                "Each slide MUST use the outline entry's title verbatim and its slide_type. "
+                "Each slide MUST use the outline entry's title verbatim. Keep its slide_type unless that type is "
+                "bullets, column_cards or stack_layers and a richer visual from the list below would prove the title "
+                "better; then switch to that visual and fill every required field with real content. "
                 "Expand the outline purpose into concrete, client-specific content "
                 "(use discovery inputs, process model, and any wiki references provided). "
                 "Do NOT copy the user's raw chat instruction onto any slide — "
                 "if you are unsure of a title, use the outline title exactly as given.\n"
                 "When the outline entry includes a [source: ...] citation, copy that source "
                 "verbatim into the slide's `footer_note` field as 'Source: <citation>' (and "
-                "mirror the same line in `notes` for speaker notes).\n"
+                "mirror the same line in `notes` for speaker notes).\n\n"
+                + _big4_prompt_block()
             )
             if batch_start == 0 and canonical_title:
                 batch_instruction += (

@@ -14,19 +14,20 @@ const config: Config = {
       },
       fontSize: {
         "2xs": "0.6875rem",
+        "2xl": "1.75rem",
       },
     },
-    /* Deloitte Design System: Sharp corners (0px border-radius) */
+    /* Rounded corners (sampled from Figma design — small radius, not sharp/pill) */
     borderRadius: {
       none: "0px",
-      sm: "0px",
-      DEFAULT: "0px",
-      md: "0px",
-      lg: "0px",
-      xl: "0px",
-      "2xl": "0px",
-      "3xl": "0px",
-      full: "0px", /* Prevent pill shapes */
+      sm: "4px",
+      DEFAULT: "6px",
+      md: "6px",
+      lg: "8px",
+      xl: "12px",
+      "2xl": "16px",
+      "3xl": "24px",
+      full: "9999px",
     },
   },
   plugins: [],

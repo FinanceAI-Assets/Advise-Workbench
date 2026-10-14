@@ -356,11 +356,39 @@ def numbered_circle(slide: Any, theme: DeckTheme, x: float, y: float, n: int, *,
     add_run(p, str(n), font=theme.font_header, size=d * 72 * 0.42, bold=True, color=theme.color("primary"))
 
 
+def resolve_icon(explicit: Any, *texts: str) -> str | None:
+    """Icon for a card: the slide's own `icon` field, else a keyword match on its text; None when nothing fits."""
+    from src.deliverables.figures.icon_library import available_icons, icon_for_label
+
+    name = str(explicit or "").strip().lower().replace("-", "_")
+    if name in {"none", "false", "off"}:
+        return None
+    if name and name in available_icons():
+        return name
+    guess = icon_for_label(" ".join(t for t in texts if t), fallback="")
+    return guess or None
+
+
+def place_icon(slide: Any, x: float, y: float, d: float, name: str | None, color_hex: str) -> bool:
+    """Draw a brand-tinted icon in a ``d``-inch square. Returns False when no icon was drawn."""
+    if not name:
+        return False
+    import io
+
+    from src.deliverables.figures.icon_library import render_icon_png
+
+    png = render_icon_png(name, color_hex)
+    if not png:
+        return False
+    slide.shapes.add_picture(io.BytesIO(png), Inches(x), Inches(y), Inches(d), Inches(d))
+    return True
+
+
 def stat_block(
     slide: Any, theme: DeckTheme, r: Rect,
-    *, value: str, label: str = "", desc: str = "", accent: str | None = None,
+    *, value: str, label: str = "", desc: str = "", accent: str | None = None, icon: str | None = None,
 ) -> None:
-    """Colored left border + big number + caps label + description."""
+    """Colored left border + big number + caps label + description, with an optional icon top right."""
     accent = accent or theme.color("primary")
     panel = add_rect(slide, r.x, r.y, r.w, r.h, fill=theme.color("inverse"),
                      line=theme.color("hairline"), line_pt=0.75)
@@ -368,6 +396,9 @@ def stat_block(
     add_rect(slide, r.x, r.y, 0.06, r.h, fill=accent)
     tx = r.x + 0.22
     tw = r.w - 0.3
+    icon_d = min(0.5, r.h * 0.3)
+    if place_icon(slide, r.right - icon_d - 0.16, r.y + 0.16, icon_d, icon, accent):
+        tw -= icon_d + 0.1
     # Big number (measured).
     vf = tm.fit_text(value, box_w_in=tw, box_h_in=r.h * 0.5, family=theme.font_header,
                      max_pt=theme.type_scale.get("stat_value", 40), min_pt=20, bold=True, max_lines=1)
@@ -387,9 +418,9 @@ def stat_block(
 def card(
     slide: Any, theme: DeckTheme, r: Rect,
     *, heading: str = "", body: str = "", top_color: str | None = None,
-    owner: str = "", status: str | None = None, status_label: str = "",
+    owner: str = "", status: str | None = None, status_label: str = "", icon: str | None = None,
 ) -> None:
-    """Top-bordered card with heading, body, optional OWNER micro-label + status chip."""
+    """Top-bordered card with an optional icon, heading, body, OWNER micro-label + status chip."""
     top_color = top_color or theme.color("primary")
     bg = add_rect(slide, r.x, r.y, r.w, r.h, fill=theme.color("inverse"), line=theme.color("hairline"), line_pt=0.75)
     soft_shadow(bg)
@@ -398,6 +429,9 @@ def card(
     tx = r.x + pad
     tw = r.w - 2 * pad
     cursor = r.y + 0.18
+    icon_d = 0.46
+    if r.h > 1.6 and place_icon(slide, tx, cursor, icon_d, icon, theme.color("primary")):
+        cursor += icon_d + 0.12
     if heading:
         hf = tm.fit_text(heading, box_w_in=tw, box_h_in=0.6, family=theme.font_header,
                          max_pt=theme.type_scale.get("card_title", 14), min_pt=10, bold=True, max_lines=2)

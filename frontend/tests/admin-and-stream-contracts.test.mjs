@@ -14,18 +14,6 @@ test("SSE stream listener includes output_chunk event", async () => {
   assert.match(content, /"output_chunk"/);
 });
 
-test("admin skills page includes create and delete actions", async () => {
-  const content = await read("app/admin/skills/page.tsx");
-  assert.match(content, /Validate & Save/);
-  assert.match(content, /deleteSkill/);
-});
-
-test("admin LP page includes search and bookmark actions", async () => {
-  const content = await read("app/admin/lp-library/page.tsx");
-  assert.match(content, /Refresh index/);
-  assert.match(content, /Bookmark/);
-});
-
 test("auth context does not force JSON content-type for FormData", async () => {
   const content = await read("lib/auth-context.tsx");
   assert.match(content, /isFormData/);

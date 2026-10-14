@@ -1,0 +1,108 @@
+{
+  "tabCounts": {
+    "engagements": 24,
+    "deliverables": 61,
+    "retentionExceptions": 2,
+    "exportRequests": 3
+  },
+  "matchingCount": 5,
+  "totalCount": 24,
+  "rows": [
+    {
+      "id": "ns-042",
+      "name": "Northstar transformation",
+      "code": "NS-042",
+      "ownerAccess": "Alex Chen · 5 members",
+      "classification": "Internal",
+      "retention": "180 days after close",
+      "deliverables": "1 review · 1 draft",
+      "controlState": "Export locked"
+    },
+    {
+      "id": "me-019",
+      "name": "Meridian service excellence",
+      "code": "ME-019",
+      "ownerAccess": "Priya Shah · 7 members",
+      "classification": "Internal",
+      "retention": "180 days after close",
+      "deliverables": "2 in review",
+      "controlState": "Review pending"
+    },
+    {
+      "id": "at-031",
+      "name": "Atlas finance modernization",
+      "code": "AT-031",
+      "ownerAccess": "Sam Rivera · 4 members",
+      "classification": "Restricted",
+      "retention": "365 days after close",
+      "deliverables": "1 draft",
+      "controlState": "Access risk"
+    },
+    {
+      "id": "ce-012",
+      "name": "Cedar change readiness",
+      "code": "CE-012",
+      "ownerAccess": "Maya Patel · 3 members",
+      "classification": "Internal",
+      "retention": "180 days after close",
+      "deliverables": "2 approved",
+      "controlState": "Export permitted"
+    },
+    {
+      "id": "hg-028",
+      "name": "Horizon governance reset",
+      "code": "HG-028",
+      "ownerAccess": "Alex Chen · 4 members",
+      "classification": "Internal",
+      "retention": "180 days after close",
+      "deliverables": "No artifacts yet",
+      "controlState": "Brief stage"
+    }
+  ],
+  "selected": {
+    "id": "ns-042",
+    "code": "NS-042",
+    "name": "Northstar transformation",
+    "accessGroup": "advisory-northstar · 5 members",
+    "contentAccess": "Engagement-scoped only",
+    "retentionPolicy": "180 days after 30 Nov 2026 close",
+    "scheduledDisposition": "29 May 2027 · No legal hold",
+    "members": [
+      {
+        "id": "alex-chen",
+        "name": "Alex Chen",
+        "role": "Engagement lead",
+        "permission": "Edit · Submit"
+      },
+      {
+        "id": "priya-shah",
+        "name": "Priya Shah",
+        "role": "Reviewer",
+        "permission": "Comment · Approve"
+      }
+    ]
+  },
+  "deliverableLifecycle": [
+    {
+      "id": "roadmap",
+      "name": "Transformation roadmap · PPTX v0.8",
+      "meta": "Draft → Review · 2 open comments · Due 12 Oct",
+      "state": "Locked",
+      "icon": "deck"
+    },
+    {
+      "id": "recommendations",
+      "name": "Operating model recommendations · DOCX v0.6",
+      "meta": "Draft · Not submitted · 9 citations",
+      "state": "Locked",
+      "icon": "doc"
+    },
+    {
+      "id": "evidence-register",
+      "name": "Evidence register",
+      "meta": "18 sources · Inherits engagement permissions",
+      "state": "Current",
+      "icon": "evidence"
+    }
+  ]
+}

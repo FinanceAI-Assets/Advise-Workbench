@@ -9,15 +9,15 @@
   --alabaster: #FBFBFB;
 
   /* Legacy palette (kept for backward compatibility during migration) */
-  --primary-950: #0f1214;
-  --primary-900: #0F0B0B; /* Updated to Coral Black */
-  --primary-800: #2a2f35;
-  --primary-700: #4C4C4C; /* Updated to Tundora Gray */
-  --primary-600: #59616a;
-  --primary-400: #a2a8b0;
-  --primary-200: #d5dbe2;
-  --primary-100: #eceff2;
-  --primary-50: #f6f8f9;
+  --primary-950: #101410;
+  --primary-900: #171A17; /* Sage-black body/heading text (sampled from design) */
+  --primary-800: #252B25; /* Sidebar active-item background */
+  --primary-700: #677067; /* Sage-gray muted/caption text */
+  --primary-600: #798178;
+  --primary-400: #A9B1A4;
+  --primary-200: #C0C8BC;
+  --primary-100: #DDE2DA;
+  --primary-50: #F4F5F3;
 
   --accent-blue: #0072B1;
   --accent-blue-light: #2b7cd3;
@@ -43,10 +43,10 @@
   --surface-muted: var(--primary-50);
   --surface-border: color-mix(in srgb, var(--light-gray) 100%, transparent);
   --surface-border-strong: color-mix(in srgb, var(--light-gray) 100%, transparent);
-  --text-default: var(--coral-black);
-  --text-muted: var(--tundora-gray);
+  --text-default: var(--primary-900);
+  --text-muted: var(--primary-700);
   /* Stronger contrast for captions on light surfaces (WCAG-friendly) */
-  --text-caption: var(--tundora-gray);
+  --text-caption: var(--primary-700);
 
   /* Typography scale */
   --text-2xs: 0.6875rem;
@@ -74,12 +74,12 @@
   --status-failed-border: color-mix(in srgb, var(--error) 35%, transparent);
   --status-failed-text: color-mix(in srgb, var(--error) 78%, black);
 
-  /* Deloitte: Sharp corners, 0px border-radius throughout */
-  --radius-sm: 0px;
-  --radius: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-xl: 0px;
+  /* Rounded corners (sampled from Figma design) */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
 
   /* Deloitte: Soft, diffused shadows */
   --shadow-sm: 0 4px 12px rgba(15, 11, 11, 0.08);

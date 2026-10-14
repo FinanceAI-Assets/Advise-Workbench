@@ -302,6 +302,9 @@ class PPTXDeliverable(IDeliverable):
                 except OSError as exc:
                     logger.warning("Could not write pptx_render_signals.json: %s", exc)
 
+            from src.deliverables.pptx.pptx_layouts import tidy_presentation
+
+            tidy_presentation(prs)
             prs.save(out)
             logger.info("PPTX rendered successfully: %s", out)
             try:

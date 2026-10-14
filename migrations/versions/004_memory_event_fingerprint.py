@@ -12,7 +12,8 @@ depends_on = None
 def upgrade() -> None:
     op.add_column("memory_events", sa.Column("fingerprint", sa.String(length=64), nullable=True))
     op.execute("UPDATE memory_events SET fingerprint = 'legacy' WHERE fingerprint IS NULL")
-    op.alter_column("memory_events", "fingerprint", nullable=False)
+    with op.batch_alter_table("memory_events") as batch_op:
+        batch_op.alter_column("fingerprint", nullable=False)
     op.create_index(
         "ix_memory_events_project_run_type_fingerprint",
         "memory_events",

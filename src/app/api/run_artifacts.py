@@ -420,7 +420,7 @@ def save_canvas_artifact(
             regen = {"regenerated": [], "errors": [str(exc)]}
 
     try:
-        from src.workflows.run_events import append_run_event
+        from src.workflows.orchestrator import append_run_event
 
         append_run_event(
             db,
@@ -442,6 +442,40 @@ def save_canvas_artifact(
         "regenerated": regen.get("regenerated") or [],
         "regen_errors": regen.get("errors") or [],
     }
+
+
+@router.get("/{project_id}/{run_id}/canvas-history")
+def get_canvas_history(
+    project_id: str,
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Deliverable version history, derived from the existing canvas_artifact_saved run events.
+
+    Purely additive read: no new table, no change to save_canvas_artifact's
+    behavior — it already appends this event on every canvas edit.
+    """
+    require_project_role(project_id, {"Owner", "Editor", "Viewer"}, user, db)
+    run = db.scalar(select(Run).where(Run.id == run_id, Run.project_id == project_id))
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    rows = db.scalars(
+        select(RunEvent)
+        .where(RunEvent.run_id == run_id, RunEvent.event_type == "canvas_artifact_saved")
+        .order_by(RunEvent.id.asc())
+    ).all()
+    items = [
+        {
+            "id": str(row.id),
+            "version": f"v0.{index + 1}",
+            "current": index == len(rows) - 1,
+            "meta": f"{row.payload_json.get('artifact_key', 'artifact')} saved · {row.created_at.isoformat()}",
+        }
+        for index, row in enumerate(rows)
+    ]
+    items.reverse()
+    return {"run_id": run_id, "project_id": project_id, "items": items}
 
 
 @router.get("/{project_id}/{run_id}/evidence-claims")
@@ -525,6 +559,30 @@ def download_run_pptx(
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=filename,
+    )
+
+
+@router.get("/{project_id}/{run_id}/artifacts/docx/download")
+def download_run_docx(
+    project_id: str,
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream output.docx from the run workspace."""
+    require_project_role(project_id, {"Owner", "Editor", "Viewer"}, user, db)
+    run = db.scalar(select(Run).where(Run.id == run_id, Run.project_id == project_id))
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    docx_path = workspace_path(project_id) / "runs" / run_id / "output.docx"
+    if not docx_path.is_file():
+        raise HTTPException(status_code=404, detail="DOCX output not found for this run")
+    project = db.scalar(select(Project).where(Project.id == project_id))
+    name = _tokenize_filename(str(project.name or "").strip() if project else "") or "Deliverable"
+    return FileResponse(
+        path=str(docx_path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=f"{name}_Document.docx",
     )
 
 

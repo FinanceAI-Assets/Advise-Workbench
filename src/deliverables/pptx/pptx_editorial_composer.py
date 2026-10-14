@@ -124,7 +124,10 @@ class EditorialSlideComposer:
         if subtitle:
             sf = tm.fit_text(subtitle, box_w_in=SLIDE_W * 0.55, box_h_in=1.2, family=t.font_header,
                              max_pt=t.type_scale["cover_subtitle"], min_pt=12, max_lines=3)
-            stf = textbox(slide, m_h, 2.2 + fit.pt * 3 * 1.1 / 72.0, SLIDE_W * 0.55, sf.height_in + 0.3)
+            title_lines = max(1, len(fit.lines or []))
+            # Measured lines plus headroom: a substituted font can wrap one line more than Calibri.
+            stf = textbox(slide, m_h, 2.0 + (title_lines + 0.6) * fit.pt * 1.2 / 72.0 + 0.25, SLIDE_W * 0.55,
+                          sf.height_in + 0.3)
             for i, ln in enumerate(sf.lines or [subtitle]):
                 p = stf.paragraphs[0] if i == 0 else stf.add_paragraph()
                 C.add_run(p, ln, font=t.font_header, size=sf.pt, color=t.color("muted"))
@@ -165,7 +168,7 @@ class EditorialSlideComposer:
         self, slide_dict: dict[str, Any], slide_type: str, page_num: int, total_pages: int
     ) -> None:
         title = self._trim_to_budget(
-            str(slide_dict.get("title", "")), 110, "title", page_num, slide_type
+            str(slide_dict.get("title", "")), 140, "title", page_num, slide_type
         )
         subtitle = self._trim_to_budget(
             str(slide_dict.get("subtitle", "")), 140, "subtitle", page_num, slide_type
@@ -282,6 +285,7 @@ class EditorialSlideComposer:
                 slide, self.theme, Rect(cx, cy, cw, ch),
                 value=str(c.get("stat", "")), label=str(c.get("label", "")),
                 desc=str(c.get("description", "")), accent=self._accent_for(c.get("fill")),
+                icon=C.resolve_icon(c.get("icon"), str(c.get("label", "")), str(c.get("description", ""))),
             )
 
     def _compose_column_cards(self, slide: Any, slide_dict: dict[str, Any], r: Rect) -> None:
@@ -291,12 +295,15 @@ class EditorialSlideComposer:
         cols = len(cards)
         gut = self.theme.spacing["gutter"]
         cw = (r.w - (cols - 1) * gut) / cols
+        longest = max(len(str(c.get("body", ""))) for c in cards)
+        card_h = min(r.h, max(2.4, 1.3 + longest / 55))
         for idx, c in enumerate(cards):
             cx = r.x + idx * (cw + gut)
             C.card(
-                slide, self.theme, Rect(cx, r.y, cw, r.h),
+                slide, self.theme, Rect(cx, r.y, cw, card_h),
                 heading=str(c.get("heading", "")), body=str(c.get("body", "")),
                 top_color=self._accent_for(c.get("accent")),
+                icon=C.resolve_icon(c.get("icon"), str(c.get("heading", ""))),
             )
 
     def _compose_table(self, slide: Any, slide_dict: dict[str, Any], r: Rect) -> None:

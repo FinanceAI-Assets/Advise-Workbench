@@ -20,7 +20,9 @@ from pptx.util import Emu, Inches, Pt
 
 from src.deliverables.pptx.pptx_theme import _mix, _norm_hex
 
-NATIVE_FIGURE_TYPES: tuple[str, ...] = ("two_by_two", "value_chain", "maturity_curve", "heat_map")
+NATIVE_FIGURE_TYPES: tuple[str, ...] = (
+    "two_by_two", "value_chain", "maturity_curve", "heat_map", "harvey_balls", "waterfall", "gantt", "benchmark_bars",
+)
 
 
 def _rgb(hexstr: str, default: str = "#1A1A1A") -> RGBColor:
@@ -309,11 +311,261 @@ def draw_heat_map(slide, colors: dict[str, str] | None, spec: dict[str, Any],
             p.font.color.rgb = P.rgb("inverse", "#FFFFFF") if v >= 0.6 else P.rgb("ink", "#1A1A1A")
 
 
+# ── harvey_balls ─────────────────────────────────────────────────────────────
+
+def _pie(slide, cx: float, cy: float, r: float, fraction: float, fill: str) -> None:
+    """Filled pie wedge from 12 o'clock, clockwise, as a freeform (no angle-adjustment quirks)."""
+    import math
+
+    steps = max(2, int(48 * fraction))
+    pts = [(cx, cy)]
+    for i in range(steps + 1):
+        a = -math.pi / 2 + 2 * math.pi * fraction * i / steps
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    fb = slide.shapes.build_freeform(Inches(pts[0][0]), Inches(pts[0][1]), scale=1.0)
+    fb.add_line_segments([(Inches(px), Inches(py)) for px, py in pts[1:]], close=True)
+    shp = fb.convert_to_shape()
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = _rgb(fill)
+    _no_line(shp)
+
+
+def _harvey_ball(slide, P: _Palette, cx: float, cy: float, r: float, score: float) -> None:
+    score = max(0.0, min(4.0, float(score)))
+    _shape(slide, MSO_SHAPE.OVAL, cx - r, cy - r, 2 * r, 2 * r, fill="#FFFFFF", line=P.panel, line_w=1.25)
+    if score >= 4:
+        _shape(slide, MSO_SHAPE.OVAL, cx - r, cy - r, 2 * r, 2 * r, fill=P.panel, line=P.panel, line_w=1.25)
+    elif score > 0:
+        _pie(slide, cx, cy, r, score / 4.0, P.panel)
+
+
+def draw_harvey_balls(slide, colors: dict[str, str] | None, spec: dict[str, Any],
+                       x: float, y: float, w: float, h: float) -> None:
+    """Assessment grid: rows of options scored 0–4 against named criteria, with a legend."""
+    P = _Palette(colors)
+    rows = [r for r in (spec.get("rows") or []) if isinstance(r, dict) and str(r.get("label") or "").strip()]
+    if not rows:
+        raise ValueError("harvey_balls requires rows")
+    n_cols = max(len(r.get("scores") or []) for r in rows)
+    if n_cols == 0:
+        raise ValueError("harvey_balls requires scores")
+    cols = [str(c) for c in (spec.get("columns") or spec.get("criteria") or [])][:n_cols]
+    cols += [f"Criterion {i + 1}" for i in range(len(cols), n_cols)]
+    legend_h = 0.35
+    head_h = 0.55
+    lab_w = min(3.2, w * 0.3)
+    grid_h = h - head_h - legend_h
+    row_h = min(0.75, grid_h / len(rows))
+    col_w = (w - lab_w) / n_cols
+    for j, c in enumerate(cols):
+        _textbox(slide, x + lab_w + j * col_w, y, col_w, head_h, c, size=11, bold=True, color=P.ink)
+    _shape(slide, MSO_SHAPE.RECTANGLE, x, y + head_h - 0.02, w, 0.02, fill=P.panel)
+    r_ball = min(row_h, col_w) * 0.28
+    for i, row in enumerate(rows):
+        ry = y + head_h + i * row_h
+        if i % 2 == 0:
+            _shape(slide, MSO_SHAPE.RECTANGLE, x, ry, w, row_h, fill=_mix(P.accent_light, "#FFFFFF", 0.5))
+        _textbox(slide, x + 0.08, ry, lab_w - 0.1, row_h, str(row.get("label")), size=12, bold=True,
+                 color=P.ink, align=PP_ALIGN.LEFT)
+        scores = list(row.get("scores") or [])
+        for j in range(n_cols):
+            raw = scores[j] if j < len(scores) else 0
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                val = 0.0
+            _harvey_ball(slide, P, x + lab_w + (j + 0.5) * col_w, ry + row_h / 2, r_ball, val)
+    # legend
+    ly = y + h - legend_h + 0.05
+    lx = x + w - 5.0
+    for k, text in enumerate(("None", "Low", "Medium", "High", "Full")):
+        cx = lx + k * 1.0
+        _harvey_ball(slide, P, cx + 0.12, ly + 0.12, 0.09, k)
+        _textbox(slide, cx + 0.26, ly, 0.7, 0.24, text, size=9, color=P.muted, align=PP_ALIGN.LEFT)
+
+
+# ── waterfall ────────────────────────────────────────────────────────────────
+
+def _fmt_number(v: float, unit: str) -> str:
+    text = f"{v:,.0f}" if abs(v) >= 100 or float(v).is_integer() else f"{v:,.1f}"
+    if unit.startswith(("$", "€", "£", "₹")):
+        return f"{'-' if v < 0 else ''}{unit[0]}{text.lstrip('-')}{unit[1:]}"
+    return f"{text}{unit}"
+
+
+def draw_waterfall(slide, colors: dict[str, str] | None, spec: dict[str, Any],
+                    x: float, y: float, w: float, h: float) -> None:
+    """Bridge from a starting value through increases and decreases to a total."""
+    P = _Palette(colors)
+    bars = [b for b in (spec.get("bars") or []) if isinstance(b, dict) and str(b.get("label") or "").strip()]
+    if len(bars) < 2:
+        raise ValueError("waterfall requires at least two bars")
+    unit = str(spec.get("unit") or "")
+    segs: list[tuple[str, float, float, str]] = []  # label, low, high, kind
+    running = 0.0
+    for b in bars:
+        kind = str(b.get("kind") or "delta").lower()
+        try:
+            val = float(b.get("delta", b.get("value", 0)) or 0)
+        except (TypeError, ValueError):
+            val = 0.0
+        if kind in {"start", "total", "subtotal", "end"}:
+            if kind != "start" and b.get("delta") is None and b.get("value") is None:
+                val = running
+            running = val
+            segs.append((str(b["label"]), 0.0, val, kind))
+        else:
+            low, high = sorted((running, running + val))
+            segs.append((str(b["label"]), low, high, "up" if val >= 0 else "down"))
+            running += val
+    top = max(max(s[2] for s in segs), 0.0)
+    bottom = min(min(s[1] for s in segs), 0.0)
+    span = (top - bottom) or 1.0
+    label_h, value_h = 0.6, 0.3
+    ch_y0, ch_h = y + value_h, h - label_h - value_h
+    base_y = ch_y0 + ch_h * (top / span)
+    slot = w / len(segs)
+    bw = slot * 0.62
+    fills = {"up": P.primary, "down": "#C8102E", "start": P.panel, "total": P.panel, "subtotal": _mix(P.panel, "#FFFFFF", 0.35), "end": P.panel}
+    prev_edge: float | None = None
+    for i, (label, low, high, kind) in enumerate(segs):
+        bx = x + i * slot + (slot - bw) / 2
+        y_top = ch_y0 + ch_h * ((top - high) / span)
+        y_bot = ch_y0 + ch_h * ((top - low) / span)
+        _shape(slide, MSO_SHAPE.RECTANGLE, bx, y_top, bw, max(0.02, y_bot - y_top), fill=fills.get(kind, P.primary))
+        value = high - low if kind in {"up", "down"} else high
+        sign = "+" if kind == "up" else ("-" if kind == "down" else "")
+        _textbox(slide, bx - 0.2, y_top - value_h, bw + 0.4, value_h, sign + _fmt_number(abs(value) if sign else value, unit),
+                 size=11, bold=True, color=P.ink)
+        _textbox(slide, x + i * slot, ch_y0 + ch_h + 0.05, slot, label_h - 0.05, label, size=10, color=P.muted,
+                 anchor=MSO_ANCHOR.TOP)
+        edge = ch_y0 + ch_h * ((top - (high if kind != "down" else low)) / span)
+        if prev_edge is not None:
+            ln = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(bx - (slot - bw)), Inches(prev_edge),
+                                            Inches(bx), Inches(prev_edge))
+            ln.line.color.rgb = P.rgb("hairline", "#D8DCDE")
+            ln.line.width = Pt(1)
+        prev_edge = edge if kind in {"up", "down"} else y_top
+    axis = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x), Inches(base_y), Inches(x + w), Inches(base_y))
+    axis.line.color.rgb = P.rgb("hairline", "#D8DCDE")
+    axis.line.width = Pt(1)
+
+
+# ── gantt ────────────────────────────────────────────────────────────────────
+
+def draw_gantt(slide, colors: dict[str, str] | None, spec: dict[str, Any],
+                x: float, y: float, w: float, h: float) -> None:
+    """Roadmap: workstreams as rows, bars across a period header, milestone diamonds."""
+    P = _Palette(colors)
+    tasks = [t for t in (spec.get("tasks") or []) if isinstance(t, dict) and str(t.get("label") or "").strip()]
+    if not tasks:
+        raise ValueError("gantt requires tasks")
+    periods = [str(p) for p in (spec.get("periods") or [])] or ["Month 1", "Month 2", "Month 3"]
+    lab_w = min(3.0, w * 0.27)
+    head_h = 0.45
+    gx, gw = x + lab_w, w - lab_w
+    row_h = min(0.95, (h - head_h) / len(tasks))
+    pw = gw / len(periods)
+    for j, period in enumerate(periods):
+        _shape(slide, MSO_SHAPE.RECTANGLE, gx + j * pw + 0.02, y, pw - 0.04, head_h - 0.06,
+               fill=P.panel if j % 2 == 0 else _mix(P.panel, "#FFFFFF", 0.2))
+        _textbox(slide, gx + j * pw, y, pw, head_h - 0.06, period, size=10, bold=True, color="#FFFFFF")
+    palette = [P.primary, _mix(P.primary, P.panel, 0.35), _mix(P.primary, "#FFFFFF", 0.35), P.panel]
+    for i, t in enumerate(tasks):
+        ry = y + head_h + i * row_h
+        if i % 2 == 0:
+            _shape(slide, MSO_SHAPE.RECTANGLE, x, ry, w, row_h, fill=_mix(P.accent_light, "#FFFFFF", 0.55))
+        lane = str(t.get("lane") or "")
+        label = str(t.get("label"))
+        if lane:
+            _textbox(slide, x + 0.06, ry + 0.04, lab_w - 0.1, row_h * 0.55, label, size=11, bold=True, color=P.ink,
+                     align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.BOTTOM)
+            _textbox(slide, x + 0.06, ry + row_h * 0.55, lab_w - 0.1, row_h * 0.4, lane, size=9, color=P.muted,
+                     align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
+        else:
+            _textbox(slide, x + 0.06, ry, lab_w - 0.1, row_h, label, size=11, bold=True, color=P.ink,
+                     align=PP_ALIGN.LEFT)
+        try:
+            start = max(0.0, min(1.0, float(t.get("start", 0))))
+            end = max(start, min(1.0, float(t.get("end", 1))))
+        except (TypeError, ValueError):
+            start, end = 0.0, 1.0
+        if t.get("milestone") or end - start < 0.01:
+            d = row_h * 0.45
+            _shape(slide, MSO_SHAPE.DIAMOND, gx + start * gw - d / 2, ry + (row_h - d) / 2, d, d, fill=P.panel)
+            continue
+        bar = _shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, gx + start * gw, ry + row_h * 0.22, (end - start) * gw,
+                     row_h * 0.56, fill=palette[i % len(palette)])
+        note = str(t.get("note") or "")
+        if note:
+            tf = bar.text_frame
+            tf.word_wrap = True
+            tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+            p = tf.paragraphs[0]
+            p.text = note
+            p.alignment = PP_ALIGN.CENTER
+            p.font.size = Pt(9)
+            p.font.color.rgb = _rgb("#FFFFFF")
+
+
+# ── benchmark_bars ───────────────────────────────────────────────────────────
+
+def draw_benchmark_bars(slide, colors: dict[str, str] | None, spec: dict[str, Any],
+                         x: float, y: float, w: float, h: float) -> None:
+    """Horizontal bars for the client's value with a benchmark marker on each."""
+    P = _Palette(colors)
+    series = [s for s in (spec.get("series") or []) if isinstance(s, dict) and str(s.get("label") or "").strip()]
+    if not series:
+        raise ValueError("benchmark_bars requires series")
+    unit = str(spec.get("unit") or "")
+
+    def num(v: Any) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    top = max(max(num(s.get("value")), num(s.get("benchmark"))) for s in series) or 1.0
+    lab_w = min(3.2, w * 0.3)
+    legend_h = 0.35
+    row_h = min(1.0, (h - legend_h) / len(series))
+    bw_max = w - lab_w - 1.1
+    for i, s in enumerate(series):
+        ry = y + i * row_h
+        _textbox(slide, x, ry, lab_w - 0.1, row_h, str(s.get("label")), size=11, bold=True, color=P.ink,
+                 align=PP_ALIGN.RIGHT)
+        val, bench = num(s.get("value")), num(s.get("benchmark"))
+        _shape(slide, MSO_SHAPE.RECTANGLE, x + lab_w, ry + row_h * 0.25, bw_max * val / top, row_h * 0.5,
+               fill=P.primary)
+        _textbox(slide, x + lab_w + bw_max * val / top + 0.06, ry, 1.0, row_h, _fmt_number(val, unit), size=11,
+                 bold=True, color=P.ink, align=PP_ALIGN.LEFT)
+        if s.get("benchmark") is not None:
+            bx = x + lab_w + bw_max * bench / top
+            mark = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(bx), Inches(ry + row_h * 0.12),
+                                              Inches(bx), Inches(ry + row_h * 0.88))
+            mark.line.color.rgb = P.rgb("panel", "#1F2426")
+            mark.line.width = Pt(2.5)
+    ly = y + h - legend_h + 0.05
+    _shape(slide, MSO_SHAPE.RECTANGLE, x + lab_w, ly + 0.07, 0.3, 0.14, fill=P.primary)
+    _textbox(slide, x + lab_w + 0.36, ly, 1.6, 0.28, str(spec.get("value_label") or "Current"), size=9,
+             color=P.muted, align=PP_ALIGN.LEFT)
+    mk = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x + lab_w + 2.1), Inches(ly + 0.02),
+                                    Inches(x + lab_w + 2.1), Inches(ly + 0.26))
+    mk.line.color.rgb = P.rgb("panel", "#1F2426")
+    mk.line.width = Pt(2.5)
+    _textbox(slide, x + lab_w + 2.2, ly, 2.0, 0.28, str(spec.get("benchmark_label") or "Benchmark"), size=9,
+             color=P.muted, align=PP_ALIGN.LEFT)
+
+
 _DISPATCH = {
     "two_by_two": draw_two_by_two,
     "value_chain": draw_value_chain,
     "maturity_curve": draw_maturity_curve,
     "heat_map": draw_heat_map,
+    "harvey_balls": draw_harvey_balls,
+    "waterfall": draw_waterfall,
+    "gantt": draw_gantt,
+    "benchmark_bars": draw_benchmark_bars,
 }
 
 

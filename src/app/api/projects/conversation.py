@@ -33,6 +33,7 @@ from src.core.db.models import (
     User,
 )
 from src.core.db.session import get_db
+from src.app.api.projects._engagement_context import engagement_brief_text, engagement_discovery
 from src.workflows.conversation_graph import run_turn
 from src.workflows.task_router.conversation_router import fallback_decision, route_turn
 from src.memory.short_term.conversation_state import ConversationState, load_state, save_state, stamp_router
@@ -231,7 +232,7 @@ def _execute_plan_now(
         assistant_msg = ConversationMessage(
             conversation_id=conv.id,
             role="assistant",
-            content="A run is already in progress — check the Activity panel for status.",
+            content="Drafts are already being generated. The progress panel above this conversation shows where they are.",
             metadata_json=json.dumps({"kind": "auto_execute_skipped", "run_id": existing_run.id}),
         )
         db.add(assistant_msg)
@@ -290,6 +291,11 @@ def _execute_plan_now(
     if isinstance(selected_strategy, dict) and selected_strategy.get("option_id"):
         plan["selected_strategy"] = selected_strategy
     deck_outline = plan_meta.get("deck_outline_preview")
+    if not (isinstance(deck_outline, dict) and deck_outline.get("slides")):
+        # "Build it" after agreeing slides: the agreed structure must drive the deck.
+        from src.agents.conversation.slide_negotiator import agreed_deck_outline
+
+        deck_outline = agreed_deck_outline(db, project_id=pid)
     if isinstance(deck_outline, dict) and deck_outline.get("slides"):
         plan["deck_outline_preview"] = deck_outline
     document_outline = plan_meta.get("document_outline_preview")
@@ -391,9 +397,11 @@ def _execute_plan_now(
     save_state(conv, state)
 
     queue_msg = (
-        "Queued — watch the Activity panel for progress."
+        "Generation has started. The progress panel above this conversation shows each step; "
+        "when it finishes, open Deliverables to see the drafts and submit them for review."
         if enqueued
-        else "Run created but couldn't be queued right now. Use the Activity panel to retry."
+        else "The plan is saved but generation could not start right now. "
+        "Use Approve plan and generate in the progress panel above this conversation to try again."
     )
     assistant_msg = ConversationMessage(
         conversation_id=conv.id,
@@ -617,6 +625,9 @@ def _load_project_context_bundle(db: Session, project_id: str, instruction: str)
         except Exception:
             profile_text = ""
     combined_parts: list[str] = []
+    brief_text = engagement_brief_text(db, project_id)
+    if brief_text:
+        combined_parts.append(brief_text)
     if profile_text:
         combined_parts.append(f"[ProjectMemoryProfile]\n{profile_text}")
     if excerpt:
@@ -1405,9 +1416,9 @@ def _persist_assistant_plan_message(
     # of truth) and we no longer spell out the technical template ids here —
     # the UI already renders those structurally from metadata.
     cta = (
-        "\n\n✓ Plan is ready — review the decisions panel on the right, then confirm to start execution."
+        "\n\n✓ Plan is ready — confirm it and I'll start generating the drafts."
         if ready_for_confirmation
-        else "\n\n→ Open decisions are waiting on the right. Pick from the dropdowns or type your own answer, then I'll refresh the plan."
+        else "\n\n→ A few decisions are still open. Answer them here and I'll refresh the plan."
     )
     assistant_content = plan_with_personality + cta + strategy_md
 
@@ -1959,9 +1970,20 @@ def _post_project_conversation_message_impl(
     db: Session,
     on_phase: Callable[[str], None] | None = None,
 ) -> dict:
-    from src.llm.run_budget import project_token_context
-    with project_token_context(pid):
-        return _post_project_conversation_message_inner(pid, body, user, db, on_phase=on_phase)
+    from src.app.api.projects._conversation_usage import live_key, record_turn_usage
+    from src.llm.run_budget import capture_usage, project_token_context
+
+    with project_token_context(pid), capture_usage(live_key(pid, user.id)) as usage:
+        response = _post_project_conversation_message_inner(pid, body, user, db, on_phase=on_phase)
+    # Add this reply's tokens to the conversation's total. Tracking must never fail the reply itself.
+    try:
+        conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
+        record_turn_usage(db, conversation_id=conv.id, project_id=pid, usage=usage.snapshot())
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        _LOG.warning("conversation usage not recorded for project %s: %s", pid, exc)
+    return response
 
 
 @dataclass
@@ -2148,7 +2170,9 @@ def _turn_understand(turn: Turn) -> dict | None:
             except Exception as exc:
                 _LOG.warning("wiki slot extractor failed for project %s conversation %s: %s", pid, conv.id, exc)
                 extracted_wiki, wiki_source_refs = {}, []
-        premerged_slots = _merge_discovery(state.slots, extracted_fast)
+        # Start from what the engagement brief already says; answers in the conversation win.
+        premerged_slots = _merge_discovery(engagement_discovery(db, pid), state.slots)
+        premerged_slots = _merge_discovery(premerged_slots, extracted_fast)
         premerged_slots = _merge_discovery(premerged_slots, extracted_llm)
         premerged_slots = _merge_discovery(premerged_slots, extracted_wiki)
         if extracted_fast or extracted_llm or extracted_wiki:

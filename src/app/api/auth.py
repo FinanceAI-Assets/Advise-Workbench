@@ -89,3 +89,43 @@ def issue_sse_token(
         "sse_token": create_sse_token(user.email, run_id=rid or None),
         "expires_in": int(settings.jwt_sse_exp_seconds),
     }
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: str | None = None
+    job_title: str | None = None
+
+
+def _profile(user: User) -> dict:
+    name = (user.full_name or "").strip() or user.email.split("@")[0]
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": name,
+        "jobTitle": user.job_title or "",
+        "isAdmin": bool(user.is_admin),
+    }
+
+
+@router.get("/me")
+def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    # get_current_user may return a cached copy without profile fields, so read the row.
+    row = db.scalar(select(User).where(User.id == user.id))
+    return _profile(row or user)
+
+
+@router.patch("/me")
+def update_me(
+    body: UpdateProfileRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    row = db.scalar(select(User).where(User.id == user.id))
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if body.full_name is not None:
+        row.full_name = body.full_name.strip()[:255] or None
+    if body.job_title is not None:
+        row.job_title = body.job_title.strip()[:128] or None
+    db.commit()
+    return _profile(row)

@@ -125,7 +125,7 @@ Standard content slide. Use `bullets` (4–8 items). Keep each bullet to a clear
 write the right number for the content, not to fill space.
 
 ### `stat_cards`
-Three equal-width cards spanning the full slide. **Exactly 3 items in `stat_cards`.**
+Three equal-width cards spanning the full slide. Use 3 items in `stat_cards`; each may carry an `icon`.
 - `stat`: a short number or KPI (e.g. "14 Steps", "3 Roles", "48h SLA")
 - `label`: 2-line descriptor (e.g. "Active Process Steps\nacross 3 business units")
 - `description`: 1–2 sentences of context filling the lower half of the card
@@ -133,7 +133,7 @@ Three equal-width cards spanning the full slide. **Exactly 3 items in `stat_card
 Do not fabricate metrics; derive from ProcessModel step/role/decision counts or metadata.
 
 ### `column_cards`
-Three equal-width columns with an accent top bar. **Exactly 3 items in `column_cards`.**
+Equal-width columns with an accent top bar. Use 3 or 4 items in `column_cards`; each may carry an `icon`.
 Good for three-pillar frameworks, capability dimensions, or workstream areas.
 - `accent`: controls the top bar color — vary across cards for visual contrast
 - `body`: substantive paragraph (≤40 words), not a bullet list
@@ -211,7 +211,10 @@ When building executive-grade decks (PPTX_ARTIFACT_RENDERER_ENABLED), elevate yo
 
 ---
 
-## Mandatory Slide Sequence
+## Default Slide Sequence (process decks only)
+
+When an approved storyline or deck outline exists, follow it instead and choose the visual that proves each title (two_by_two, harvey_balls, waterfall, gantt, benchmark_bars, heat_map, value_chain, maturity_curve, process_flow, chart). Otherwise:
+
 
 1. `slide_type: "title"` — process name as title, `subtitle: "Process Overview"`, badges
 2. `slide_type: "stat_cards"` — 3 KPI cards from ProcessModel metrics

@@ -25,6 +25,7 @@ def estimate_density(slide: dict[str, Any]) -> dict[str, Any]:
     """Return density signals for a single slide dict."""
     st = str(slide.get("slide_type") or "").lower()
     card_body = 0
+    max_card_body = 0
     total_body = 0
 
     for b in slide.get("bullets") or []:
@@ -32,6 +33,7 @@ def estimate_density(slide: dict[str, Any]) -> dict[str, Any]:
     for c in slide.get("column_cards") or []:
         if isinstance(c, dict):
             card_body += len(str(c.get("body") or ""))
+            max_card_body = max(max_card_body, len(str(c.get("body") or "")))
             total_body += len(str(c.get("body") or "")) + len(str(c.get("heading") or ""))
     for row in slide.get("table") or slide.get("rows") or []:
         if isinstance(row, (list, tuple)):
@@ -47,9 +49,11 @@ def estimate_density(slide: dict[str, Any]) -> dict[str, Any]:
         "slide_type": st,
         "total_body_chars": total_body,
         "card_body_chars": card_body,
+        "max_card_body_chars": max_card_body,
         "bullet_count": bullet_count,
         "table_rows": table_rows,
-        "demote_candidate": st == "column_cards" and card_body > card_budget * DEMOTE_BODY_FACTOR,
+        # The budget is per card: demote only when a single card is too long to fit.
+        "demote_candidate": st == "column_cards" and max_card_body > card_budget * DEMOTE_BODY_FACTOR,
         "split_bullets": st == "bullets" and bullet_count > BULLET_SPLIT_THRESHOLD,
         "split_table": st == "table" and table_rows > TABLE_ROW_SPLIT_THRESHOLD + 1,
     }
