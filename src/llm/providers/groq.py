@@ -35,7 +35,7 @@ class GroqProvider(BaseLLMProvider):
         All configuration comes from environment variables via LLMConfig.
         No hardcoded defaults for models.
 
-        Expected config.api_key format: gsk_* (Groq API key)
+        
         Expected config.models: dict with "default", "planning", "critique" keys
 
         Commented out (Legacy hardcoded defaults):

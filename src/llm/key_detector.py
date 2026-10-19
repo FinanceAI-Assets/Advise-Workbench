@@ -21,11 +21,7 @@ def detect_provider_from_key(api_key: str) -> str:
         Provider name (e.g., "anthropic", "openai", "groq")
 
     Examples:
-        "sk-ant-abc123..." -> "anthropic"
-        "gsk_abc123..." -> "groq"
-        "sk-proj-abc123..." -> "openai"
-        "AIza..." -> "gemini"
-        "co_..." -> "cohere"
+   
     """
     if not api_key:
         return "anthropic"  # Default
@@ -36,7 +32,7 @@ def detect_provider_from_key(api_key: str) -> str:
     if api_key.startswith("sk-ant-"):
         return "anthropic"
 
-    # Groq keys start with "gsk_"
+    # Groq keys start with ""
     if api_key.startswith("gsk_"):
         return "groq"
 

@@ -34,7 +34,7 @@ Your API key for the chosen provider.
 **Format depends on provider:**
 - **Anthropic**: `sk-ant-v0-xxxxx...`
 - **OpenAI**: `sk-xxxxx...`
-- **Groq**: `gsk_xxxxx...`
+
 - **Local server**: Leave empty or omit
 
 **Example:**
@@ -122,7 +122,7 @@ LLM_CRITIQUE_MODEL=gpt-4
 
 ```bash
 LLM_PROVIDER=openai_compatible
-LLM_API_KEY=gsk_your-groq-key
+
 LLM_BASE_URL=https://api.groq.com/openai/v1
 LLM_MODEL=mixtral-8x7b-32768
 LLM_PLANNING_MODEL=mixtral-8x7b-32768
@@ -288,9 +288,7 @@ LLM_MODEL=claude-3-5-sonnet-20241022
 ### "API key invalid" or "Unauthorized"
 ```bash
 # Verify API key format for your provider
-# Anthropic: sk-ant-v0-*
-# OpenAI: sk-*
-# Groq: gsk_*
+
 
 # Check key has proper permissions/hasn't expired
 ```
