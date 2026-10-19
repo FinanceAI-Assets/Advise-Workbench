@@ -11,7 +11,8 @@ from src.core.config import settings
 from src.core.run_control import poll_abort
 from src.llm import gateway
 from src.tools.code_executor.bash_executor import get_bash_executor, new_session_id
-from src.llm.claude import is_claude_enabled
+# [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
+# from src.llm.claude import is_claude_enabled
 from src.core.observability.langfuse_tracing import langfuse_span
 from src.core.observability.metrics import increment
 from src.llm.run_budget import charge_llm_usage, extract_usage_counts
@@ -136,7 +137,11 @@ def run_claude_bash_tool_loop(
     Keep ``allow_bash=False`` unless ``BASH_TOOL_ENABLED`` and policy allow it.
     Returns keys: ``text``, ``session_id``, ``tool_trace``, ``model``, ``rounds``.
     """
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
         raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
     return run_claude_tools_loop(
         system=system,
@@ -321,18 +326,36 @@ def run_subagent_tool_loop(
 
     ``tool_defs`` must be Anthropic-style entries from ``tool_to_anthropic_schema`` / ``anthropic_tool_definitions``.
     """
-    if not is_claude_enabled():
+    # [NEW: Use provider-agnostic gateway check instead of is_claude_enabled]
+    if not gateway.is_enabled():
         raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
     if not tool_defs or not gateway.capabilities().tools:
         # No tools requested, or the provider cannot call tools: write in a single call.
-        from src.llm.claude import claude_generate
-
+        # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+        # from src.llm.claude import claude_generate
+        # return {
+        #     "text": claude_generate(
+        #         system=system,
+        #         user=user,
+        #         max_tokens=max_tokens or settings.subagent_tool_max_tokens,
+        #     ),
+        #     "tool_trace": [],
+        #     "model": gateway.model_for("default"),
+        #     "rounds": 1,
+        # }
+        
+        # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=max_tokens or settings.subagent_tool_max_tokens,
+            temperature=temperature if temperature is not None else settings.anthropic_temperature,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        final_text = _extract_final_text_from_message(msg)
         return {
-            "text": claude_generate(
-                system=system,
-                user=user,
-                max_tokens=max_tokens or settings.subagent_tool_max_tokens,
-            ),
+            "text": final_text,
             "tool_trace": [],
             "model": gateway.model_for("default"),
             "rounds": 1,
@@ -468,7 +491,8 @@ def run_claude_text_only(
     temperature: float | None = None,
 ) -> str:
     """Internal helper: single-turn beta message without tools (for callers that avoid claude_generate)."""
-    if not is_claude_enabled():
+    # [NEW: Use provider-agnostic gateway check instead of is_claude_enabled]
+    if not gateway.is_enabled():
         raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
     m = model or gateway.model_for("default")
     msg = gateway.create_message(

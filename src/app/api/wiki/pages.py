@@ -19,9 +19,6 @@ from src.core.db.models import User
 from src.core.db.session import get_db
 from src.memory.knowledge.wiki_integrations import WikiLeadingPracticesIntegration
 
-import logging
-logger = logging.getLogger(__name__)
-
 
 # ===== Browse Operations =====
 

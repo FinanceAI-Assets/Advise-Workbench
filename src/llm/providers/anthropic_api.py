@@ -6,11 +6,22 @@ from collections.abc import Callable
 from typing import Any
 
 from src.core.config import settings
+# ORIGINAL CODE (commented):
+# from src.llm.capabilities import Capabilities
+# from src.llm.config import LLMConfig
+#
+#
+# class AnthropicProvider:
+#     name = "anthropic"
+#     capabilities = Capabilities(tools=True, vision=True, thinking=True, anthropic_tools=True)
+
+# NEW CODE (inherit from BaseLLMProvider for factory pattern support):
+from src.llm.base_provider import BaseLLMProvider
 from src.llm.capabilities import Capabilities
 from src.llm.config import LLMConfig
 
 
-class AnthropicProvider:
+class AnthropicProvider(BaseLLMProvider):
     name = "anthropic"
     capabilities = Capabilities(tools=True, vision=True, thinking=True, anthropic_tools=True)
 
@@ -19,10 +30,22 @@ class AnthropicProvider:
 
     @property
     def default_models(self) -> dict[str, str]:
+        """
+        PHASE 2 (ENVIRONMENT-ONLY):
+        Models come from LLMConfig.models, which are populated from environment variables only.
+        No fallback to settings or hardcoded defaults.
+
+        Commented out (Legacy):
+        # return {
+        #     "default": settings.anthropic_claude_model,
+        #     "planning": str(getattr(settings, "anthropic_planning_model", "") or ""),
+        #     "critique": str(getattr(settings, "anthropic_critique_model", "") or ""),
+        # }
+        """
         return {
-            "default": settings.anthropic_claude_model,
-            "planning": str(getattr(settings, "anthropic_planning_model", "") or ""),
-            "critique": str(getattr(settings, "anthropic_critique_model", "") or ""),
+           "default": self._config.models.get("default", ""),
+            "planning": self._config.models.get("planning", ""),
+            "critique": self._config.models.get("critique", ""),
         }
 
     def _api_key(self) -> str:

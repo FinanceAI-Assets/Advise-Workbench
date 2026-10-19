@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import logging
+from src.llm import gateway
+from src.llm.claude import (
+    claude_generate_json,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -214,10 +221,17 @@ def generate_deck_outline_preview(
             logger.warning("%s: suppressed error: %s", 'generate_deck_outline_preview', exc)
 
     try:
-        from src.llm.claude import claude_generate_json, is_claude_enabled
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import claude_generate_json, is_claude_enabled
+        # gateway imported at module level (line ~8)
+        from src.llm.claude import claude_generate_json
     except ImportError:
         return None
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     return None
+    # [NEW: Gateway-based provider-agnostic check]
+    if not gateway.is_enabled():
         return None
 
     contract = proposal_prompt_contract(output_type, skill_id=skill_id)
@@ -311,10 +325,16 @@ def generate_document_outline_preview(
     the call fails — callers should treat this as optional enrichment.
     """
     try:
-        from src.llm.claude import claude_generate_json, is_claude_enabled
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import claude_generate_json, is_claude_enabled
+        pass  # gateway and claude imports are at module level
     except ImportError:
         return None
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     return None
+    # [NEW: Gateway-based provider-agnostic check]
+    if not gateway.is_enabled():
         return None
 
     contract = proposal_prompt_contract("docx", skill_id=skill_id)

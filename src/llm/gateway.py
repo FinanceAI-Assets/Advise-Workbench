@@ -18,17 +18,22 @@ from src.llm.config import LLMConfig, load_llm_config
 
 
 def _build(config: LLMConfig) -> Any:
-    if config.provider == "claude_cli":
-        from src.llm.providers.claude_cli import ClaudeCliProvider
+    # Original code (restored):
+    # if config.provider == "claude_cli":
+    #     from src.llm.providers.claude_cli import ClaudeCliProvider
+    #
+    #     return ClaudeCliProvider(config)
+    # if config.provider == "openai_compatible":
+    #     from src.llm.providers.openai_compatible import OpenAICompatibleProvider
+    #
+    #     return OpenAICompatibleProvider(config)
+    # from src.llm.providers.anthropic_api import AnthropicProvider
+    #
+    # return AnthropicProvider(config)
 
-        return ClaudeCliProvider(config)
-    if config.provider == "openai_compatible":
-        from src.llm.providers.openai_compatible import OpenAICompatibleProvider
-
-        return OpenAICompatibleProvider(config)
-    from src.llm.providers.anthropic_api import AnthropicProvider
-
-    return AnthropicProvider(config)
+    # NEW CODE (Factory pattern - enables dynamic provider registration):
+    from src.llm.factory import ProviderRegistry
+    return ProviderRegistry.create(config.provider, config)
 
 
 def get_provider() -> Any:

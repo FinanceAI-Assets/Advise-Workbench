@@ -16,7 +16,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.core.db.models import MemoryItem
-from src.llm.claude import claude_generate_json
+# [DEPRECATED: Hardcoded claude_generate_json] Now using gateway for provider-agnostic calls
+# from src.llm.claude import claude_generate_json
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.memory.knowledge.leading_practices import leading_practice_library_service as _lp
 
 import logging
@@ -138,7 +142,25 @@ def propose_slide(
     )
 
     try:
-        payload = claude_generate_json(system=system, user=user, temperature=0.3, max_tokens=400)
+        # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+        # payload = claude_generate_json(system=system, user=user, temperature=0.3, max_tokens=400)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction - Supports all LLM providers]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=400,
+            temperature=0.3,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = _extract_first_json_object(text)
     except Exception:
         payload = {}
 

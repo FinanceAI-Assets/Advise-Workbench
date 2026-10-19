@@ -49,7 +49,10 @@ class DuplicateDetector:
                 continue
 
             try:
-                content = md_file.read_text(encoding="utf-8")
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 page_id = md_file.stem
 
                 # Extract title

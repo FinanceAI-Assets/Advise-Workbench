@@ -19,9 +19,6 @@ from src.core.observability.langfuse_tracing import langfuse_event, langfuse_spa
 from src.memory.knowledge.wiki_integrations import WikiConversationIntegration, WikiRunIntegration
 from src.memory.knowledge.wiki_operations import wiki_ingest_with_retry
 
-import logging
-logger = logging.getLogger(__name__)
-
 
 # ===== Ingest Operations =====
 
@@ -189,7 +186,11 @@ async def ingest_memory_item(
                 wiki_dir = workspace_path(project_id) / "wiki"
             pf = wiki_dir / f"{page_id}.md"
             if pf.exists():
-                text = pf.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    text = pf.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    text = pf.read_text(encoding="latin-1", errors="ignore")
                 m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
                 if m:
                     for line in m.group(1).split("\n"):
@@ -396,7 +397,12 @@ async def cleanup_orphan_wiki_pages(
     link_re = re.compile(r"\[\[([a-z0-9_]+)(?:\|[^\]]*)?\]\]")
     for f in md_files:
         try:
-            for m in link_re.finditer(f.read_text(encoding="utf-8")):
+            # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+            try:
+                file_content = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                file_content = f.read_text(encoding="latin-1", errors="ignore")
+            for m in link_re.finditer(file_content):
                 if m.group(1) != f.stem:
                     referenced.add(m.group(1))
         except Exception as exc:
@@ -484,7 +490,11 @@ async def list_wiki_pages_for_run(
         if md_file.name in ("index.md", "log.md"):
             continue
         try:
-            content = md_file.read_text(encoding="utf-8")
+            # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
             fm: dict[str, str] = {}
             m = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
             if m:
@@ -536,7 +546,11 @@ async def list_wiki_pages_for_memory(
         if md_file.name in ("index.md", "log.md"):
             continue
         try:
-            content = md_file.read_text(encoding="utf-8")
+            # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
             fm: dict[str, str] = {}
             m = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
             if m:

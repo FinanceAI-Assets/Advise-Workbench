@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import logging
 import re
+import json
 from typing import Any
 
-from src.llm.claude import claude_generate_json, is_claude_enabled
+from src.llm import gateway
+from src.llm.claude import (
+    claude_generate_json,
+    _extract_first_json_object,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.evaluation.quality_framework import EvaluatorKind
 from src.prompts.registry import get_prompt
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +161,13 @@ class LLMCritiqueEvaluator(EvaluatorKind):
                 },
             )
 
-        if not is_claude_enabled():
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import claude_generate_json, is_claude_enabled
+        # [DEPRECATED: Old check - kept for reference]
+        # if not is_claude_enabled():
+        #     return (0.7, {...})
+        # [NEW: Gateway-based provider-agnostic check]
+        if not gateway.is_enabled():
             return (
                 0.7,
                 {
@@ -165,11 +181,24 @@ class LLMCritiqueEvaluator(EvaluatorKind):
         prompt = get_prompt("rubric_critique")
         user = prompt.render_user(rubric=rubric, dimensions=", ".join(str(d) for d in dimensions), deliverable=text_str[:12000])
         try:
-            payload = claude_generate_json(
-                system=prompt.render_system(),
-                user=user,
+            # [DEPRECATED: Old claude_generate_json call]
+            # payload = claude_generate_json(...)
+            
+            # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+            # All imports at module level: json, gateway, _extract_first_json_object,
+            # _record_message_usage, _extract_final_text_from_message
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
                 max_tokens=500,
+                system=prompt.render_system(),
+                messages=[{"role": "user", "content": user}],
             )
+            _record_message_usage(msg)
+            text = _extract_final_text_from_message(msg)
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = _extract_first_json_object(text)
         except Exception as exc:
             logger.warning("LLMCritiqueEvaluator call failed: %s", exc)
             return (

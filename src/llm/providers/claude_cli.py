@@ -18,6 +18,19 @@ from pathlib import Path
 from typing import Any
 
 from src.core.config import settings
+# ORIGINAL CODE (commented):
+# from src.llm.capabilities import Capabilities
+# from src.llm.config import LLMConfig
+# from src.llm.providers._common import blocks, message, system_text, tool_result_text
+#
+# ... (other code)
+#
+# class ClaudeCliProvider:
+#     name = "claude_cli"
+#     capabilities = Capabilities(tools=False, vision=True, thinking=False, anthropic_tools=False)
+
+# NEW CODE (inherit from BaseLLMProvider for factory pattern support):
+from src.llm.base_provider import BaseLLMProvider
 from src.llm.capabilities import Capabilities
 from src.llm.config import LLMConfig
 from src.llm.providers._common import blocks, message, system_text, tool_result_text
@@ -61,7 +74,7 @@ def collapse_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"type": "text", "text": "Conversation so far:\n" + "\n".join(history) + "\n\nLatest message:\n"}] + keep
 
 
-class ClaudeCliProvider:
+class ClaudeCliProvider(BaseLLMProvider):
     name = "claude_cli"
     capabilities = Capabilities(tools=False, vision=True, thinking=False, anthropic_tools=False)
 
@@ -70,10 +83,22 @@ class ClaudeCliProvider:
 
     @property
     def default_models(self) -> dict[str, str]:
+        """
+        PHASE 2 (ENVIRONMENT-ONLY):
+        Models come from LLMConfig.models, which are populated from environment variables only.
+        No fallback to settings or hardcoded defaults.
+
+        Commented out (Legacy):
+        # return {
+        #     "default": settings.anthropic_claude_model,
+        #     "planning": str(getattr(settings, "anthropic_planning_model", "") or ""),
+        #     "critique": str(getattr(settings, "anthropic_critique_model", "") or ""),
+        # }
+        """
         return {
-            "default": settings.anthropic_claude_model,
-            "planning": str(getattr(settings, "anthropic_planning_model", "") or ""),
-            "critique": str(getattr(settings, "anthropic_critique_model", "") or ""),
+            "default": self._config.models.get("default", ""),
+            "planning": self._config.models.get("planning", ""),
+            "critique": self._config.models.get("critique", ""),
         }
 
     def _binary(self) -> str | None:
@@ -94,7 +119,11 @@ class ClaudeCliProvider:
             raise RuntimeError("Anthropic bash / text-editor tools need LLM_PROVIDER=anthropic")
         binary = self._binary()
         if not binary:
-            raise RuntimeError("Claude CLI not found; install it or set claude_cli.path in config/model_config.yaml")
+           # raise RuntimeError("Claude CLI not found; install it or set claude_cli.path in config/model_config.yaml")
+            raise RuntimeError(
+                "Claude CLI not found. Install it from https://claude.ai/download "
+                "or set LLM_PROVIDER to a different provider in your .env file"
+            )
         model = str(kwargs.get("model") or self.default_models["default"])
         system = system_text(kwargs.get("system")) + (_NO_TOOLS_NOTE if kwargs.get("tools") else "")
         stdin_line = json.dumps({"type": "user", "message": {"role": "user", "content": collapse_messages(list(kwargs.get("messages") or []))}}) + "\n"

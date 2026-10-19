@@ -13,7 +13,9 @@ from src.agents.repair.pptx_critique_repair import (
     _load_run_storyline,
 )
 from src.core.config import settings
-from src.llm.claude import claude_generate_json
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.core.observability.otel_tracing import start_span
 
 _LOG = logging.getLogger(__name__)
@@ -75,9 +77,25 @@ def targeted_section_rewrite(
         + json.dumps(payload, ensure_ascii=False)
     )
     try:
-        obj = claude_generate_json(
-            system=_SECTION_REPAIR_SYSTEM, user=user, temperature=0.2, max_tokens=3000
+        # [DEPRECATED: Old claude_generate_json call]
+        # obj = claude_generate_json(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=3000,
+            temperature=0.2,
+            system=_SECTION_REPAIR_SYSTEM,
+            messages=[{"role": "user", "content": user}],
         )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            obj = _extract_first_json_object(text)
     except Exception as exc:  # noqa: BLE001 — repair is best-effort
         _LOG.warning("targeted section rewrite skipped: %s", exc)
         return md

@@ -43,16 +43,51 @@ def _reply(text: str | None = None, tool_calls: list | None = None, finish: str 
 
 
 def test_default_provider_is_anthropic_with_tiered_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("llm_provider", "llm_model", "llm_planning_model", "llm_critique_model", "llm_base_url", "llm_api_key"):
+     
+    """
+    PHASE 2 (ENVIRONMENT-ONLY):
+    Test that all required env vars must be set; no YAML fallback.
+    """
+    # Commented out (Legacy - expected all env vars empty to default to anthropic):
+    # for name in ("llm_provider", "llm_model", "llm_planning_model", "llm_critique_model", "llm_base_url", "llm_api_key"):
+    #     monkeypatch.setattr(settings, name, "")
+    # monkeypatch.setattr(settings, "anthropic_api_key", "")
+    # assert load_llm_config().provider == "anthropic"
+    # assert gateway.model_for("default") == settings.anthropic_claude_model
+    # assert gateway.model_for("planning") == settings.anthropic_planning_model
+    # assert gateway.capabilities().thinking is True
+    # assert gateway.is_enabled() is False  # no key
+    # monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
+    # assert gateway.is_enabled() is True
+
+    # NEW TEST (PHASE 2): Verify required env vars are validated
+    for name in ("llm_provider", "llm_model", "llm_api_key"):
         monkeypatch.setattr(settings, name, "")
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
-    assert load_llm_config().provider == "anthropic"
-    assert gateway.model_for("default") == settings.anthropic_claude_model
-    assert gateway.model_for("planning") == settings.anthropic_planning_model
-    assert gateway.capabilities().thinking is True
-    assert gateway.is_enabled() is False  # no key
-    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
-    assert gateway.is_enabled() is True
+
+    # Missing LLM_PROVIDER should raise ValueError
+    with pytest.raises(ValueError, match="LLM_PROVIDER environment variable is required"):
+        load_llm_config()
+
+    # Set provider but missing LLM_MODEL
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    with pytest.raises(ValueError, match="LLM_PROVIDER must be one of"):
+        load_llm_config()
+
+    # Set valid provider and model but missing API key
+    monkeypatch.setattr(settings, "llm_model", "claude-3-5-sonnet")
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    with pytest.raises(ValueError, match="LLM_API_KEY environment variable is required"):
+        load_llm_config()
+
+    # All required vars set -> should work
+    monkeypatch.setattr(settings, "llm_api_key", "sk-ant-v0-test")
+    monkeypatch.setattr(settings, "llm_planning_model", "claude-opus-4-1")
+    config = load_llm_config()
+    assert config.provider == "anthropic"
+    assert config.api_key == "sk-ant-v0-test"
+    assert config.models["default"] == "claude-3-5-sonnet"
+    assert config.models["planning"] == "claude-opus-4-1"
+
 
 
 def test_unknown_provider_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,10 +163,22 @@ def test_provider_errors_are_raised(openai_settings: None, monkeypatch: pytest.M
 
 
 def test_provider_without_tools_writes_in_one_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    PHASE 2 (ENVIRONMENT-ONLY):
+    Test claude_cli provider with required env vars set.
+    """
     from src.agents import tool_agent as claude_tools
     from src.llm import claude
 
+    # PHASE 2: Set required env vars for claude_cli
+    # (claude_cli doesn't need API_KEY, but still needs PROVIDER and MODEL)
     monkeypatch.setattr(settings, "llm_provider", "claude_cli")
+    monkeypatch.setattr(settings, "llm_model", "claude-3-5-sonnet-20241022")
+    monkeypatch.setattr(settings, "llm_api_key", "")  # Not needed for claude_cli
+
+    # Commented out (Legacy - used empty settings):
+    # monkeypatch.setattr(settings, "llm_provider", "claude_cli")
+
     assert gateway.capabilities().tools is False
     monkeypatch.setattr(claude_tools, "is_claude_enabled", lambda: True)
     monkeypatch.setattr(claude, "claude_generate", lambda **kwargs: "# written directly")

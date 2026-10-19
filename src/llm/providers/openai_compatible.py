@@ -12,6 +12,13 @@ from typing import Any
 
 import httpx
 
+# ORIGINAL CODE (commented):
+# from src.llm.capabilities import Capabilities
+# from src.llm.config import LLMConfig
+# from src.llm.providers._common import blocks, json_or_empty, message, system_text, tool_result_text
+
+# NEW CODE (inherit from BaseLLMProvider for factory pattern support):
+from src.llm.base_provider import BaseLLMProvider
 from src.llm.capabilities import Capabilities
 from src.llm.config import LLMConfig
 from src.llm.providers._common import blocks, json_or_empty, message, system_text, tool_result_text
@@ -88,7 +95,7 @@ def from_openai_response(data: dict[str, Any], model: str) -> Any:
     )
 
 
-class OpenAICompatibleProvider:
+class OpenAICompatibleProvider(BaseLLMProvider):
     name = "openai_compatible"
 
     def __init__(self, config: LLMConfig, *, transport: httpx.BaseTransport | None = None) -> None:
@@ -104,7 +111,19 @@ class OpenAICompatibleProvider:
 
     @property
     def default_models(self) -> dict[str, str]:
-        return {"default": "", "planning": "", "critique": ""}  # must be set in model_config.yaml or LLM_MODEL
+       """
+        PHASE 2 (ENVIRONMENT-ONLY):
+        Models must be explicitly set via environment variables (LLM_MODEL, etc.)
+        No fallback to hardcoded defaults.
+
+        Commented out (Legacy):
+        # return {"default": "", "planning": "", "critique": ""}  # must be set in model_config.yaml or LLM_MODEL
+        """
+       return {
+            "default": self._config.models.get("default", ""),
+            "planning": self._config.models.get("planning", ""),
+            "critique": self._config.models.get("critique", ""),
+        }
 
     def is_enabled(self) -> bool:
         # A local server needs no key, but then the address must be given explicitly.
@@ -122,7 +141,10 @@ class OpenAICompatibleProvider:
             raise RuntimeError("Anthropic bash / text-editor tools need LLM_PROVIDER=anthropic")
         model = str(kwargs.get("model") or self._config.models.get("default") or "")
         if not model:
-            raise RuntimeError("No model configured: set LLM_MODEL or models.default in config/model_config.yaml")
+            raise RuntimeError(
+                "No model configured. Set LLM_MODEL environment variable "
+                "(or LLM_PLANNING_MODEL, LLM_CRITIQUE_MODEL for tiered models)"
+            )
         payload: dict[str, Any] = {
             "model": model,
             "messages": to_openai_messages(kwargs.get("system"), list(kwargs.get("messages") or [])),

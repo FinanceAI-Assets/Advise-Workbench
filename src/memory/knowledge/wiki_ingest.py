@@ -14,6 +14,13 @@ from typing import Any
 
 from src.core.config import settings
 from src.core.storage import workspace_path
+from src.llm import gateway
+from src.llm.claude import (
+    claude_generate,
+    claude_generate_json,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
 
 _LOG = logging.getLogger(__name__)
 _schema_cache: dict = {}
@@ -634,7 +641,11 @@ def _read_frontmatter_field(page_file: Path, field: str) -> str | None:
     try:
         if not page_file.exists():
             return None
-        text = page_file.read_text(encoding="utf-8")
+        # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+        try:
+            text = page_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = page_file.read_text(encoding="latin-1", errors="ignore")
         fm = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
         if not fm:
             return None
@@ -668,7 +679,11 @@ def _weave_backlinks(wiki_dir: Any, new_page_ids: list, new_page_titles: dict) -
             if md_file.name in ("index.md", "log.md", "WIKI_SCHEMA.md"):
                 continue
             try:
-                text = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    text = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    text = md_file.read_text(encoding="latin-1", errors="ignore")
                 changed = False
                 for page_id, title in new_page_titles.items():
                     if md_file.stem == page_id:
@@ -725,7 +740,11 @@ def _weave_entity_backlinks(wiki_dir: Any, entities: list) -> int:
             if md_file.name in ("index.md", "log.md", "WIKI_SCHEMA.md"):
                 continue
             try:
-                text = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    text = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    text = md_file.read_text(encoding="latin-1", errors="ignore")
                 changed = False
 
                 for entity_name, page_id in entity_map.items():
@@ -774,7 +793,11 @@ def _compound_update_entity_page(
     section when Claude is unavailable.
     """
     try:
-        existing_text = efile.read_text(encoding="utf-8")
+        # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+        try:
+            existing_text = efile.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            existing_text = efile.read_text(encoding="latin-1", errors="ignore")
         # Strip frontmatter for the LLM, restore it afterwards
         fm_match = re.match(r"(^---\n.*?\n---\n?)(.*)", existing_text, re.DOTALL)
         frontmatter = fm_match.group(1) if fm_match else ""
@@ -787,9 +810,14 @@ def _compound_update_entity_page(
             frontmatter = frontmatter.removesuffix("---\n") + f'\nlast_updated: "{now}"\n---\n'
 
         try:
-            from src.llm.claude import claude_generate, is_claude_enabled
-            if not is_claude_enabled():
-                raise RuntimeError("Claude disabled")
+            # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+            # from src.llm.claude import claude_generate, is_claude_enabled
+            # [DEPRECATED: Old check - kept for reference]
+            # if not is_claude_enabled():
+            #     raise RuntimeError("Model provider not configured")
+            # [NEW: Gateway-based provider-agnostic check]
+            if not gateway.is_enabled():
+                raise RuntimeError("Model provider not configured")
 
             updated_body = claude_generate(
                 system=(
@@ -849,8 +877,12 @@ def _update_wiki_pages(extracted: dict, wiki_type: str, project_id: str | None) 
             _LOG.error(f"[INGEST] _update_wiki_pages received empty extracted content. extracted={extracted}")
             return {"created": 0, "updated": 0, "page_ids": [], "corrections": []}
 
-        from src.llm.claude import claude_generate_json, is_claude_enabled
-        from src.core.storage import workspace_path
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import claude_generate_json, is_claude_enabled
+        # [DEPRECATED: Old check - kept for reference]
+        # if not is_claude_enabled():
+        #     # fallback or return early
+        # [NEW: Gateway-based provider-agnostic check is implicit - LLM calls will fail if unavailable]
 
         if wiki_type == "leading_practice":
             wiki_dir = workspace_path("leading_practices") / "wiki"
@@ -893,7 +925,8 @@ def _update_wiki_pages(extracted: dict, wiki_type: str, project_id: str | None) 
         entities: list = []
         related_pages: list[dict[str, str]] = []
 
-        if is_claude_enabled():
+        # [NEW: Gateway-based provider-agnostic check]
+        if gateway.is_enabled():
             try:
                 # Load schema for injection
                 schema = _load_wiki_schema(wiki_type, project_id)

@@ -165,7 +165,10 @@ def _detect_communities(
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md", "relationships.json"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 import re
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id.replace("_", " ").title()

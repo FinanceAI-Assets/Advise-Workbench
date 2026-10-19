@@ -527,7 +527,10 @@ def _build_and_persist_relationships(
                 continue
 
             page_id = md_file.stem
-            content = md_file.read_text(encoding="utf-8")
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
 
             # Extract title from frontmatter
             title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
@@ -737,7 +740,10 @@ def _detect_changed_pages(wiki_type: str, project_id: str | None) -> tuple:
                 continue
 
             page_id = md_file.stem
-            content = md_file.read_text(encoding="utf-8")
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
             content_hash = _compute_content_hash(content)
 
             # Extract title from frontmatter
@@ -972,7 +978,11 @@ def load_wiki_graph(wiki_type: str, project_id: str | None) -> tuple:
         if relationships_file is None:
             return nx.Graph(), {}
 
-        rels_data = _normalize_relationships_payload(json.loads(relationships_file.read_text()))
+        try:
+            rels_text = relationships_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            rels_text = relationships_file.read_text(encoding="latin-1", errors="ignore")
+        rels_data = _normalize_relationships_payload(json.loads(rels_text))
         relationships = rels_data.get("relationships", [])
 
         # Build graph
@@ -983,7 +993,10 @@ def load_wiki_graph(wiki_type: str, project_id: str | None) -> tuple:
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md", "relationships.json"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id.replace("_", " ").title()
                 G.add_node(page_id)
