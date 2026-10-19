@@ -14,6 +14,7 @@ from sqlalchemy import select
 from src.core.config import settings
 from src.core.db.models import RunTask
 from src.core.db.session import SessionLocal
+from src.llm import gateway
 # [DEPRECATED: Hardcoded imports] Use gateway for provider-agnostic calls
 # from src.llm.claude import claude_generate, is_claude_enabled
 

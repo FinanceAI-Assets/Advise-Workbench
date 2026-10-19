@@ -18,7 +18,6 @@ from src.prompts.prompt_hygiene import UNTRUSTED_SKILL_SYSTEM_NOTE, wrap_untrust
 from src.core.config import settings
 from src.core.state import ProcessModel
 from src.llm import gateway
-from src.llm import gateway
 from src.llm.claude import (  # noqa: F401 — the agents reach these as _shared.<name>
     claude_generate,
     claude_generate_json,
