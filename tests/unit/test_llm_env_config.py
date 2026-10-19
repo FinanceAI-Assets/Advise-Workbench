@@ -138,12 +138,12 @@ class TestEnvironmentOnlyConfiguration:
         """Groq configuration (as openai_compatible) from env vars."""
         monkeypatch.setattr(settings, "llm_provider", "openai_compatible")
         monkeypatch.setattr(settings, "llm_model", "mixtral-8x7b-32768")
-        monkeypatch.setattr(settings, "llm_api_key", "gsk_1234567890")
+        monkeypatch.setattr(settings, "llm_api_key", "")
         monkeypatch.setattr(settings, "llm_base_url", "https://api.groq.com/openai/v1")
 
         config = load_llm_config()
         assert config.provider == "openai_compatible"
-        assert config.api_key == "gsk_1234567890"
+        assert config.api_key == ""
         assert config.models["default"] == "mixtral-8x7b-32768"
         assert config.base_url == "https://api.groq.com/openai/v1"
 

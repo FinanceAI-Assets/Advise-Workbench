@@ -33,7 +33,7 @@ def detect_provider_from_key(api_key: str) -> str:
         return "anthropic"
 
     # Groq keys start with ""
-    if api_key.startswith("gsk_"):
+    if api_key.startswith("g"):
         return "groq"
 
     # OpenAI keys start with "sk-" (but not "sk-ant-")

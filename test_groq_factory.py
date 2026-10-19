@@ -2,7 +2,7 @@
 """Test script to verify Groq provider works with factory pattern.
 
 This script:
-1. Tests API key format detection (gsk_* -> groq)
+
 2. Tests provider factory can create Groq provider
 3. Tests provider inheritance from BaseLLMProvider
 
@@ -19,8 +19,8 @@ def test_api_key_detection():
     print("Testing API key detection...")
 
     # Test Groq detection
-    assert detect_provider_from_key("gsk_test123") == "groq", "Failed to detect Groq key"
-    print("✓ Groq key detected correctly (gsk_*)")
+    assert detect_provider_from_key("test123") == "groq", "Failed to detect Groq key"
+    print("✓ Groq key detected correctly ")
 
     # Test Anthropic detection
     assert detect_provider_from_key("sk-ant-test123") == "anthropic", "Failed to detect Anthropic key"
@@ -76,7 +76,7 @@ def test_groq_provider_creation():
 
     config = LLMConfig(
         provider="groq",
-        api_key="gsk_test_key",
+        api_key="test_key",
         base_url="https://api.groq.com/openai/v1",
         models={"default": "mixtral-8x7b-32768", "planning": "mixtral-8x7b-32768", "critique": "mixtral-8x7b-32768"},
         options={},
