@@ -603,8 +603,14 @@ def _propose_discovery_questions(
             ),
             #temperature=0.4,
             #max_tokens=200,
-        ).strip()
-    except Exception:
+        )
+        message = _extract_final_text_from_message(msg).strip()
+    except Exception as exc:
+        _LOG.error(
+            f"Discovery questions LLM call failed in _propose_discovery_questions: "
+            f"{exc.__class__.__name__}: {exc}",
+            exc_info=True
+        )
         q_count = len(questions)
         lead = "One more thing" if q_count == 1 else f"{q_count} things still needed"
         message = f"{lead}:\n- " + "\n- ".join(questions)
