@@ -18,3 +18,4 @@ export { SelectedReviewPanel } from "@/components/admin-console/SelectedReviewPa
 export { PolicyControlsPanel } from "@/components/admin-console/PolicyControlsPanel";
 export { RoleAccessTable } from "@/components/admin-console/RoleAccessTable";
 export { AuditTrailPanel } from "@/components/admin-console/AuditTrailPanel";
+export { UploadSourcesModal } from "@/components/admin-console/UploadSourcesModal";

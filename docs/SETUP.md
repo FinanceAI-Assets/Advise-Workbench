@@ -61,6 +61,33 @@ For monitoring (traces, metrics and logs in OpenObserve), run `./scripts/openobs
 
 Sign in with any email and password; the first sign-in creates the account.
 
+### Microsoft Entra ID sign-in
+
+Microsoft sign-in is optional and is enabled when both `MICROSOFT_SSO_CLIENT_ID` and
+`MICROSOFT_SSO_CLIENT_SECRET` are configured. In the Microsoft Entra admin center, register a
+web application and add this exact redirect URI:
+
+```text
+http://localhost:8000/api/auth/microsoft/callback
+```
+
+Then add the following values to the root `.env` and restart the backend:
+
+```dotenv
+MICROSOFT_SSO_CLIENT_ID=<application-client-id>
+MICROSOFT_SSO_CLIENT_SECRET=<client-secret-value>
+MICROSOFT_SSO_TENANT_ID=organizations
+MICROSOFT_SSO_REDIRECT_URI=http://localhost:8000/api/auth/microsoft/callback
+MICROSOFT_SSO_FRONTEND_REDIRECT_URI=http://localhost:3000/login
+```
+
+The registered account must match `AUTH_ALLOWED_EMAIL_DOMAINS`. New Microsoft users are
+provisioned when `AUTH_ALLOW_SELF_SIGNUP=true`; with it disabled, provision the user through
+the existing database/admin process first. The callback validates the
+authorization state, nonce, issuer, audience, signature, and token expiry before issuing the
+same Advise Workbench access and refresh tokens used by password sign-in. For a deployed
+environment, use the public HTTPS callback and frontend URLs registered in Entra ID.
+
 ## 5. First test
 
 Sample documents for a fictional client are in `data/examples/northwind-p2p/`. Upload files `01`, `02` and `05` from `source-documents/`, then paste a scenario from `run-scenarios/README.md` into the chat. See [07-user-guide/using-the-app.md](07-user-guide/using-the-app.md).
@@ -129,4 +156,26 @@ make seed.demo.clear        # removes only what the seed created
 
 Sign-in is limited to the domains in `AUTH_ALLOWED_EMAIL_DOMAINS` (default `deloitte.com`); the demo accounts are created on the first of them. They are fictional, so load them only into a local or demonstration database.
 
-To make one of your own accounts an administrator, set `is_admin` on its row in `users`. The seed refuses to run when `ADVISE_WORKBENCH_ENV` is `production`.
+Platform access uses the `users.role` column: `user` or `admin`.
+
+For local development only, `ADVISE_WORKBENCH_ENV=development` allows any authenticated
+user to open and exercise the Admin console so the screens can be developed without
+promoting every test account. This override is disabled automatically in staging and
+production, where the `admin` role is required.
+Run the migration after upgrading:
+
+```bash
+alembic upgrade head
+```
+
+New accounts are created as users; they cannot self-select administrator access. An existing
+administrator can manage roles through the admin-only API:
+
+```text
+GET   /api/admin/users
+PATCH /api/admin/users/{user_id}/role
+      {"role": "user" | "admin"}
+```
+
+To bootstrap an administrator locally, set `is_admin` on its row in `users` (or set
+`role` to `admin`). The seed refuses to run when `ADVISE_WORKBENCH_ENV` is `production`.

@@ -1,9 +1,11 @@
 "use client";
 
+import { Upload } from "lucide-react";
 import { useState } from "react";
 
-import { IngestionJobPanel, PracticeInventoryTable, QualityReviewPanel } from "@/components/admin-console";
+import { IngestionJobPanel, PracticeInventoryTable, QualityReviewPanel, UploadSourcesModal } from "@/components/admin-console";
 import { EngagementStepper } from "@/components/engagements";
+import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -16,6 +18,8 @@ export default function AdminConsoleLibraryPage() {
   const [query, setQuery] = useState("");
   const [lifecycle, setLifecycle] = useState("all");
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
   if (library.isPending) return <PageSkeleton />;
   const data = library.data;
@@ -42,6 +46,12 @@ export default function AdminConsoleLibraryPage() {
       breadcrumb="Admin console / Leading Practice Library"
       title="Library management"
       subtitle="Ingest, verify and publish versioned practices. Only approved releases are available for user retrieval."
+      actions={
+        <Button type="button" className="flex items-center gap-2" onClick={() => setUploadOpen(true)}>
+          <Upload size={16} aria-hidden />
+          Upload sources
+        </Button>
+      }
     >
       <EngagementStepper steps={data.pipelineSteps} />
 
@@ -117,6 +127,18 @@ export default function AdminConsoleLibraryPage() {
         rows={data.ingestionJobs}
         empty="No ingestion jobs recorded."
       />
+      {uploadMessage ? <p className="text-sm text-[var(--accent-green-dark)]">{uploadMessage}</p> : null}
+      {uploadOpen ? (
+        <UploadSourcesModal
+          onClose={() => setUploadOpen(false)}
+          onStartExtraction={(fileCount) => {
+            setUploadOpen(false);
+            setUploadMessage(
+              `${fileCount} source${fileCount === 1 ? "" : "s"} ready for extraction. Source upload processing will appear in the ingestion jobs list.`,
+            );
+          }}
+        />
+      ) : null}
     </PageFrame>
   );
 }

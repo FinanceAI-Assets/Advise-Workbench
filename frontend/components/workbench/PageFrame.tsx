@@ -17,13 +17,13 @@ export function PageFrame({
   children: ReactNode;
 }) {
   return (
-    <main className="space-y-6">
-      <nav className="text-xs uppercase tracking-wide text-[var(--text-muted)]" aria-label="Breadcrumb">
+    <main className="admin-page space-y-6">
+      <nav className="admin-breadcrumb text-xs uppercase tracking-wide text-[var(--text-muted)]" aria-label="Breadcrumb">
         {breadcrumb}
       </nav>
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--text-default)]">{title}</h1>
+          <h1 className="admin-page-title text-2xl font-semibold text-[var(--text-default)]">{title}</h1>
           {subtitle ? <p className="mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p> : null}
         </div>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
@@ -39,7 +39,7 @@ export function PageFrame({
 
 export function PageSkeleton() {
   return (
-    <main className="space-y-6" aria-busy>
+    <main className="admin-page space-y-6" aria-busy>
       <Skeleton className="h-4 w-40" />
       <Skeleton className="h-9 w-80" />
       <Skeleton className="h-24 w-full" />

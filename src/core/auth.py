@@ -14,6 +14,12 @@ from src.core.db.models import Membership, RefreshToken, User
 from src.core.db.session import get_db
 from src.core.cache import cache_service
 
+PLATFORM_ROLES = {"user", "admin"}
+
+
+def development_admin_access_enabled() -> bool:
+    return (settings.advise_workbench_env or "development").strip().lower() == "development"
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -123,7 +129,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exc
     cache_service.set(
         f"user_jwt:{email}",
-        {"id": user.id, "email": user.email, "hashed_password": user.hashed_password},
+        {
+            "id": user.id,
+            "email": user.email,
+            "hashed_password": user.hashed_password,
+            "role": "admin" if user.is_admin else (user.role or "user"),
+        },
         ttl_seconds=300,
     )
     return user
@@ -182,11 +193,31 @@ def require_project_role(project_id: str, allowed_roles: set[str], user: User, d
 
 
 def require_admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
-    """Platform administrators only. Reads the row fresh: the cached user has no admin flag."""
+    """Require admin access, with an explicit development-only user override."""
     row = db.scalar(select(User).where(User.id == user.id))
-    if row is None or not row.is_admin:
+    if row is not None and development_admin_access_enabled():
+        return row
+    if row is None or not (row.is_admin or row.role == "admin"):
         raise HTTPException(status_code=403, detail="Administrator access required")
+    if row.role != "admin":
+        row.role = "admin"
+        db.commit()
     return row
+
+
+def require_platform_role(*allowed_roles: str):
+    invalid = set(allowed_roles) - PLATFORM_ROLES
+    if invalid:
+        raise ValueError(f"Unknown platform role(s): {', '.join(sorted(invalid))}")
+
+    def dependency(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+        row = db.scalar(select(User).where(User.id == user.id))
+        role = "admin" if row and (row.is_admin or row.role == "admin") else (row.role if row else "")
+        if row is None or role not in allowed_roles:
+            raise HTTPException(status_code=403, detail="Insufficient platform permissions")
+        return row
+
+    return dependency
 
 
 def allowed_email_domains() -> list[str]:
@@ -219,7 +250,36 @@ def ensure_user(email: str, password: str, db: Session) -> User:
         return existing
     if not settings.auth_allow_self_signup:
         raise invalid
-    created = User(id=f"u_{uuid.uuid4().hex[:10]}", email=email, hashed_password=get_password_hash(password))
+    created = User(
+        id=f"u_{uuid.uuid4().hex[:10]}",
+        email=email,
+        hashed_password=get_password_hash(password),
+        role="user",
+    )
+    db.add(created)
+    db.commit()
+    return created
+
+
+def ensure_oauth_user(email: str, full_name: str | None, db: Session) -> User:
+    """Find or provision an account authenticated by a trusted OIDC provider."""
+    email = email.strip().lower()
+    require_allowed_email_domain(email)
+    existing = db.scalar(select(User).where(func.lower(User.email) == email))
+    if existing:
+        if full_name and not existing.full_name:
+            existing.full_name = full_name.strip()[:255] or None
+            db.commit()
+        return existing
+    if not settings.auth_allow_self_signup:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account is not provisioned")
+    created = User(
+        id=f"u_{uuid.uuid4().hex[:10]}",
+        email=email,
+        hashed_password=get_password_hash(uuid.uuid4().hex),
+        full_name=(full_name or "").strip()[:255] or None,
+        role="user",
+    )
     db.add(created)
     db.commit()
     return created

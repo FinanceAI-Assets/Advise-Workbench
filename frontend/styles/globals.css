@@ -67,6 +67,54 @@ select {
   background: var(--surface-muted);
 }
 
+/* The administrator workspace is intentionally denser than the end-user
+   workspace so operational tables and review panels remain visible together. */
+.admin-console-shell {
+  --admin-content-bg: #f3f5f2;
+}
+
+.admin-console-shell .admin-console-main {
+  max-width: none;
+  background: var(--admin-content-bg);
+}
+
+.admin-console-shell .admin-page {
+  gap: 16px;
+}
+
+.admin-console-shell .admin-breadcrumb {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.admin-console-shell .admin-page-title {
+  font-size: 24px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.admin-console-shell .deloitte-surface,
+.admin-console-shell [class*="rounded-lg"][class*="border"] {
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.admin-console-shell table {
+  font-size: 11px;
+}
+
+.admin-console-shell th {
+  font-size: 9px;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.admin-console-shell td,
+.admin-console-shell th {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;

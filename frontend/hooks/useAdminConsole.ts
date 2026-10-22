@@ -43,7 +43,7 @@ function useAdminQuery<T>(key: unknown[], path: string) {
   const { api, token, user } = useAuth();
   return useQuery({
     queryKey: ["admin", ...key],
-    enabled: Boolean(token) && Boolean(user?.isAdmin),
+    enabled: Boolean(token) && Boolean(user),
     staleTime: 15 * 1000,
     queryFn: () => fetchJson<T>(api, path, "Failed to load the admin console"),
   });

@@ -145,7 +145,16 @@ export type ExportArtifact = {
 
 export type ExportReadiness = { artifacts: ExportArtifact[]; ready: boolean; blockers: string[]; message: string };
 
-export type AuthUser = { id: string; email: string; name: string; jobTitle: string; isAdmin: boolean };
+export type PlatformRole = "user" | "admin";
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  jobTitle: string;
+  isAdmin: boolean;
+  role: PlatformRole;
+  canSwitchAdmin: boolean;
+};
 
 export type ConversationPhase = {
   label: string;

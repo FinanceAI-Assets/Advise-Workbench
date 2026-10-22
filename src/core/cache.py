@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 import time
 
 import redis
@@ -13,6 +14,7 @@ class CacheService:
     def __init__(self) -> None:
         # In-memory entries: key -> (expires_at_monotonic, json_str)
         self._mem: dict[str, tuple[float, str]] = {}
+        self._mem_lock = threading.Lock()
         self._redis = None
         try:
             self._redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
@@ -52,6 +54,19 @@ class CacheService:
         else:
             ttl = max(1, int(ttl_seconds))
             self._mem[key] = (time.monotonic() + float(ttl), raw)
+
+    def pop(self, key: str) -> dict | None:
+        """Read and delete an entry atomically for one-time exchange values."""
+        if self._redis:
+            with self._redis.pipeline(transaction=True) as pipe:
+                raw = pipe.get(key).delete(key).execute()[0]
+            return json.loads(raw) if raw else None
+        with self._mem_lock:
+            ent = self._mem.pop(key, None)
+        if not ent:
+            return None
+        exp_mono, raw = ent
+        return None if time.monotonic() >= exp_mono else json.loads(raw)
 
 
 cache_service = CacheService()

@@ -35,7 +35,7 @@ from src.app.api.engagements import (
     records,
 )
 from src.app.api.reviews import _notify, _type_label
-from src.core.auth import require_admin
+from src.core.auth import PLATFORM_ROLES, require_admin
 from src.core.db.models import (
     ActivityEvent,
     EngagementMeta,
@@ -50,6 +50,56 @@ from src.core.db.models import (
 from src.core.db.session import get_db
 
 router = APIRouter()
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str
+
+
+@router.get("/users")
+def list_platform_users(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[dict[str, str | bool]]:
+    """List users and their platform roles for administrator access management."""
+    rows = db.scalars(select(User).order_by(User.email.asc())).all()
+    return [
+        {
+            "id": row.id,
+            "email": row.email,
+            "name": (row.full_name or "").strip() or row.email.split("@")[0],
+            "role": "admin" if row.is_admin else (row.role or "user"),
+            "isAdmin": bool(row.is_admin or row.role == "admin"),
+        }
+        for row in rows
+    ]
+
+
+@router.patch("/users/{user_id}/role")
+def update_platform_user_role(
+    user_id: str,
+    body: UpdateUserRoleRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, str | bool]:
+    """Assign a platform role; admin access is never self-granted."""
+    if body.role not in PLATFORM_ROLES:
+        raise HTTPException(status_code=422, detail=f"role must be one of: {', '.join(sorted(PLATFORM_ROLES))}")
+    row = db.scalar(select(User).where(User.id == user_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if row.id == admin.id and body.role != "admin":
+        raise HTTPException(status_code=400, detail="Administrators cannot remove their own admin access")
+    row.role = body.role
+    row.is_admin = body.role == "admin"
+    db.commit()
+    return {
+        "id": row.id,
+        "email": row.email,
+        "name": (row.full_name or "").strip() or row.email.split("@")[0],
+        "role": row.role,
+        "isAdmin": bool(row.is_admin),
+    }
 
 _OPEN = {"Approved", "Draft"}
 _SEED_HINT = "Governance reference data is not loaded. Run `make seed.demo` to load the sample set."
