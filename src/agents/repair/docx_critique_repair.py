@@ -19,7 +19,7 @@ from src.agents.tool_agent import _record_message_usage, _extract_final_text_fro
 from src.core.observability.otel_tracing import start_span
 
 _LOG = logging.getLogger(__name__)
-
+ 
 _SECTION_REPAIR_SYSTEM = (
     "You revise specific sections of a Markdown business document. You receive flagged "
     "H2 sections plus per-section fix instructions. Return ONLY JSON "

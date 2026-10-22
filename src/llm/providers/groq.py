@@ -9,9 +9,11 @@ Groq provides fast LLM inference. This provider supports:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from src.llm.base_provider import BaseLLMProvider
+from src.llm.capabilities import Capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,9 @@ class GroqProvider(BaseLLMProvider):
     """
 
     name = "groq"
+    # NEW: Add capabilities property required by gateway.py
+    # Groq supports function calling (tools), but not vision or extended thinking
+    capabilities = Capabilities(tools=True, vision=False, thinking=False, anthropic_tools=False)
 
     def __init__(self, config: Any) -> None:
         """Initialize Groq provider.
@@ -60,7 +65,7 @@ class GroqProvider(BaseLLMProvider):
         """Check if Groq provider is configured with API key."""
         return bool(self.api_key)
 
-    def create_message(self, stream: bool = False, beta: bool = False, on_event: Any = None, **kwargs: Any) -> Any:
+    def create_message(self, stream: bool = False, beta: bool = False, on_event: Callable[[], None] | None = None, **kwargs: Any) -> Any:
         """Create a message using Groq API.
 
         Args:
@@ -79,30 +84,51 @@ class GroqProvider(BaseLLMProvider):
                 "Groq SDK not installed. Install with: pip install groq"
             )
 
-        client = Groq(api_key=self.api_key)
+        try:
+            client = Groq(api_key=self.api_key)
 
-        # Extract parameters
-        model = kwargs.get("model", self.default_models["default"])
-        messages = kwargs.get("messages", [])
-        temperature = kwargs.get("temperature", 0.2)
-        max_tokens = kwargs.get("max_tokens", 2048)
+            # Extract parameters
+            model = kwargs.get("model", self.default_models["default"])
+            messages = kwargs.get("messages", [])
+            temperature = kwargs.get("temperature", 0.2)
+            max_tokens = kwargs.get("max_tokens", 2048)
 
-        # Build chat completion request
-        chat_params = {
-            "model": model,
-            "messages": self._normalize_messages(messages),
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+            # Build chat completion request
+            chat_params = {
+                "model": model,
+                "messages": self._normalize_messages(messages),
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
 
-        # Add optional parameters if provided
-        if "top_p" in kwargs:
-            chat_params["top_p"] = kwargs["top_p"]
+            # Add optional parameters if provided
+            if "top_p" in kwargs:
+                chat_params["top_p"] = kwargs["top_p"]
 
-        # Create message
-        response = client.chat.completions.create(**chat_params)
+            # NEW: Support streaming requests using Groq SDK's stream context manager
+            if stream:
+                logger.debug(f"Creating streaming message with Groq (model={model})")
+                with client.chat.completions.stream(**chat_params) as response_stream:
+                    if on_event:
+                        on_event()
+                    # Get the final message after streaming completes
+                    response = response_stream.get_final_message()
+                    if on_event:
+                        on_event()
+                    return self._normalize_response(response)
+            else:
+                # Original non-streaming path
+                logger.debug(f"Creating non-streaming message with Groq (model={model})")
+                response = client.chat.completions.create(**chat_params)
+                return self._normalize_response(response)
 
-        return self._normalize_response(response)
+        except Exception as exc:
+            # NEW: Log the actual error so Sheldon can properly handle failures
+            logger.error(
+                f"Groq API call failed: {exc.__class__.__name__}: {exc}",
+                exc_info=True
+            )
+            raise
 
     def _normalize_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         """Convert message format to Groq/OpenAI format.
@@ -140,26 +166,44 @@ class GroqProvider(BaseLLMProvider):
         """Normalize Groq response to standard format.
 
         Returns response with:
-        - content: list of content blocks
+        - content: list of content blocks (Anthropic-style)
         - usage: token usage info
         - stop_reason: why generation stopped
         """
         class NormalizedResponse:
             def __init__(self, groq_response: Any) -> None:
-                # Extract text content
+                # Extract text content from first choice
                 self.content = []
-                if groq_response.choices and len(groq_response.choices) > 0:
+                self.stop_reason = "stop"  # Default stop reason
+
+                # NEW: Add validation and detailed logging for response processing
+                if not groq_response.choices or len(groq_response.choices) == 0:
+                    logger.warning("Groq response has no choices")
+                else:
                     choice = groq_response.choices[0]
-                    if hasattr(choice.message, "content") and choice.message.content:
-                        self.content.append({
-                            "type": "text",
-                            "text": choice.message.content,
-                        })
 
-                # Extract stop reason
-                self.stop_reason = getattr(choice, "finish_reason", "stop") or "stop"
+                    # Extract message content
+                    if hasattr(choice, "message") and choice.message:
+                        message_content = getattr(choice.message, "content", None)
+                        if message_content:
+                            logger.debug(f"Extracted Groq message content: {len(str(message_content))} chars")
+                            self.content.append({
+                                "type": "text",
+                                "text": str(message_content),
+                            })
+                        else:
+                            logger.warning("Groq message has no content")
+                    else:
+                        logger.warning("Groq choice has no message")
 
-                # Extract usage
+                    # Extract stop reason (original code had undefined 'choice' if no choices)
+                    if hasattr(choice, "finish_reason"):
+                        self.stop_reason = choice.finish_reason or "stop"
+
+                # Extract usage information
                 self.usage = groq_response.usage if hasattr(groq_response, "usage") else None
+
+                if not self.content:
+                    logger.warning("Normalized response has empty content - Sheldon may fall back to generic message")
 
         return NormalizedResponse(response)

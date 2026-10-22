@@ -72,20 +72,44 @@ def to_openai_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
 
 
 def from_openai_response(data: dict[str, Any], model: str) -> Any:
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # NEW: Debug logging to see what Groq returns
+    logger.debug(f"OpenAI-compatible response data: {str(data)[:500]}")
+
     choice = (data.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     content: list[dict[str, Any]] = []
     text = msg.get("content")
+
+    # NEW: Log extracted text
+    logger.debug(f"Extracted text from response: {repr(text)[:200]}")
+
     if isinstance(text, list):  # some servers return content parts
         text = "".join(str(p.get("text", "")) for p in text if isinstance(p, dict))
     if text:
         content.append({"type": "text", "text": str(text)})
+    else:
+        # NEW: Fallback to reasoning field if content is empty (Groq extended thinking mode)
+        reasoning = msg.get("reasoning", "")
+        if reasoning:
+            logger.debug(f"Using reasoning field as fallback content (Groq extended thinking)")
+            content.append({"type": "text", "text": str(reasoning)})
+        else:
+            # NEW: Log when no text content is found
+            logger.warning(f"No text content found in response. Message: {repr(msg)[:200]}, Choices: {data.get('choices')}")
+
     for call in msg.get("tool_calls") or []:
         fn = call.get("function") or {}
         content.append({"type": "tool_use", "id": call.get("id"), "name": fn.get("name"), "input": json_or_empty(fn.get("arguments"))})
     finish = choice.get("finish_reason")
     stop = "tool_use" if any(b["type"] == "tool_use" for b in content) else "max_tokens" if finish == "length" else "end_turn"
     usage = data.get("usage") or {}
+
+    # NEW: Log final result
+    logger.debug(f"Final content blocks: {len(content)}, stop_reason: {stop}")
+
     return message(
         content=content,
         stop_reason=stop,
@@ -162,10 +186,29 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         timeout = float(kwargs.get("timeout") or 120.0)
         if on_event:
             on_event()
+
+        # NEW: Add debug logging for Groq API calls
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Calling {self.name} API at {url} with model={model}")
+
         with httpx.Client(timeout=max(timeout, 120.0), transport=self._transport) as client:
             response = client.post(url, headers=headers, json=payload)
         if on_event:
             on_event()
+
+        # NEW: Log response status
+        logger.debug(f"{self.name} response status: {response.status_code}")
+
+        # Original code commented for reference
+        # if response.status_code >= 400:
+        #     raise RuntimeError(f"{self.name} request failed ({response.status_code}): {response.text[:500]}")
+        # return from_openai_response(response.json(), model)
+
         if response.status_code >= 400:
+            logger.error(f"{self.name} request failed ({response.status_code}): {response.text[:500]}")
             raise RuntimeError(f"{self.name} request failed ({response.status_code}): {response.text[:500]}")
-        return from_openai_response(response.json(), model)
+
+        response_data = response.json()
+        logger.debug(f"{self.name} response JSON (first 500 chars): {str(response_data)[:500]}")
+        return from_openai_response(response_data, model)

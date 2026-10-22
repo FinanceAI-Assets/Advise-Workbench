@@ -586,7 +586,9 @@ def _propose_discovery_questions(
         from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
         msg = gateway.create_message(
             model=gateway.model_for("default"),
-            max_tokens=200,
+            # ORIGINAL: max_tokens=200 (too low for Groq's extended reasoning mode - hits 'length' finish reason)
+            # max_tokens=200,
+            max_tokens=1000,  # NEW: Increased for Groq models with reasoning/thinking capabilities
             temperature=0.4,
             #system=(
             system=(
