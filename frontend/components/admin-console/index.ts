@@ -19,3 +19,11 @@ export { PolicyControlsPanel } from "@/components/admin-console/PolicyControlsPa
 export { RoleAccessTable } from "@/components/admin-console/RoleAccessTable";
 export { AuditTrailPanel } from "@/components/admin-console/AuditTrailPanel";
 export { UploadSourcesModal } from "@/components/admin-console/UploadSourcesModal";
+export {
+  ApprovePublishTab,
+  ExtractChunkTab,
+  IndexValidateTab,
+  QualityGatesTab,
+} from "@/components/admin-console/LibraryPipelineTabs";
+export { RequestCorrectionModal } from "@/components/admin-console/RequestCorrectionModal";
+export { LibraryApprovalControls, PublishControl } from "@/components/admin-console/LibraryApprovalControls";

@@ -14,9 +14,12 @@ const CIRCLE_CLASS: Record<EngagementStep["status"], string> = {
 export function EngagementStepper({
   steps,
   onSelect,
+  activeId,
 }: {
   steps: EngagementStep[];
   onSelect?: (stepId: string) => void;
+  /** The step whose view is open; highlighted when the stepper is used as navigation. */
+  activeId?: string;
 }) {
   return (
     <Card className="flex flex-wrap items-center gap-4 p-4">
@@ -27,7 +30,11 @@ export function EngagementStepper({
             variant="ghost"
             disabled={!onSelect}
             onClick={() => onSelect?.(step.id)}
-            className="flex items-center gap-2 p-1 text-left font-normal disabled:cursor-default disabled:opacity-100"
+            aria-current={step.id === activeId ? "step" : undefined}
+            className={cn(
+              "flex items-center gap-2 p-1 text-left font-normal disabled:cursor-default disabled:opacity-100",
+              step.id === activeId && "bg-[var(--surface-muted)] ring-1 ring-[var(--accent-green)]"
+            )}
           >
             <span
               className={cn(

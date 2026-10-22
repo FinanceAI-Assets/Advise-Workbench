@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -22,6 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.app.api import admin_library
 from src.app.api.engagements import (
     MEMBER_ROLES,
     _code,
@@ -103,6 +105,16 @@ def update_platform_user_role(
 
 _OPEN = {"Approved", "Draft"}
 _SEED_HINT = "Governance reference data is not loaded. Run `make seed.demo` to load the sample set."
+# The library's sample walkthrough, shown for practices that have no uploaded source. It is the fixture the demo
+# seed loads, read directly so the screen works on an unseeded database or one seeded before a section existed.
+_LIBRARY_FIXTURE = Path(__file__).resolve().parents[3] / "data" / "seed" / "workbench" / "admin_library.json"
+
+
+def _library_sample() -> dict:
+    try:
+        return json.loads(_LIBRARY_FIXTURE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 
 def _screen(db: Session, name: str, *, required: bool = False) -> dict:
@@ -405,23 +417,21 @@ def admin_add_member(
 
 
 @router.get("/library")
-def library_management(admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
-    screen = _screen(db, "admin_library", required=True)
-    practices = db.scalars(select(LpPractice).order_by(LpPractice.id)).all()
+def library_management(
+    practice: str = "", admin: User = Depends(require_admin), db: Session = Depends(get_db)
+) -> dict:
+    """Library pipeline for one practice: its latest upload when it has one, otherwise the sample walkthrough."""
+    screen = {**_library_sample(), **_screen(db, "admin_library")}
+    inventory = admin_library.inventory_rows(db)
+    sections = admin_library.library_sections(db, practice.strip().lower() or None)
     return {
         **screen,
-        "practiceInventoryTotal": f"{len(practices)} practices",
-        "practiceInventory": [
-            {
-                "id": p.id,
-                "practiceSource": f"{p.title} · {p.id.upper()}",
-                "version": p.version_label,
-                "indexing": "Indexed",
-                "lifecycle": p.status,
-            }
-            for p in practices
-        ],
-        "ingestionJobs": records(db, "ingestion_jobs"),
+        "selectedPracticeId": screen.get("qualityReview", {}).get("id", ""),
+        "pipelineSource": "sample",
+        **(sections or {}),
+        "practiceInventoryTotal": f"{len(inventory)} practices",
+        "practiceInventory": inventory,
+        "ingestionJobs": admin_library.job_table_rows(db),
     }
 
 
@@ -433,19 +443,45 @@ def _practice_review(db: Session, practice_id: str) -> tuple[LpPractice, Review 
     return practice, review
 
 
+class CorrectionRequest(ReasonedRequest):
+    """`reason` is the required correction; the rest locates it for the practice owner."""
+
+    assignee: str = Field(default="", max_length=120)
+    source_location: str = Field(default="", max_length=300)
+    severity: str = Field(default="", max_length=120)
+    due: str = Field(default="", max_length=40)
+
+
 @router.post("/library/{practice_id}/request-correction")
 def request_practice_correction(
-    practice_id: str, body: ReasonedRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)
+    practice_id: str, body: CorrectionRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ) -> dict:
     practice, review = _practice_review(db, practice_id)
-    practice.status = "Correction requested"
+    if practice.status != "Approved":  # a live practice stays served while its next version is corrected
+        practice.status = "Correction requested"
+    correction_id = f"CR-{practice.id.split('-')[-1].upper()}"
+    detail = " · ".join(
+        part
+        for part in (
+            body.source_location,
+            body.severity,
+            f"Assigned to {body.assignee}" if body.assignee else "",
+            f"Due {body.due}" if body.due else "",
+        )
+        if part
+    )
+    message = f"{body.reason}\n{detail}" if detail else body.reason
+    admin_library.record_correction(db, practice.id, {
+        "id": correction_id, "reason": body.reason, "assignee": body.assignee, "sourceLocation": body.source_location,
+        "severity": body.severity, "due": body.due, "requestedBy": display_name(admin),
+    })
     if review is not None:
         review.state = "Changes requested"
-        _notify(db, review.owner_id, kind="review", title=f"Correction requested: {practice.title}",
-                body=body.reason, link=f"/reviews/{review.id}")
-    _admin_event(db, admin, project_id=None, title=f"Correction requested on {practice.id.upper()}", reason=body.reason)
+        _notify(db, review.owner_id, kind="review", title=f"{correction_id} correction requested: {practice.title}",
+                body=message, link=f"/reviews/{review.id}")
+    _admin_event(db, admin, project_id=None, title=f"{correction_id} requested on {practice.id.upper()}", reason=message)
     db.commit()
-    return {"id": practice.id, "status": practice.status}
+    return {"id": practice.id, "status": practice.status, "correctionId": correction_id}
 
 
 @router.post("/library/{practice_id}/publish")
@@ -460,6 +496,7 @@ def publish_practice(
             status_code=409,
             detail=f"{practice.id.upper()} cannot be published: its independent review is {state.lower()}.",
         )
+    admin_library.release(db, practice, review, admin)
     practice.status = "Approved"
     practice.updated_at = utcnow()
     _admin_event(db, admin, project_id=None, title=f"{practice.id.upper()} {practice.version_label} published",
