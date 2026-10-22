@@ -16,7 +16,16 @@ FRONTEND="$ROOT/frontend"
 ENV_FILE="$ROOT/.env"
 ENV_EXAMPLE="$ROOT/.env.example"
 VENV="$ROOT/.venv"
-VPY="$VENV/bin/python"
+# Windows uses Scripts/, Unix uses bin/
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+  VENV_BIN="$VENV/Scripts"
+  VENV_EXE_EXT=".exe"
+else
+  VENV_BIN="$VENV/bin"
+  VENV_EXE_EXT=""
+fi
+VPY="$VENV_BIN/python$VENV_EXE_EXT"
+# VPY="$VENV/bin/python"
 BRIDGE="$ROOT/scripts/claude_cli_bridge.py"
 RUN_DIR="$ROOT/.run"
 BRIDGE_PORT="${BRIDGE_PORT:-8787}"
@@ -51,7 +60,13 @@ env_append() {
   printf '%s\n' "$1" >> "$ENV_FILE"
 }
 http_ok() { curl -s -m 3 -o /dev/null "$1" 2>/dev/null; }
-port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1 " (pid " $2 ")"}'; }
+port_owner() {
+  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    netstat -ano 2>/dev/null | grep "LISTENING" | awk -v p="$1" '$2 ~ ":$p$" {print "PID " $5}' | head -1
+  else
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1 " (pid " $2 ")"}'
+  fi
+}
 
 # ------------------------------------------------------------------------------- prechecks
 section "Tools"
@@ -153,24 +168,53 @@ fi
 pass "run orchestrator: LangGraph (runs resume from checkpoints after a restart)"
 
 section "Backend packages"
-if [ ! -x "$VPY" ]; then
-  if [ "$FIX" = 1 ] && [ -n "$PY" ]; then
-    echo "        creating virtual environment and installing packages (several minutes)..."
-    if "$PY" -m venv "$VENV" && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then
-      fixed "created .venv and installed packages"
-    else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
-  else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+NEEDS_VENV=0
+if [ ! -d "$VENV" ]; then
+  NEEDS_VENV=1
 fi
+
+if [ "$NEEDS_VENV" = 1 ] || [ ! -x "$VPY" ]; then
+  echo "        creating virtual environment and installing packages (several minutes)..."
+  if ! "$PY" -m venv "$VENV"; then
+    fail "failed to create venv" "$PY -m venv $VENV"
+  elif ! "$VPY" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1; then
+    fail "failed to upgrade pip" "check pip installation"
+  elif "$VPY" -m pip install -r "$ROOT/requirements-dev.txt"; then
+    fixed "created .venv and installed packages"
+  else
+    fail "failed to install packages from requirements-dev.txt" "$VENV_BIN/pip install -r requirements-dev.txt"
+  fi
+fi
+
 if [ -x "$VPY" ]; then
   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
+# if [ ! -x "$VPY" ]; then
+#   if [ "$FIX" = 1 ] && [ -n "$PY" ]; then
+#     echo "        creating virtual environment and installing packages (several minutes)..."
+#     if "$PY" -m venv "$VENV" && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then
+#       fixed "created .venv and installed packages"
+#     else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+#   else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+# fi
+# if [ -x "$VPY" ]; then
+#   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
 import importlib
 names = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "anthropic", "pptx", "docx", "openpyxl", "reportlab", "sentence_transformers", "faiss"]
 print(" ".join(n for n in names if importlib.util.find_spec(n) is None))
 PYEOF
 )"
   if [ -z "$MISSING" ]; then pass "key Python packages are installed"
-  elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
-  else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
+  else
+    echo "        installing missing packages: $MISSING..."
+    if "$VPY" -m pip install -r "$ROOT/requirements-dev.txt"; then
+      fixed "installed packages"
+    else
+      fail "package installation failed" "$VENV_BIN/pip install -r requirements-dev.txt"
+    fi
+  fi
+  # if [ -z "$MISSING" ]; then pass "key Python packages are installed"
+  # elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
+  # else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
 
   ANTHROPIC_V="$("$VPY" -c 'from importlib.metadata import version; print(version("anthropic"))' 2>/dev/null)"
   case "$ANTHROPIC_V" in
@@ -279,8 +323,12 @@ STARTED_PIDS=""
 TAIL_PIDS=""
 
 kill_tree() { # stop a process and everything it started
-  for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
-  kill "$1" 2>/dev/null
+  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    taskkill /PID "$1" /T /F 2>/dev/null
+  else
+    for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+    kill "$1" 2>/dev/null
+  fi
 }
 cleanup() {
   trap - INT TERM EXIT
@@ -330,7 +378,9 @@ if [ "$OO_ENABLED" = "true" ] && [ "$OO_UP" = 0 ]; then
   wait_http openobserve "$OO_URL/healthz" 60 "$PID_openobserve" || cleanup 1
 fi
 if [ "$BACKEND_UP" = 0 ]; then
-  start_service backend "$ROOT" "$VENV/bin/uvicorn" src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
+  # start_service backend "$ROOT" "$VENV/bin/uvicorn" src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
+  # wait_http backend "http://127.0.0.1:$BACKEND_PORT/health" 120 "$PID_backend" || cleanup 1
+  start_service backend "$ROOT" "$VENV_BIN/uvicorn$VENV_EXE_EXT" src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
   wait_http backend "http://127.0.0.1:$BACKEND_PORT/health" 120 "$PID_backend" || cleanup 1
 fi
 if [ "$FRONTEND_UP" = 0 ]; then

@@ -13,7 +13,7 @@ DATABASE_URL = settings.database_url
 if DATABASE_URL.startswith("sqlite"):
     # SQLite can briefly lock on concurrent writes (API + background workers).
     # Increase busy timeout so transient contention does not fail requests.
-    _sqlite_args = {"check_same_thread": False, "timeout": 30}
+    _sqlite_args = {"check_same_thread": False, "timeout": 120}
     if ":memory:" in DATABASE_URL:
         engine = create_engine(
             DATABASE_URL,
@@ -31,7 +31,7 @@ if DATABASE_URL.startswith("sqlite"):
         try:
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
-            cursor.execute("PRAGMA busy_timeout=30000;")
+            cursor.execute("PRAGMA busy_timeout=120000;")
         finally:
             cursor.close()
 else:
