@@ -234,19 +234,6 @@ select {
   color: inherit !important;
 }
 
-.project-studio-compact {
-  font-size: 13px;
-}
-
-.project-studio-compact h1 {
-  font-size: 1.35rem;
-}
-
-.project-studio-compact h2,
-.project-studio-compact h3 {
-  font-size: 0.9rem;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

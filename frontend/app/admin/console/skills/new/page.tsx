@@ -200,7 +200,7 @@ export default function NewSkillPage() {
       <p className="text-sm text-[var(--text-muted)]">
         Author skills using structured leading-practice drafting and save directly to the registry.
       </p>
-      <Link href="/admin/skills" className="text-sm">
+      <Link href="/admin/console/skills" className="text-sm">
         Back to skills
       </Link>
 
