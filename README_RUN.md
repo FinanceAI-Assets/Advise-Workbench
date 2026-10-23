@@ -12,6 +12,7 @@ One command starts all of them: `./scripts/run_agent.sh`.
 | Backend | http://127.0.0.1:8000 (API reference at `/docs`) | API, LangGraph run and conversation graphs, document agents, quality checks | Always |
 | Claude CLI bridge | http://127.0.0.1:8787 | Lets the backend use a signed-in Claude Code CLI instead of an API key | Only in bridge mode (see section 3) |
 | OpenObserve | http://localhost:5080 | Monitoring: traces, metrics and logs | Optional |
+| Postgres, Redis, RabbitMQ | 127.0.0.1:5432, :6379, :5672 | Database, cache/run queue and message broker. `run_agent.sh` uses whatever already answers on those ports and starts the rest (see section 4) | Started automatically |
 
 Data stays on your machine: the database is `advise_workbench.db` and all uploaded and generated files are under `workspace/`.
 
@@ -72,7 +73,29 @@ Optional monitoring, once:
 
 Wait for `Ready.` and the list of addresses, then open http://localhost:3000. Press `Ctrl+C` in that terminal to stop everything. Logs are in `.run/`.
 
+**On Windows** use `scripts\run_agent.cmd` instead; it works from cmd.exe, PowerShell and a double-click, and takes the same options (`--check`, `--fix`):
+
+```powershell
+scripts\run_agent.cmd --check
+scripts\run_agent.cmd --fix
+scripts\run_agent.cmd
+```
+
+It runs the script with Git Bash (`winget install --exact Git.Git`), not the WSL `bash.exe`. Also needed: Python 3.11+ (`winget install --exact Python.Python.3.12`) and Node 18+ (`winget install --exact OpenJS.NodeJS.LTS`); the failed checks print the exact `winget` command. `.gitattributes` keeps the `.sh` files on LF endings so a Windows checkout does not break them.
+
 Sign in with any email and password; the first sign-in creates the account.
+
+### Infrastructure and shared services (checked first)
+
+Before the tools, model and package checks, `run_agent.sh` makes sure the backing services are there:
+
+1. **Postgres, Redis, RabbitMQ.** For each one it reads the address from `.env` (`DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`; otherwise the usual local ports 5432, 6379, 5672). If something already answers, it is used and never stopped. If a local one does not answer, `scripts/infra.sh` starts it (in Docker when Docker works, otherwise natively; on Windows the programs are downloaded into `.tools/infra` on the first run, or reused from `INFRA_REUSE_DIR`). What the script started is stopped again when you press `Ctrl+C`. A remote address that does not answer is a FAIL.
+2. **Pointing the app at them.** The app keeps using SQLite until `DATABASE_URL` is set. With `--fix`, a Postgres started by the script is wired into `.env` (and Redis and RabbitMQ too), unless an existing `advise_workbench.db` is in use; its data is never migrated automatically.
+3. **Shared-service links.** If `.env` holds `QDRANT_URL`, `S3_ENDPOINT_URL`, `EMBEDDING_BASE_URL`, `OPENOBSERVE_URL` or `OTEL_EXPORTER_OTLP_ENDPOINT` (for example public `trycloudflare.com` links from the team's shared-services owner), each is probed. A dead link is a WARN with the likely cause (quick-tunnel links change when the tunnels restart); set `SHARED_SERVICES_REQUIRED=true` to make it a FAIL.
+
+`./scripts/run_agent.sh --check` only reports; it starts nothing. Settings (all optional, in `.env`): `INFRA_AUTOSTART=false` to never start anything, `INFRA_SERVICES="postgres redis"` to manage fewer, `INFRA_BACKEND=docker|native`, `INFRA_POSTGRES_PORT`, `INFRA_REDIS_PORT`, `INFRA_RABBITMQ_PORT`. Manage the services by hand with `./scripts/infra.sh status|start|stop|install`.
+
+The local Postgres listens on 127.0.0.1 only, with user, password and database `advise_workbench` (as in `docker-compose.yml`); its files are in `workspace/.infra/`.
 
 ## 5. End to end: sample input to output files
 
