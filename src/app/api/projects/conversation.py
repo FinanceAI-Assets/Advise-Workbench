@@ -584,13 +584,22 @@ def _propose_discovery_questions(
         # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
         # gateway imported at module level (line 55)
         from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        # ORIGINAL (BROKEN): user=(...) parameter was being ignored by all providers
+        # user=(
+        #     f"User said: {instruction}\n\n"
+        #     f"Still need (ask for ONE, the most important): {questions}\n\n"
+        #     f"Recent context:\n{prior_context}"
+        # ),
+
+        # FIX: Use messages=[...] format - works with Anthropic, Ollama, Groq, and all OpenAI-compatible providers
         msg = gateway.create_message(
             model=gateway.model_for("default"),
-            # ORIGINAL: max_tokens=200 (too low for Groq's extended reasoning mode - hits 'length' finish reason)
+            # ORIGINAL: max_tokens=200 (too low for extended reasoning)
             # max_tokens=200,
-            max_tokens=1000,  # NEW: Increased for Groq models with reasoning/thinking capabilities
+            # COMMENTED: max_tokens=1000 (hits Groq rate limits)
+            # max_tokens=1000,
+            max_tokens=400,  # NEW: Balanced for Ollama local + Groq free tier
             temperature=0.4,
-            #system=(
             system=(
                 "You are Sheldon, a consulting copilot. Be a thoughtful colleague, not a form.\n"
                 "Acknowledge what the user just shared (do NOT re-ask anything already captured).\n"
@@ -598,13 +607,17 @@ def _propose_discovery_questions(
                 "Keep it to 2-3 sentences. No numbered lists. One emoji max.\n"
                 + (f"Already established: {known_summary}\n" if known_summary else "")
             ),
-            user=(
-                f"User said: {instruction}\n\n"
-                f"Still need (ask for ONE, the most important): {questions}\n\n"
-                f"Recent context:\n{prior_context}"
-            ),
-            #temperature=0.4,
-            #max_tokens=200,
+            # NEW: Use messages=[...] instead of user=(...) - compatible with all providers
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"User said: {instruction}\n\n"
+                        f"Still need (ask for ONE, the most important): {questions}\n\n"
+                        f"Recent context:\n{prior_context}"
+                    )
+                }
+            ],
         )
         message = _extract_final_text_from_message(msg).strip()
     except Exception as exc:
