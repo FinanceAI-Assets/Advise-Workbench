@@ -88,17 +88,30 @@ def from_openai_response(data: dict[str, Any], model: str) -> Any:
 
     if isinstance(text, list):  # some servers return content parts
         text = "".join(str(p.get("text", "")) for p in text if isinstance(p, dict))
+
+    # ORIGINAL: if text: content.append(...)
+    # else: logger.warning(...)
+    # COMMENTED: Now with more detailed logging
+
     if text:
+        logger.debug(f"✅ Text extracted: {len(str(text))} chars")
         content.append({"type": "text", "text": str(text)})
     else:
-        # NEW: Fallback to reasoning field if content is empty (Groq extended thinking mode)
+        # NEW: Log what's in the message when content is empty
+        logger.warning(f"❌ Empty content field. Message keys: {list(msg.keys())}")
+        logger.warning(f"Full message: {repr(msg)[:500]}")
+
+        # NEW: Fallback to reasoning field if content is empty (Groq/Ollama extended thinking mode)
         reasoning = msg.get("reasoning", "")
         if reasoning:
-            logger.debug(f"Using reasoning field as fallback content (Groq extended thinking)")
+            logger.debug(f"✅ Using reasoning field as fallback (Ollama thinking)")
+            logger.debug(f"Reasoning content: {len(str(reasoning))} chars")
             content.append({"type": "text", "text": str(reasoning)})
         else:
             # NEW: Log when no text content is found
-            logger.warning(f"No text content found in response. Message: {repr(msg)[:200]}, Choices: {data.get('choices')}")
+            logger.error(f"❌ No content OR reasoning found in response!")
+            logger.error(f"Message: {repr(msg)[:300]}")
+            logger.error(f"Choices: {data.get('choices')}")
 
     for call in msg.get("tool_calls") or []:
         fn = call.get("function") or {}
@@ -183,7 +196,10 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
         url = (self._config.base_url or _DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
-        timeout = float(kwargs.get("timeout") or 120.0)
+        # ORIGINAL: timeout = float(kwargs.get("timeout") or 120.0)
+        # ISSUE: 120 second timeout caused hanging shutdown on Ollama connections
+        # NEW: Use 30 seconds default for local endpoints, 120 for cloud APIs
+        timeout = float(kwargs.get("timeout") or 30.0)
         if on_event:
             on_event()
 
@@ -192,7 +208,9 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         logger = logging.getLogger(__name__)
         logger.debug(f"Calling {self.name} API at {url} with model={model}")
 
-        with httpx.Client(timeout=max(timeout, 120.0), transport=self._transport) as client:
+        # ORIGINAL: with httpx.Client(timeout=max(timeout, 120.0), ...)
+        # NEW: Use lower timeout for local endpoints like Ollama
+        with httpx.Client(timeout=max(timeout, 30.0), transport=self._transport) as client:
             response = client.post(url, headers=headers, json=payload)
         if on_event:
             on_event()
