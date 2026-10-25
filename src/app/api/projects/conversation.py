@@ -813,7 +813,7 @@ def _persist_conversational_response(
     try:
         # [DEPRECATED: Old claude_generate call]
         # response_text = claude_generate(...)
-        
+
         # [NEW: Gateway-based provider-agnostic call]
         msg = gateway.create_message(
             model=gateway.model_for("default"),
@@ -824,7 +824,13 @@ def _persist_conversational_response(
         )
         _record_message_usage(msg)
         response_text = _extract_final_text_from_message(msg).strip()
-    except Exception:
+    except Exception as exc:
+        # NEW: Log the actual error so we can diagnose why fallback is being used
+        _LOG.error(
+            f"Conversational response LLM call failed: "
+            f"{exc.__class__.__name__}: {exc}",
+            exc_info=True
+        )
         response_text = _grounded_conversational_fallback(slots=slots, missing_slots=missing_slots)
 
     msg = ConversationMessage(
