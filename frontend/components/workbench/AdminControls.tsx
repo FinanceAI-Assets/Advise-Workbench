@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/Input";
 import { ErrorNote } from "@/components/workbench/PageFrame";
 import { type AdminAction, type AdminRecord, useAdminAction } from "@/hooks/useAdminConsole";
 import { useAuth } from "@/lib/auth-context";
+import { cn } from "@/lib/utils";
 import { downloadFile } from "@/lib/workbenchApi";
 
 /**
@@ -22,6 +23,7 @@ export function ReasonAction({
   disabled,
   hint,
   primary,
+  className,
 }: {
   label: string;
   build: (reason: string) => AdminAction;
@@ -29,6 +31,8 @@ export function ReasonAction({
   disabled?: boolean;
   hint?: string;
   primary?: boolean;
+  /** Extra classes for the closed-state button, e.g. a compact size. */
+  className?: string;
 }) {
   const action = useAdminAction();
   const [open, setOpen] = useState(false);
@@ -41,7 +45,7 @@ export function ReasonAction({
         type="button"
         disabled={disabled}
         title={disabled ? hint : undefined}
-        className="whitespace-nowrap text-sm"
+        className={cn("whitespace-nowrap text-sm", className)}
         onClick={() => setOpen(true)}
       >
         {label}

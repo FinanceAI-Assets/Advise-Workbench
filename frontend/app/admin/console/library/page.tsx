@@ -9,19 +9,17 @@ import {
   IndexValidateTab,
   IngestionJobPanel,
   LibraryApprovalControls,
-  PracticeInventoryTable,
+  PipelineStepper,
+  PracticeInventoryPanel,
   PublishControl,
   QualityGatesTab,
   QualityReviewPanel,
   RequestCorrectionModal,
   UploadSourcesModal,
 } from "@/components/admin-console";
-import { EngagementStepper } from "@/components/engagements";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
-import { ReasonAction, RecordsTable } from "@/components/workbench/AdminControls";
+import { ReasonAction } from "@/components/workbench/AdminControls";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { type AdminLibrary, useAdminLibraryQuery } from "@/hooks/useAdminConsole";
 
@@ -38,7 +36,7 @@ type LibraryTab = (typeof TABS)[number]["key"];
 
 const isLibraryTab = (value: string | null): value is LibraryTab => TABS.some((tab) => tab.key === value);
 
-const BREADCRUMB = "Admin console / Library management";
+const BREADCRUMB = "Admin console / Leading practice library";
 
 function MissingStep() {
   return <ErrorNote error={new Error("This pipeline step has no data. Upload a source to run the pipeline.")} />;
@@ -109,8 +107,13 @@ export default function AdminConsoleLibraryPage() {
     ) : null;
 
   const frame = (title: string, subtitle: ReactNode, content: ReactNode, actions?: ReactNode) => (
-    <PageFrame breadcrumb={`${BREADCRUMB} / ${tabLabel}`} title={title} subtitle={subtitle} actions={actions}>
-      <EngagementStepper
+    <PageFrame
+      breadcrumb={tab === "source-upload" ? BREADCRUMB : `${BREADCRUMB} / ${tabLabel}`}
+      title={title}
+      subtitle={subtitle}
+      actions={actions}
+    >
+      <PipelineStepper
         steps={data.pipelineSteps}
         activeId={tab}
         onSelect={(stepId) => {
@@ -160,8 +163,8 @@ export default function AdminConsoleLibraryPage() {
     </>
   );
   const uploadButton = (
-    <Button type="button" className="flex items-center gap-2" onClick={() => setUpload({ correction: false })}>
-      <Upload size={16} aria-hidden />
+    <Button type="button" className="flex items-center gap-2 text-xs font-semibold" onClick={() => setUpload({ correction: false })}>
+      <Upload size={14} aria-hidden />
       Upload sources
     </Button>
   );
@@ -269,7 +272,7 @@ export default function AdminConsoleLibraryPage() {
   }
 }
 
-/** Practice inventory, the latest ingestion job and the ingestion history. */
+/** Practice inventory and the latest ingestion job, beside the selected practice's review panel. */
 function SourceUploadTab({
   data,
   selectedId,
@@ -284,101 +287,70 @@ function SourceUploadTab({
   /** Uploaded practices are approved and published from the Quality review step. */
   onOpenQualityReview?: () => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [lifecycle, setLifecycle] = useState("all");
-
-  const needle = query.trim().toLowerCase();
-  const rows = data.practiceInventory.filter(
-    (row) =>
-      (lifecycle === "all" || (lifecycle === "published" ? row.lifecycle === "Approved" : row.lifecycle !== "Approved")) &&
-      (!needle || `${row.practiceSource} ${row.version}`.toLowerCase().includes(needle))
-  );
   const reviewed = data.qualityReview;
   const selectedRow = data.practiceInventory.find((row) => row.id === selectedId);
+  const compact = "px-4 py-2 text-xs font-semibold";
 
   return (
-    <>
-      <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search practice title or version"
-              className="min-w-[260px] flex-1"
-            />
-            <Select aria-label="Lifecycle" value={lifecycle} onChange={(e) => setLifecycle(e.target.value)} className="w-auto">
-              <option value="all">Lifecycle: All</option>
-              <option value="published">Lifecycle: Published</option>
-              <option value="review">Lifecycle: In review</option>
-            </Select>
-            <span className="ml-auto text-xs text-[var(--text-muted)]">
-              {rows.length} of {data.practiceInventoryTotal}
-            </span>
-          </div>
-          <PracticeInventoryTable rows={rows} activeId={selectedId} onSelect={onSelect} />
-          <IngestionJobPanel job={data.latestIngestionJob} />
-        </div>
-
-        {selectedId === reviewed.id ? (
-          <QualityReviewPanel
-            review={reviewed}
-            actions={
-              <div className="flex flex-wrap items-start gap-2">
-                {onRequestCorrection ? (
-                  <Button type="button" variant="secondary" className="whitespace-nowrap text-sm" onClick={onRequestCorrection}>
-                    Request correction
-                  </Button>
-                ) : null}
-                {onOpenQualityReview ? (
-                  <Button type="button" className="whitespace-nowrap text-sm" onClick={onOpenQualityReview}>
-                    Open quality review
-                  </Button>
-                ) : (
-                  <ReasonAction
-                    primary
-                    label="Approve & publish"
-                    build={(reason) => ({ path: `/library/${reviewed.id}/publish`, body: { reason } })}
-                  />
-                )}
-              </div>
-            }
-          />
-        ) : (
-          <Card className="h-fit space-y-3">
-            <h2 className="text-base font-semibold text-[var(--text-default)]">{selectedRow?.practiceSource}</h2>
-            <p className="text-sm text-[var(--text-muted)]">
-              {selectedRow?.version} · {selectedRow?.indexing} · {selectedRow?.lifecycle}
-            </p>
-            <p className="text-sm text-[var(--text-default)]">
-              {selectedRow?.lifecycle === "Approved"
-                ? "Published in the Leading Practice Library. Upload a new version to start a candidate review."
-                : "No uploaded source is in review for this practice. Publication follows its independent review."}
-            </p>
-            {selectedRow && selectedRow.lifecycle !== "Approved" ? (
-              <ReasonAction
-                primary
-                label="Approve & publish"
-                build={(reason) => ({ path: `/library/${selectedRow.id}/publish`, body: { reason } })}
-              />
-            ) : null}
-          </Card>
-        )}
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_440px]">
+      <div className="space-y-5">
+        <PracticeInventoryPanel rows={data.practiceInventory} activeId={selectedId} onSelect={onSelect} />
+        <IngestionJobPanel job={data.latestIngestionJob} />
       </div>
 
-      <RecordsTable
-        title="Ingestion jobs"
-        columns={[
-          ["id", "Job"],
-          ["source", "Source"],
-          ["stage", "Stage"],
-          ["submittedBy", "Submitted by"],
-          ["outcome", "Outcome"],
-          ["detail", "Detail"],
-        ]}
-        rows={data.ingestionJobs}
-        empty="No ingestion jobs recorded."
-      />
-    </>
+      {selectedId === reviewed.id ? (
+        <QualityReviewPanel
+          review={reviewed}
+          actions={
+            <div className="flex flex-wrap items-start gap-2">
+              {onRequestCorrection ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className={`${compact} whitespace-nowrap border border-[var(--surface-border-strong)]`}
+                  onClick={onRequestCorrection}
+                >
+                  Request correction
+                </Button>
+              ) : null}
+              {onOpenQualityReview ? (
+                <Button type="button" className={`${compact} whitespace-nowrap`} onClick={onOpenQualityReview}>
+                  Open quality review
+                </Button>
+              ) : (
+                <ReasonAction
+                  primary
+                  label="Approve & publish"
+                  disabled={Boolean(reviewed.warning)}
+                  hint="Publication is blocked until the correction is reviewed."
+                  className={`${compact} disabled:bg-[var(--surface-muted)] disabled:text-[var(--text-muted)] disabled:opacity-100`}
+                  build={(reason) => ({ path: `/library/${reviewed.id}/publish`, body: { reason } })}
+                />
+              )}
+            </div>
+          }
+        />
+      ) : (
+        <Card className="space-y-3">
+          <h2 className="text-sm font-semibold text-[var(--text-default)]">{selectedRow?.practiceSource}</h2>
+          <p className="text-xs text-[var(--text-muted)]">
+            {selectedRow?.version} · {selectedRow?.indexing} · {selectedRow?.lifecycle}
+          </p>
+          <p className="text-xs text-[var(--text-default)]">
+            {selectedRow?.lifecycle === "Approved"
+              ? "Published in the Leading Practice Library. Upload a new version to start a candidate review."
+              : "No uploaded source is in review for this practice. Publication follows its independent review."}
+          </p>
+          {selectedRow && selectedRow.lifecycle !== "Approved" ? (
+            <ReasonAction
+              primary
+              label="Approve & publish"
+              className={compact}
+              build={(reason) => ({ path: `/library/${selectedRow.id}/publish`, body: { reason } })}
+            />
+          ) : null}
+        </Card>
+      )}
+    </div>
   );
 }

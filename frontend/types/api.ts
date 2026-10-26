@@ -542,6 +542,8 @@ export type PracticeInventoryRow = {
 
 export type IngestionJobDetail = {
   id: string;
+  /** Upload time, formatted for display ("08 Oct · 09:30"). */
+  submittedAt?: string;
   filename: string;
   meta: string;
   status: string;
@@ -563,6 +565,7 @@ export type QualityReviewDetail = {
   maturity: string;
   practiceOwner: string;
   approver: string;
+  sourceAttribution?: string;
   sourceQualityChecks: SourceQualityCheck[];
   warning: { title: string; description: string } | null;
   footnote: string;
