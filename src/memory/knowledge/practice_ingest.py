@@ -2,8 +2,8 @@
 
 The admin console's library pipeline runs these stages on every upload:
 
-1. Extract & chunk: PDF (page markers, OCR fallback), DOCX (heading styles, page breaks) or Markdown/text is read
-   into blocks, then cut into passages that respect headings and keep a page and section locator each.
+1. Extract & chunk: PDF (page markers, OCR fallback), DOCX (heading styles, page breaks), PPTX (one page per
+   slide: title, text, tables, notes), XLSX (one page per sheet: rows) or Markdown/text is read into blocks, then cut into passages that respect headings and keep a page and section locator each.
 2. Index & validate: a keyword index over the candidate's passages, a duplicate scan against published practices,
    permission metadata, locator integrity and citation completeness, plus a sample retrieval check.
 3. Quality gates: the four publication gates derived from those results.
@@ -27,9 +27,12 @@ from typing import Any
 from src.core.config import settings
 from src.core.security.zip_safety import validate_zip_for_read
 
-SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".md", ".txt")
+OFFICE_EXTENSIONS = (".docx", ".pptx", ".xlsx")  # Office Open XML: zip archives, checked before reading
+SUPPORTED_EXTENSIONS = (".pdf", *OFFICE_EXTENSIONS, ".md", ".txt")
+# Office 97-2003 binary formats; the readers above cannot open them, so the admin is asked to re-save.
+_LEGACY_OFFICE = {".doc": ".docx", ".ppt": ".pptx", ".xls": ".xlsx"}
 MAX_SOURCE_BYTES = 25 * 1024 * 1024
-MAX_DOCX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+MAX_OFFICE_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 
 TARGET_TOKENS = 400  # passage length the chunker aims for
 OVERLAP_TOKENS = 48  # tokens repeated at the start of a passage that continues the same section
@@ -76,18 +79,22 @@ def store_upload(job_id: str, filename: str, content: bytes) -> Path:
 def check_source(filename: str, content: bytes) -> str:
     """Return the lower-cased extension, or raise SourceRejected."""
     ext = Path(filename or "").suffix.lower()
+    if ext in _LEGACY_OFFICE:
+        raise SourceRejected(
+            f"{filename}: the older {ext} format cannot be read. Save it as {_LEGACY_OFFICE[ext]} and upload it again"
+        )
     if ext not in SUPPORTED_EXTENSIONS:
-        raise SourceRejected(f"{filename}: only PDF, DOCX, Markdown or text sources are accepted")
+        raise SourceRejected(f"{filename}: only PDF, Word, PowerPoint, Excel, Markdown or text sources are accepted")
     if not content:
         raise SourceRejected(f"{filename} is empty")
     if len(content) > MAX_SOURCE_BYTES:
         raise SourceRejected(f"{filename} exceeds the 25 MB file limit")
-    if ext == ".docx":
+    if ext in OFFICE_EXTENSIONS:
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                validate_zip_for_read(archive, max_uncompressed_bytes=MAX_DOCX_UNCOMPRESSED_BYTES)
+                validate_zip_for_read(archive, max_uncompressed_bytes=MAX_OFFICE_UNCOMPRESSED_BYTES)
         except zipfile.BadZipFile as exc:
-            raise SourceRejected(f"{filename} is not a valid DOCX file") from exc
+            raise SourceRejected(f"{filename} is not a valid {ext[1:].upper()} file") from exc
         except ValueError as exc:
             raise SourceRejected(f"{filename}: {exc}") from exc
     return ext
@@ -131,6 +138,63 @@ def _docx_blocks(content: bytes) -> tuple[list[dict[str, Any]], int]:
                 if line:
                     blocks.append(_block("para", line, page))
     return blocks, page
+
+
+def _shape_lines(shape: Any) -> list[str]:
+    """Text of one slide shape in reading order: paragraphs, table rows, and the contents of grouped shapes."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+        return [line for child in shape.shapes for line in _shape_lines(child)]
+    if shape.has_text_frame:
+        return [p.text.strip() for p in shape.text_frame.paragraphs if p.text.strip()]
+    if getattr(shape, "has_table", False):  # only graphic frames define has_table
+        rows = (" | ".join(dict.fromkeys(c.text.strip() for c in row.cells if c.text.strip())) for row in shape.table.rows)
+        return [line for line in rows if line]
+    return []
+
+
+def _pptx_blocks(content: bytes) -> tuple[list[dict[str, Any]], int]:
+    """One page per slide: the slide title as a heading, then its text boxes, tables and speaker notes."""
+    from pptx import Presentation
+
+    presentation = Presentation(io.BytesIO(content))
+    blocks: list[dict[str, Any]] = []
+    slides = 0
+    for number, slide in enumerate(presentation.slides, start=1):
+        slides = number
+        title_shape = slide.shapes.title
+        title_id = title_shape.shape_id if title_shape is not None else None
+        if title_shape is not None and title_shape.text_frame.text.strip():
+            blocks.append(_block("heading", title_shape.text_frame.text, number, 1))
+        for shape in slide.shapes:
+            if shape.shape_id != title_id:  # python-pptx returns a new proxy per access, so compare ids
+                blocks.extend(_block("para", line, number) for line in _shape_lines(shape))
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text.strip() if slide.notes_slide.notes_text_frame else ""
+            if notes:
+                blocks.append(_block("para", notes, number))
+    return blocks, slides
+
+
+def _xlsx_blocks(content: bytes) -> tuple[list[dict[str, Any]], int]:
+    """One page per worksheet: the sheet name as a heading, then each non-empty row as ``a | b | c``."""
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    blocks: list[dict[str, Any]] = []
+    sheets = 0
+    try:
+        for number, sheet in enumerate(workbook.worksheets, start=1):
+            sheets = number
+            blocks.append(_block("heading", sheet.title, number, 1))
+            for row in sheet.iter_rows(values_only=True):
+                cells = [str(value).strip() for value in row if value is not None and str(value).strip()]
+                if cells:
+                    blocks.append(_block("para", " | ".join(cells), number))
+    finally:
+        workbook.close()
+    return blocks, sheets
 
 
 def _looks_like_heading(line: str) -> int:
@@ -196,6 +260,12 @@ def extract_blocks(filename: str, content: bytes) -> dict[str, Any]:
     if ext == ".docx":
         blocks, pages = _docx_blocks(content)
         mode = "docx"
+    elif ext == ".pptx":
+        blocks, pages = _pptx_blocks(content)
+        mode = "pptx"
+    elif ext == ".xlsx":
+        blocks, pages = _xlsx_blocks(content)
+        mode = "xlsx"
     elif ext == ".pdf":
         from src.memory.documents.pdf_extract import extract_pdf_text
 
