@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.tz import ist_now
@@ -597,4 +597,265 @@ class WorkbenchRecord(Base):
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class DocumentJob(Base):
+    """Async document parsing job tracking for Celery tasks."""
+
+    __tablename__ = "document_jobs"
+    __table_args__ = (
+        Index("ix_document_jobs_job_id", "job_id"),
+        Index("ix_document_jobs_project_id", "project_id"),
+        Index("ix_document_jobs_user_id", "user_id"),
+        Index("ix_document_jobs_status", "status"),
+        Index("ix_document_jobs_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    parse_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failed_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DocumentFile(Base):
+    """An uploaded file as stored in SeaweedFS (S3)."""
+
+    __tablename__ = "document_files"
+    __table_args__ = (
+        Index("ix_document_files_project_id", "project_id"),
+        Index("ix_document_files_job_id", "job_id"),
+        Index("ix_document_files_sha256", "sha256_hash"),
+        Index("ix_document_files_seaweedfs_id", "seaweedfs_file_id"),
+        Index("ix_document_files_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(255), ForeignKey("document_jobs.job_id"), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    seaweedfs_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)  # S3 object key
+    seaweedfs_volume_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    upload_source: Mapped[str | None] = mapped_column(String(50), nullable=True, default="api_upload")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ParsedDocument(Base):
+    """Docling output for one DocumentFile."""
+
+    __tablename__ = "parsed_documents"
+    __table_args__ = (
+        Index("ix_parsed_documents_file_id", "document_file_id"),
+        Index("ix_parsed_documents_project_id", "project_id"),
+        Index("ix_parsed_documents_status", "parsing_status"),
+        Index("ix_parsed_documents_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_file_id: Mapped[str] = mapped_column(String(64), ForeignKey("document_files.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    full_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    table_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    image_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    parsing_status: Mapped[str | None] = mapped_column(String(20), default="pending")
+    parsing_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ChunkArchive(Base):
+    """Full-text chunks of a parsed document (the source of truth; Qdrant holds their vectors)."""
+
+    __tablename__ = "chunk_archive"
+    __table_args__ = (
+        Index("ix_chunk_archive_file_id", "document_file_id"),
+        Index("ix_chunk_archive_parsed_id", "parsed_document_id"),
+        Index("ix_chunk_archive_project_id", "project_id"),
+        Index("ix_chunk_archive_source_type", "source_type"),
+        Index("ix_chunk_archive_created", "created_at"),
+        Index("ix_chunk_archive_file_chunk", "document_file_id", "chunk_number"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_file_id: Mapped[str] = mapped_column(String(64), ForeignKey("document_files.id"), nullable=False)
+    parsed_document_id: Mapped[str] = mapped_column(String(64), ForeignKey("parsed_documents.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    chunk_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    character_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # main_text, table, image
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    table_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ChunkEmbedding(Base):
+    """Embedding of one chunk and the Qdrant point that holds it."""
+
+    __tablename__ = "chunk_embeddings"
+    __table_args__ = (
+        Index("ix_chunk_embeddings_chunk_id", "chunk_id"),
+        Index("ix_chunk_embeddings_file_id", "document_file_id"),
+        Index("ix_chunk_embeddings_project_id", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("chunk_archive.id"), nullable=False)
+    document_file_id: Mapped[str] = mapped_column(String(64), ForeignKey("document_files.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    embedding: Mapped[list] = mapped_column(JSON, nullable=False)
+    embedding_dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    qdrant_point_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    embedding_generated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ExtractedFact(Base):
+    __tablename__ = "extracted_facts"
+    __table_args__ = (
+        Index("ix_extracted_facts_parsed_id", "parsed_document_id"),
+        Index("ix_extracted_facts_project_id", "project_id"),
+        Index("ix_extracted_facts_type", "fact_type"),
+        Index("ix_extracted_facts_name", "fact_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    parsed_document_id: Mapped[str] = mapped_column(String(64), ForeignKey("parsed_documents.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    fact_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    fact_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    fact_value: Mapped[dict | str | None] = mapped_column(JSON, nullable=True)
+    confidence_score: Mapped[float | None] = mapped_column(Float, default=0.5)
+    source_context: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class WikiPageDraft(Base):
+    __tablename__ = "wiki_pages_draft"
+    __table_args__ = (
+        Index("ix_wiki_draft_parsed_id", "parsed_document_id"),
+        Index("ix_wiki_draft_project_id", "project_id"),
+        Index("ix_wiki_draft_entity", "entity_name", "entity_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    parsed_document_id: Mapped[str] = mapped_column(String(64), ForeignKey("parsed_documents.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    entity_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_facts: Mapped[list | str | None] = mapped_column(JSON, nullable=True)
+    is_deduplicated: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class WikiPageFinal(Base):
+    __tablename__ = "wiki_pages_final"
+    __table_args__ = (
+        Index("ix_wiki_final_project_id", "project_id"),
+        Index("ix_wiki_final_entity", "entity_name"),
+        Index("ix_wiki_final_published", "is_published"),
+        Index("ix_wiki_final_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    entity_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    aliases: Mapped[list | str | None] = mapped_column(JSON, nullable=True)
+    source_facts: Mapped[list | str | None] = mapped_column(JSON, nullable=True)
+    merge_info: Mapped[dict | str | None] = mapped_column(JSON, nullable=True)
+    is_published: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class EmbeddingsMetadata(Base):
+    __tablename__ = "embeddings_metadata"
+    __table_args__ = (
+        Index("ix_embeddings_wiki_id", "wiki_id"),
+        Index("ix_embeddings_project_id", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    wiki_id: Mapped[str] = mapped_column(String(64), ForeignKey("wiki_pages_final.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    embedding_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    embedding_dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    qdrant_collection: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    qdrant_point_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class TaskFailure(Base):
+    """Task failure tracking for error handling."""
+
+    __tablename__ = "task_failures"
+    __table_args__ = (
+        Index("ix_task_failures_document", "document_file_id"),
+        Index("ix_task_failures_project", "project_id"),
+        Index("ix_task_failures_task", "task_name"),
+        Index("ix_task_failures_error_type", "error_type"),
+        Index("ix_task_failures_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    document_file_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    error_message: Mapped[str] = mapped_column(String(500), nullable=False)
+    error_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_final_failure: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class InAppNotification(Base):
+    """In-app notifications for document processing status updates."""
+
+    __tablename__ = "in_app_notifications"
+    __table_args__ = (
+        Index("ix_in_app_notifications_user", "user_id"),
+        Index("ix_in_app_notifications_project", "project_id"),
+        Index("ix_in_app_notifications_type", "notification_type"),
+        Index("ix_in_app_notifications_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False)
+    document_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

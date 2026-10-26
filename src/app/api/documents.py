@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from sqlalchemy.orm import Session
 
 from src.core.auth import get_current_user, require_project_role
+from src.core.config import settings
 from src.memory.documents.source_chunks import build_chunks_from_text
+from src.workers.pipeline import queue_document, queue_removal
 from src.core.security.upload_validation import validate_document_upload
 from src.core.db.models import User
 from src.core.db.session import get_db
@@ -100,7 +102,6 @@ async def upload_document(
     safe_name = _normalize_upload_filename(file.filename)
     validate_document_upload(safe_name, content)
     if safe_name.lower().endswith(".pdf"):
-        from src.core.config import settings
         from pypdf import PdfReader
         import io as _io
 
@@ -178,6 +179,20 @@ async def upload_document(
     }
     parsed_path.write_text(json.dumps(parsed_payload, indent=2), encoding="utf-8")
 
+    ingestion = None
+    if settings.document_pipeline_enabled:
+        job = await asyncio.to_thread(
+            queue_document,
+            db,
+            project_id=project_id,
+            user_id=user.id,
+            filename=safe_name,
+            local_path=target,
+            sha256=digest,
+            size_bytes=len(content),
+        )
+        ingestion = {"job_id": job.job_id, "status": job.status, "error": job.error_message}
+
     return {
         "filename": safe_name,
         "sha256": digest,
@@ -189,6 +204,7 @@ async def upload_document(
         },
         "path": str(target),
         "parsed_path": str(parsed_path),
+        "ingestion": ingestion,
     }
 
 
@@ -229,4 +245,6 @@ def delete_document(
     parsed_path = workspace_path(project_id) / "parsed_docs" / f"{digest}.json"
     resolved_target.unlink(missing_ok=True)
     parsed_path.unlink(missing_ok=True)
+    if settings.document_pipeline_enabled:
+        queue_removal(project_id, safe_fn)  # S3 object, chunks, vectors, facts and wiki contributions
     return {"deleted": True, "filename": safe_fn}

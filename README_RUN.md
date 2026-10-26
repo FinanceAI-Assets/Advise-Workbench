@@ -12,6 +12,8 @@ One command starts all of them: `./scripts/run_agent.sh`.
 | Backend | http://127.0.0.1:8000 (API reference at `/docs`) | API, LangGraph run and conversation graphs, document agents, quality checks | Always |
 | Claude CLI bridge | http://127.0.0.1:8787 | Lets the backend use a signed-in Claude Code CLI instead of an API key | Only in bridge mode (see section 3) |
 | OpenObserve | http://localhost:5080 | Monitoring: traces, metrics and logs | Optional |
+| Postgres, Redis, RabbitMQ | 127.0.0.1:5432, :6379, :5672 | Database, cache/run queue and message broker. `run_agent.sh` uses whatever already answers on those ports and starts the rest (see section 4) | Started automatically |
+| Ingestion worker | log in `.run/worker.log` | Celery worker for the document ingestion pipeline (see "Document ingestion pipeline" in section 5) | Started with the backend when RabbitMQ answers |
 
 Data stays on your machine: the database is `advise_workbench.db` and all uploaded and generated files are under `workspace/`.
 
@@ -72,7 +74,29 @@ Optional monitoring, once:
 
 Wait for `Ready.` and the list of addresses, then open http://localhost:3000. Press `Ctrl+C` in that terminal to stop everything. Logs are in `.run/`.
 
+**On Windows** use `scripts\run_agent.cmd` instead; it works from cmd.exe, PowerShell and a double-click, and takes the same options (`--check`, `--fix`):
+
+```powershell
+scripts\run_agent.cmd --check
+scripts\run_agent.cmd --fix
+scripts\run_agent.cmd
+```
+
+It runs the script with Git Bash (`winget install --exact Git.Git`), not the WSL `bash.exe`. Also needed: Python 3.11+ (`winget install --exact Python.Python.3.12`) and Node 18+ (`winget install --exact OpenJS.NodeJS.LTS`); the failed checks print the exact `winget` command. `.gitattributes` keeps the `.sh` files on LF endings so a Windows checkout does not break them.
+
 Sign in with any email and password; the first sign-in creates the account.
+
+### Infrastructure and shared services (checked first)
+
+Before the tools, model and package checks, `run_agent.sh` makes sure the backing services are there:
+
+1. **Postgres, Redis, RabbitMQ.** For each one it reads the address from `.env` (`DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`; otherwise the usual local ports 5432, 6379, 5672). If something already answers, it is used and never stopped. If a local one does not answer, `scripts/infra.sh` starts it (in Docker when Docker works, otherwise natively; on Windows the programs are downloaded into `.tools/infra` on the first run, or reused from `INFRA_REUSE_DIR`). What the script started is stopped again when you press `Ctrl+C`. A remote address that does not answer is a FAIL.
+2. **Pointing the app at them.** The app keeps using SQLite until `DATABASE_URL` is set. With `--fix`, a Postgres started by the script is wired into `.env` (and Redis and RabbitMQ too), unless an existing `advise_workbench.db` is in use; its data is never migrated automatically.
+3. **Shared-service links.** If `.env` holds `QDRANT_URL`, `S3_ENDPOINT_URL`, `EMBEDDING_BASE_URL`, `OPENOBSERVE_URL` or `OTEL_EXPORTER_OTLP_ENDPOINT` (for example public `trycloudflare.com` links from the team's shared-services owner), each is probed. A dead link is a WARN with the likely cause (quick-tunnel links change when the tunnels restart); set `SHARED_SERVICES_REQUIRED=true` to make it a FAIL.
+
+`./scripts/run_agent.sh --check` only reports; it starts nothing. Settings (all optional, in `.env`): `INFRA_AUTOSTART=false` to never start anything, `INFRA_SERVICES="postgres redis"` to manage fewer, `INFRA_BACKEND=docker|native`, `INFRA_POSTGRES_PORT`, `INFRA_REDIS_PORT`, `INFRA_RABBITMQ_PORT`. Manage the services by hand with `./scripts/infra.sh status|start|stop|install`.
+
+The local Postgres listens on 127.0.0.1 only, with user, password and database `advise_workbench` (as in `docker-compose.yml`); its files are in `workspace/.infra/`.
 
 ## 5. End to end: sample input to output files
 
@@ -152,6 +176,21 @@ For this example the files to look at are:
 ### Other deliverables
 
 `data/examples/northwind-p2p/run-scenarios/README.md` has six ready-made requests (scenarios A to F): a full pack, an Excel RACI matrix, the deck above, a process map with a Word SOP, and more. For those, upload all the files in `source-documents/`.
+
+### Document ingestion pipeline (SeaweedFS, Postgres, Qdrant)
+
+An upload can also run through a Celery pipeline: the file goes to SeaweedFS (S3), Docling parses it, the chunks go to Postgres (`chunk_archive`), and their embeddings go to Postgres (`chunk_embeddings`) and Qdrant (collection `<QDRANT_COLLECTION_PREFIX>document_chunks`). Then the Claude CLI (`LLM_PROVIDER=claude_cli`) extracts facts (`extracted_facts`), writes wiki drafts (`wiki_pages_draft`), which are merged with the project's existing pages (`wiki_pages_final`) and indexed in Qdrant (`<QDRANT_COLLECTION_PREFIX>wiki_pages`). The job status moves `pending → uploading → parsing → chunking → embedding → extracting_facts → generating_wiki → deduplicating → indexing_wiki → completed`, or `failed` with `failed_stage` and `error_message` (`retrying` while a stage waits to retry). Uploading identical content again completes at once; a changed file reuses the embeddings of unchanged chunks and replaces the old version; deleting a file removes it from S3, Postgres and Qdrant. The Project documents panel shows the stage and the chunk, embedding, fact and wiki counts of each file; `GET /api/documents/jobs?project_id=` and `GET /api/documents/wiki?project_id=` return the same data.
+
+1. Put the current shared-service links and keys in `.env` (`S3_*`, `QDRANT_*`, `EMBEDDING_*`) and check them: `make shared.check` must pass for qdrant, s3 and embeddings.
+2. Use Postgres (`DATABASE_URL=postgresql+psycopg://...`) and start everything with `./scripts/run_agent.sh`; the last lines list the worker. The first parse downloads Docling's layout models (a few minutes, once).
+3. Upload a PDF either in the app (with `DOCUMENT_PIPELINE_ENABLED=true`, the normal upload queues the pipeline and returns `ingestion.job_id`) or at http://127.0.0.1:8000/docs with **Authorize**, then `POST /api/documents/upload-async` (form fields `project_id`, `file`).
+4. Poll `GET /api/documents/status/{job_id}` until `completed`; `.run/worker.log` shows each stage.
+5. `GET /api/documents/{job_id}/details` shows the S3 object, the parsed document and its chunks, and the Qdrant point count with sample payloads. To look directly:
+   - SeaweedFS: the object key is `document_intake/<project_id>/<job_id>/<file>` in `S3_BUCKET`.
+   - Postgres: `SELECT chunk_number, page_number, source_type, left(text, 80) FROM chunk_archive ORDER BY created_at DESC, chunk_number LIMIT 20;`
+   - Qdrant: `curl -H "api-key: $QDRANT_API_KEY" "$QDRANT_URL/collections/${QDRANT_COLLECTION_PREFIX}document_chunks"` (see `points_count`).
+
+Scanned PDFs need `DOCLING_OCR_ENABLED=true`. Without the worker running, jobs stay `pending`.
 
 ## 6. What to expect
 

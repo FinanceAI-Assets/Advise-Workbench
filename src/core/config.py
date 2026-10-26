@@ -58,6 +58,67 @@ class Settings(BaseSettings):
     # pubsub connection; size to >= peak concurrent streams expected.
     sse_redis_max_connections: int = 300
 
+    # Document ingestion pipeline (Celery): S3 (SeaweedFS) -> Docling -> Postgres chunks -> embeddings -> Qdrant
+    celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
+    celery_result_backend: str = "redis://localhost:6379/0"
+    celery_task_max_retries: int = 2
+    # When true, the regular /api/documents/upload also queues the ingestion pipeline.
+    document_pipeline_enabled: bool = False
+
+    # SeaweedFS through its S3 gateway (shared service; see docs/06-deployment-operations/SHARED_SERVICES.md)
+    s3_endpoint_url: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_bucket: str = ""
+    s3_region: str = "us-east-1"
+    s3_intake_prefix: str = "document_intake"
+    s3_timeout_sec: int = 60
+
+    # Document Intake Validation
+    document_max_size_bytes: int = 104857600  # 100MB
+    document_allowed_formats: str = "pdf,docx,pptx,xlsx,xls,txt,md,csv,json,jpg,jpeg,png,gif,bmp"
+
+    # Docling parsing and chunking
+    docling_ocr_enabled: bool = False  # only needed for scanned PDFs; downloads OCR models on first use
+    chunk_size_characters: int = 1024
+    chunk_overlap_characters: int = 204  # 20% overlap
+
+    # OCR settings for images/diagrams
+    ocr_enabled: bool = True
+    tesseract_cmd: str = "tesseract"  # Path to tesseract binary
+    ocr_timeout_sec: int = 60
+
+    # Stage 1.3: Embeddings & Wiki - Vector Search & Knowledge Base
+    # Embeddings: the shared service (POST {EMBEDDING_BASE_URL}/embed) when set, else a local sentence-transformers model.
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_batch_size: int = 32
+    embedding_timeout_sec: int = 120
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
+    qdrant_collection_prefix: str = ""
+    qdrant_collection: str = "document_chunks"  # stored as f"{qdrant_collection_prefix}{qdrant_collection}"
+    qdrant_wiki_collection: str = "wiki_pages"
+
+    # Knowledge building (facts -> wiki drafts -> dedup -> wiki embeddings), through the configured
+    # model provider (LLM_PROVIDER=claude_cli uses the signed-in Claude Code CLI; no API key).
+    knowledge_building_enabled: bool = True
+    knowledge_fact_batch_chars: int = 12000  # chunk text sent per fact-extraction call
+    knowledge_max_fact_calls: int = 8  # cap on model calls per document for fact extraction
+    knowledge_max_wiki_pages: int = 8  # wiki pages generated per document
+    wiki_deduplication_threshold: float = 0.85  # cosine similarity at which two pages are the same topic
+
+    # Query pipeline (POST /api/query): retrieval over the project's chunks + wiki pages, cited answers.
+    query_top_k: int = 6  # sources given to the model
+    query_candidates: int = 24  # vector hits per query before verification and reranking
+    query_min_score: float = 0.35  # below this cosine similarity a hit is not evidence
+    query_context_max_chars: int = 9000  # ~2,250 tokens of sources in the prompt
+    query_max_answer_tokens: int = 700
+    query_history_turns: int = 4  # previous turns used to rewrite a follow-up question
+
+    anthropic_api_key: str = ""
+
     # SMTP for outbound email (financial report delivery). Email is disabled when
     # smtp_host is empty — send_email() returns {"sent": False, "reason": "email_not_configured"}.
     smtp_host: str = ""

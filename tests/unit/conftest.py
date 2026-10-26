@@ -10,6 +10,8 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-chars-long-ok!")
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
 # Leading Practice search must not load the embedding model (seconds, and a network call) inside a test.
 os.environ["LP_RAG_SEMANTIC_ENABLED"] = "false"
+# A developer .env may switch the ingestion pipeline on; unit tests must never queue real Celery jobs.
+os.environ["DOCUMENT_PIPELINE_ENABLED"] = "false"
 
 
 @pytest.fixture

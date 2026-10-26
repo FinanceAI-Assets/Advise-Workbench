@@ -5,6 +5,7 @@ from src.app.api import (
     agent_bash,
     auth,
     documents,
+    documents_async,
     dpdp,
     drawio_collab,
     engagements,
@@ -15,6 +16,7 @@ from src.app.api import (
     model_realtime_ws,
     models,
     projects,
+    query,
     reviews,
     run_artifacts,
     runs,
@@ -34,6 +36,8 @@ router.include_router(library.router, tags=["library"])
 router.include_router(workbench.router, tags=["workbench"])
 router.include_router(admin_console.router, prefix="/admin", tags=["admin-console"])
 router.include_router(documents.router, prefix="/documents", tags=["documents"])
+router.include_router(documents_async.router, prefix="/documents", tags=["documents"])
+router.include_router(query.router, prefix="/query", tags=["query"])
 router.include_router(runs.router, prefix="/runs", tags=["runs"])
 router.include_router(swarm.router, prefix="/runs", tags=["swarm"])
 router.include_router(run_artifacts.router, prefix="/runs", tags=["run-artifacts"])

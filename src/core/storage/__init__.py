@@ -1,3 +1,5 @@
+"""Workspace file management, plus SeaweedFS integration in submodules."""
+
 import json
 import logging
 import os
