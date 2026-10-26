@@ -32,7 +32,7 @@ The **`pytest`** suite under `tests/integration/` sets `JWT_SECRET` via `tests/i
 | SSRF-safe HTTP GET | `src/core/security/http_fetch.py` (`safe_get`) |
 | Office zip safety | `src/core/security/zip_safety.py` |
 | Deliverables | `src/deliverables/` |
-| Frontend wiki UI | `frontend/components/wiki/` |
+| Frontend (workbench UI) | `frontend/app/`, `frontend/components/` (no wiki UI; the wiki is API-only) |
 
 ## Repository hygiene
 

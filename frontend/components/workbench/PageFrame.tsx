@@ -24,7 +24,7 @@ export function PageFrame({
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="admin-page-title text-2xl font-semibold text-[var(--text-default)]">{title}</h1>
-          {subtitle ? <p className="mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p> : null}
+          {subtitle ? <p className="admin-page-subtitle mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p> : null}
         </div>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </header>

@@ -35,11 +35,15 @@ a:hover {
   text-decoration: underline;
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
+/* In the base layer so Tailwind utilities (text-sm, font-medium, ...) on controls still apply;
+   unlayered rules would override every layered utility. */
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
 }
 
 .mono {
@@ -91,6 +95,10 @@ select {
   font-size: 24px;
   line-height: 1.15;
   letter-spacing: -0.02em;
+}
+
+.admin-console-shell .admin-page-subtitle {
+  font-size: 12px;
 }
 
 .admin-console-shell .deloitte-surface,
@@ -221,30 +229,20 @@ select {
   color: var(--status-failed-text);
 }
 
-.input-select-base {
-  border-radius: var(--radius-md);
-  border: 1px solid var(--light-gray);
-  background: var(--surface-default);
-  padding: 0.75rem 1rem;
-  font-size: var(--text-sm-size);
-  color: var(--text-default);
+/* Component layer, so size and spacing utilities passed to <Select className> win. */
+@layer components {
+  .input-select-base {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--light-gray);
+    background: var(--surface-default);
+    padding: 0.75rem 1rem;
+    font-size: var(--text-sm-size);
+    color: var(--text-default);
+  }
 }
 
 .shell-sidebar a {
   color: inherit !important;
-}
-
-.project-studio-compact {
-  font-size: 13px;
-}
-
-.project-studio-compact h1 {
-  font-size: 1.35rem;
-}
-
-.project-studio-compact h2,
-.project-studio-compact h3 {
-  font-size: 0.9rem;
 }
 
 @media (prefers-reduced-motion: reduce) {

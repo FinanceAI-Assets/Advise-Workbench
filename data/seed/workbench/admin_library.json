@@ -70,6 +70,7 @@
   ],
   "latestIngestionJob": {
     "id": "job-208",
+    "submittedAt": "08 Oct · 09:30",
     "filename": "benefits-realization-toolkit-v2.1.docx",
     "meta": "1.8 MB · Uploaded by Maya Patel · Internal methods content",
     "status": "Indexed",
@@ -91,6 +92,7 @@
     "maturity": "Defined",
     "practiceOwner": "Maya Patel",
     "approver": "Priya Shah",
+    "sourceAttribution": "Advisory Methods team · Internal reuse permitted",
     "sourceQualityChecks": [
       {
         "id": "sq-1",
