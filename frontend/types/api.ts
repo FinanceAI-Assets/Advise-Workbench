@@ -145,7 +145,16 @@ export type ExportArtifact = {
 
 export type ExportReadiness = { artifacts: ExportArtifact[]; ready: boolean; blockers: string[]; message: string };
 
-export type AuthUser = { id: string; email: string; name: string; jobTitle: string; isAdmin: boolean };
+export type PlatformRole = "user" | "admin";
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  jobTitle: string;
+  isAdmin: boolean;
+  role: PlatformRole;
+  canSwitchAdmin: boolean;
+};
 
 export type ConversationPhase = {
   label: string;
@@ -559,12 +568,102 @@ export type QualityReviewDetail = {
   footnote: string;
 };
 
+/** One row of a library pipeline checklist: a gate or check, its result, and the supporting detail. */
+export type LibraryCheckRow = { id: string; label: string; result: string; detail: string; tone: "ok" | "warn"; passed?: boolean };
+
+export type LibraryNotice = { title: string; description: string };
+
+export type LibraryField = { label: string; value: string };
+
+export type ExtractedChunk = {
+  id: string;
+  code: string;
+  page: number | null;
+  section: string;
+  tokens: number;
+  quality: string;
+  tone: "ok" | "warn";
+  passageMeta: string;
+  passage: string;
+};
+
+export type LibraryExtractionDetail = {
+  subtitle: string;
+  sourceHash: string;
+  chunks: ExtractedChunk[];
+  provenance: LibraryNotice;
+  /** Set when the source had no readable text and is excluded from retrieval. */
+  error?: LibraryNotice | null;
+};
+
+export type LibraryIndexValidationDetail = {
+  subtitle: string;
+  summary: string;
+  checks: LibraryCheckRow[];
+  inspection: LibraryField[];
+  warning: LibraryNotice | null;
+  retrievalChecks: LibraryCheckRow[];
+};
+
+export type LibraryCorrectionDraft = {
+  assignee: string;
+  due: string;
+  sourceLocation: string;
+  requiredCorrection: string;
+  severity: string;
+};
+
+export type LibraryCorrectionRecord = {
+  id: string;
+  reason: string;
+  assignee: string;
+  status: string;
+  requestedBy: string;
+  requestedAt: string;
+};
+
+export type LibraryQualityGatesDetail = {
+  practiceId?: string;
+  title: string;
+  subtitle: string;
+  gates: LibraryCheckRow[];
+  blocker: LibraryNotice | null;
+  metadata: LibraryField[];
+  correction: LibraryCorrectionDraft;
+  // Present for uploaded sources; the sample walkthrough has no live review.
+  review?: { id: string; state: string; reviewer: string; selfReview: boolean } | null;
+  openCorrection?: LibraryCorrectionRecord | null;
+  approvers?: Array<{ id: string; name: string }>;
+  canSubmit?: boolean;
+  canPublish?: boolean;
+};
+
+export type LibraryReleaseDetail = {
+  practiceId: string;
+  subtitle: string;
+  gates: LibraryCheckRow[];
+  notice: LibraryNotice;
+  record: LibraryField[];
+  published?: boolean;
+  canPublish?: boolean;
+  blockers?: string[];
+};
+
 export type AdminLibraryDetail = {
   pipelineSteps: EngagementStep[];
   practiceInventoryTotal: string;
   practiceInventory: PracticeInventoryRow[];
   latestIngestionJob: IngestionJobDetail;
   qualityReview: QualityReviewDetail;
+  /** The practice the pipeline steps describe: an uploaded one, or the sample walkthrough's. */
+  selectedPracticeId: string;
+  /** "upload" when the steps show a real uploaded source; "sample" for the illustrative walkthrough. */
+  pipelineSource: "upload" | "sample";
+  // Pipeline tab content.
+  extraction?: LibraryExtractionDetail;
+  indexValidation?: LibraryIndexValidationDetail;
+  qualityGates?: LibraryQualityGatesDetail;
+  release?: LibraryReleaseDetail;
 };
 
 export type SkillRegistryItem = {

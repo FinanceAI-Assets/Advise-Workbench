@@ -286,6 +286,31 @@ def test_practice_cannot_be_published_before_independent_approval() -> None:
     assert client.post(f"/api/admin/library/{practice}/publish", json=reason, headers=admin).json()["status"] == "Approved"
 
 
+def test_correction_request_blocks_the_candidate_and_returns_its_id() -> None:
+    client = TestClient(fastapi_app)
+    admin_email = _email("admin")
+    admin = _login(client, admin_email)
+    _make_admin(admin_email)
+    practice = _practice("Quality review")
+    with session_scope() as db:
+        db.add(Review(id=practice.upper(), title="Ownership playbook", artifact_type="practice", version_label="v1.0",
+                      state="Quality review"))
+    body = {
+        "reason": "Replace the unattributed benchmark with a verifiable source.",
+        "assignee": "Maya Patel",
+        "source_location": "Page 18 · Reference 8",
+        "severity": "Publication-blocking",
+        "due": "09 Oct 2026",
+    }
+
+    result = client.post(f"/api/admin/library/{practice}/request-correction", json=body, headers=admin).json()
+
+    assert result["status"] == "Correction requested"
+    assert result["correctionId"] == f"CR-{practice.split('-')[-1].upper()}"
+    with session_scope() as db:
+        assert db.scalar(select(Review).where(Review.id == practice.upper())).state == "Changes requested"
+
+
 def test_seed_is_idempotent_and_clears_only_demo_data() -> None:
     from scripts import seed_demo
 
@@ -424,3 +449,12 @@ def test_agreed_slides_become_the_deck_outline() -> None:
         outline = agreed_deck_outline(db, project_id=pid)
     assert outline is not None and outline["narrative_arc"] == "case_led"
     assert [s["title"] for s in outline["slides"]] == ["Slide 1", "Slide 2", "Slide 3"]
+
+
+def test_library_sample_walkthrough_loads_from_the_fixture() -> None:
+    from src.app.api.admin_console import _library_sample
+
+    sample = _library_sample()
+
+    assert {"extraction", "indexValidation", "qualityGates", "release", "qualityReview"} <= set(sample)
+    assert sample["extraction"]["chunks"] and sample["release"]["practiceId"] == "lp-041"

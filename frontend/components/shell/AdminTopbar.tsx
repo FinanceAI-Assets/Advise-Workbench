@@ -27,7 +27,7 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
   const unread = useNotificationsQuery("unread").data?.counts.unread ?? 0;
 
   return (
-    <header className="app-shell-topbar sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-[color:color-mix(in_srgb,var(--primary-700)_20%,transparent)] bg-white/95 px-4 backdrop-blur">
+    <header className="app-shell-topbar sticky top-0 z-40 flex h-11 items-center justify-between gap-3 border-b border-[color:color-mix(in_srgb,var(--primary-700)_20%,transparent)] bg-white/95 px-5 backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">
         <button
           type="button"
@@ -37,7 +37,7 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
         >
           <Menu size={22} strokeWidth={2} aria-hidden />
         </button>
-        <span className="truncate text-sm font-semibold text-[var(--text-default)]">Platform administration</span>
+        <span className="truncate text-xs font-semibold text-[var(--text-default)]">Platform administration</span>
         <span className="hidden rounded-md bg-[var(--surface-muted)] px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)] sm:inline-flex">
           Administrator
         </span>
@@ -52,7 +52,7 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
           type="search"
           name="q"
           placeholder="Search workbench"
-          className="w-full rounded-md border border-[var(--surface-border)] bg-white py-1.5 pl-8 pr-10 text-sm text-[var(--text-default)] outline-none ring-[var(--accent-blue)] focus:ring-2"
+          className="w-full rounded-md border border-[var(--surface-border)] bg-white py-1 pl-8 pr-10 text-xs text-[var(--text-default)] outline-none ring-[var(--accent-blue)] focus:ring-2"
           aria-label="Search workbench"
         />
         <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-2xs text-[var(--text-muted)]">

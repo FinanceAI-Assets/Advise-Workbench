@@ -113,5 +113,301 @@
       "description": "Replace the uncited benchmark with a verified source or remove it before approval."
     },
     "footnote": "Published v2.0 remains available to users. Approving v2.1 creates a new immutable release with a full audit record."
+  },
+  "extraction": {
+    "subtitle": "JOB-208 · Benefits realization toolkit v2.1 · 42 pages / 86 chunks",
+    "sourceHash": "SHA-256 recorded · Source version pinned",
+    "chunks": [
+      {
+        "id": "ch-014",
+        "code": "CH-014",
+        "page": 8,
+        "section": "§2 Baseline measures",
+        "tokens": 412,
+        "quality": "Readable",
+        "tone": "ok",
+        "passageMeta": "412 tokens · Heading-aware split · 48-token overlap",
+        "passage": "Establish a sponsor-approved baseline before quantifying benefits. Record the measure, data owner, source date and validation gate for each benefit hypothesis."
+      },
+      {
+        "id": "ch-015",
+        "code": "CH-015",
+        "page": 9,
+        "section": "§2 Benefit hypotheses",
+        "tokens": 398,
+        "quality": "Readable",
+        "tone": "ok",
+        "passageMeta": "398 tokens · Heading-aware split · 48-token overlap",
+        "passage": "State each benefit as a testable hypothesis that links an initiative to a measurable outcome, the expected timing and the accountable owner."
+      },
+      {
+        "id": "ch-016",
+        "code": "CH-016",
+        "page": 10,
+        "section": "§3 Validation gates",
+        "tokens": 436,
+        "quality": "Readable",
+        "tone": "ok",
+        "passageMeta": "436 tokens · Heading-aware split · 48-token overlap",
+        "passage": "Hold a validation gate at each release. Confirm the baseline is unchanged, evidence is current and any variance is explained before the benefit is reported."
+      },
+      {
+        "id": "ch-017",
+        "code": "CH-017",
+        "page": 11,
+        "section": "§3 Attribution register",
+        "tokens": 384,
+        "quality": "Reference 8 missing",
+        "tone": "warn",
+        "passageMeta": "384 tokens · Heading-aware split · 48-token overlap",
+        "passage": "Attribute each realized benefit to the initiatives that contributed to it. Industry benchmarks show a typical uplift of 12-18% [8]."
+      },
+      {
+        "id": "ch-018",
+        "code": "CH-018",
+        "page": 12,
+        "section": "§3 Variance tolerances",
+        "tokens": 405,
+        "quality": "Readable",
+        "tone": "ok",
+        "passageMeta": "405 tokens · Heading-aware split · 48-token overlap",
+        "passage": "Agree tolerance bands with the sponsor before tracking begins. Variances outside the band trigger a review rather than a silent restatement."
+      },
+      {
+        "id": "ch-019",
+        "code": "CH-019",
+        "page": 12,
+        "section": "§3 Evidence sources",
+        "tokens": 371,
+        "quality": "Readable",
+        "tone": "ok",
+        "passageMeta": "371 tokens · Heading-aware split · 48-token overlap",
+        "passage": "Prefer system-of-record data over survey estimates. Where an estimate is used, record the method, the estimator and the date it was produced."
+      },
+      {
+        "id": "ch-020",
+        "code": "CH-020",
+        "page": 13,
+        "section": "§4 Ownership model",
+        "tokens": 418,
+        "quality": "Readable",
+        "tone": "ok",
+        "passageMeta": "418 tokens · Heading-aware split · 48-token overlap",
+        "passage": "Every benefit has one accountable owner in the business, distinct from the delivery lead, who signs off the baseline and each reported value."
+      },
+      {
+        "id": "ch-021",
+        "code": "CH-021",
+        "page": 13,
+        "section": "§4 Reporting cadence",
+        "tokens": 362,
+        "quality": "Readable",
+        "tone": "ok",
+        "passageMeta": "362 tokens · Heading-aware split · 48-token overlap",
+        "passage": "Report realized benefits monthly during delivery and quarterly for twelve months after go-live, using the same measures as the approved baseline."
+      }
+    ],
+    "provenance": {
+      "title": "Provenance preserved",
+      "description": "Page and section locators are attached to each chunk. No classification or owner metadata is dropped."
+    }
+  },
+  "indexValidation": {
+    "subtitle": "JOB-208 · Benefits realization toolkit · v2.1 candidate",
+    "summary": "86 / 86 chunks",
+    "checks": [
+      {
+        "id": "iv-1",
+        "label": "Embedding coverage",
+        "result": "Passed",
+        "detail": "86 / 86 vectors created",
+        "tone": "ok"
+      },
+      {
+        "id": "iv-2",
+        "label": "Duplicate scan",
+        "result": "Passed",
+        "detail": "0 exact duplicates",
+        "tone": "ok"
+      },
+      {
+        "id": "iv-3",
+        "label": "Permission metadata",
+        "result": "Passed",
+        "detail": "Owner & internal classification retained",
+        "tone": "ok"
+      },
+      {
+        "id": "iv-4",
+        "label": "Locator integrity",
+        "result": "Passed",
+        "detail": "42 page mappings verified",
+        "tone": "ok"
+      },
+      {
+        "id": "iv-5",
+        "label": "Citation completeness",
+        "result": "Attention",
+        "detail": "7 / 8 references attributed",
+        "tone": "warn"
+      }
+    ],
+    "inspection": [
+      {
+        "label": "Index",
+        "value": "approved-methods-candidate · Not served to users"
+      },
+      {
+        "label": "Checksum",
+        "value": "Source and chunk hashes recorded in JOB-208"
+      },
+      {
+        "label": "Validated",
+        "value": "08 Oct, 09:35 · System"
+      }
+    ],
+    "warning": {
+      "title": "Indexed is not published",
+      "description": "The candidate stays outside user retrieval until reference 8 is corrected and Priya Shah approves the release."
+    },
+    "retrievalChecks": [
+      {
+        "id": "rc-1",
+        "label": "Benefits baseline validation",
+        "result": "CH-014 · p.8 · §2",
+        "detail": "Relevant · Provenance intact",
+        "tone": "ok"
+      },
+      {
+        "id": "rc-2",
+        "label": "Accountable benefit owner",
+        "result": "CH-022 · p.14 · §4",
+        "detail": "Relevant · Owner metadata intact",
+        "tone": "ok"
+      }
+    ]
+  },
+  "qualityGates": {
+    "title": "Quality review: Benefits toolkit",
+    "subtitle": "LP-041 · v2.1 candidate · Owner: Maya Patel · Approver: Priya Shah",
+    "gates": [
+      {
+        "id": "qg-1",
+        "label": "Provenance & rights",
+        "result": "Passed",
+        "detail": "Internal reuse permitted",
+        "tone": "ok"
+      },
+      {
+        "id": "qg-2",
+        "label": "Citation verification",
+        "result": "7 / 8 verified",
+        "detail": "Correct reference 8",
+        "tone": "warn"
+      },
+      {
+        "id": "qg-3",
+        "label": "Classification & duplication",
+        "result": "Passed",
+        "detail": "No duplicates",
+        "tone": "ok"
+      },
+      {
+        "id": "qg-4",
+        "label": "Chunk & page integrity",
+        "result": "Passed",
+        "detail": "86 chunks / 42 pages",
+        "tone": "ok"
+      }
+    ],
+    "blocker": {
+      "title": "Unattributed benchmark in reference 8",
+      "description": "Replace with a verifiable source or remove the statement. Publication is blocked until the correction is reviewed."
+    },
+    "metadata": [
+      {
+        "label": "Taxonomy",
+        "value": "Transformation / Benefits · Defined maturity"
+      },
+      {
+        "label": "Owner / rights",
+        "value": "Maya Patel · Advisory Methods · Internal reuse"
+      },
+      {
+        "label": "Flagged passage",
+        "value": "Page 18 · Benchmark claim lacks an attributable original source"
+      },
+      {
+        "label": "Published baseline",
+        "value": "v2.0 remains available to users"
+      }
+    ],
+    "correction": {
+      "assignee": "Maya Patel",
+      "due": "2026-10-09",
+      "sourceLocation": "Page 18 · Reference 8 · Benefits benchmark",
+      "requiredCorrection": "Replace the unattributed benchmark with an original, verifiable source or remove the claim. Upload a corrected file and preserve source locators for all unaffected passages.",
+      "severity": "Publication-blocking · Citation verification"
+    }
+  },
+  "release": {
+    "practiceId": "lp-041",
+    "subtitle": "LP-041 · Benefits realization toolkit v2.1 · Illustrative later state: 09 Oct, 10:30",
+    "gates": [
+      {
+        "id": "rg-1",
+        "label": "Correction CR-041",
+        "result": "Resolved",
+        "detail": "Reference 8 replaced with verified attribution",
+        "tone": "ok"
+      },
+      {
+        "id": "rg-2",
+        "label": "Citation verification",
+        "result": "8 / 8 passed",
+        "detail": "Priya Shah · 09 Oct, 10:15",
+        "tone": "ok"
+      },
+      {
+        "id": "rg-3",
+        "label": "Index & metadata",
+        "result": "86 / 86 validated",
+        "detail": "JOB-209 · Corrected source hash retained",
+        "tone": "ok"
+      },
+      {
+        "id": "rg-4",
+        "label": "Independent review",
+        "result": "Approved",
+        "detail": "Priya Shah + Maya Patel",
+        "tone": "ok"
+      }
+    ],
+    "notice": {
+      "title": "v2.1 published",
+      "description": "Immutable release created on 09 Oct at 10:30. Approved library retrieval now serves v2.1; existing artifact citations remain pinned to v2.0."
+    },
+    "record": [
+      {
+        "label": "Owner",
+        "value": "Maya Patel · Advisory Methods"
+      },
+      {
+        "label": "Approver",
+        "value": "Priya Shah · Independent reviewer"
+      },
+      {
+        "label": "Rights",
+        "value": "Internal reuse permitted · Defined maturity"
+      },
+      {
+        "label": "Audit",
+        "value": "PUB-041-21 · Source, checks and approval retained"
+      },
+      {
+        "label": "Previous version",
+        "value": "v2.0 · Superseded, retained for provenance"
+      }
+    ]
   }
 }

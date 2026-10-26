@@ -39,7 +39,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   }, [mobileNavOpen]);
 
   return (
-    <div className="flex min-h-screen bg-[var(--primary-50)] text-[var(--primary-900)]">
+    <div className="admin-console-shell flex min-h-screen bg-[var(--primary-50)] text-[var(--primary-900)]">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--primary-900)] focus:shadow-lg focus:outline-2 focus:outline-[var(--accent-blue)]"
@@ -54,7 +54,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       />
       <div className="app-shell-body relative z-[1] min-w-0 flex-1">
         <AdminTopbar onMenuClick={() => setMobileNavOpen(true)} />
-        <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-[1400px] p-4 md:p-6 outline-none">
+        <main id="main-content" tabIndex={-1} className="admin-console-main mx-auto w-full max-w-[1400px] p-4 md:p-6 outline-none">
           {children}
         </main>
       </div>
