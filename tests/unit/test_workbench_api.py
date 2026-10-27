@@ -181,6 +181,25 @@ def test_library_shows_approved_practices_and_saves_per_user() -> None:
     assert client.get("/api/library/lp-missing", headers=headers).status_code == 404
 
 
+def test_ask_the_library_answers_from_the_approved_catalog() -> None:
+    client = TestClient(fastapi_app)
+    headers = _login(client, _email("reader"))
+    approved, candidate = _practice(), _practice("Quality review")
+
+    summary = client.post("/api/library/ask", json={"question": "Summarize the library"}, headers=headers).json()
+    ids = [p["id"] for p in summary["practices"]]
+    assert "approved practice" in summary["answer"] and candidate not in ids
+
+    client.post(f"/api/library/{approved}/save", headers=headers)
+    saved = client.post("/api/library/ask", json={"question": "Show my saved practices"}, headers=headers).json()
+    assert [p["id"] for p in saved["practices"]] == [approved]
+
+    # A misspelt intent word still picks the source-documents answer, scoped to the named practice.
+    docs = client.post("/api/library/ask", json={"question": f"docuemement name for {approved}"}, headers=headers).json()
+    assert docs["answer"].startswith("No uploaded source documents") and [p["id"] for p in docs["practices"]] == [approved]
+    assert client.post("/api/library/ask", json={"question": ""}, headers=headers).status_code == 422
+
+
 def test_practice_added_to_engagement_counts_as_a_source_and_is_searchable() -> None:
     client = TestClient(fastapi_app)
     headers = _login(client, _email("lead"))
