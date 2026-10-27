@@ -39,6 +39,7 @@ from src.core.db.session import engine, init_db
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
 from src.core.observability.metrics import snapshot as observability_snapshot
+from src.core.observability.advanced_metrics import get_all_advanced_metrics
 from src.core.observability.otel_tracing import flush_telemetry, init_otel_if_enabled
 from src.workflows.orchestrator import (
     admission_status,
@@ -261,14 +262,24 @@ def _visual_qa_health_payload() -> dict:
 
 
 @app.get("/metrics")
-def metrics() -> dict:
+def metrics(project_id: str | None = None) -> dict:
+    """Get all observability metrics. Optionally scoped to a project.
+
+    Args:
+        project_id: Optional project ID to get per-project aggregated metrics
+
+    Returns:
+        Metrics dict with observability, advanced_metrics, run_queue, etc.
+    """
     return {
         "service": "advise-workbench-backend",
         "observability": observability_snapshot(),
+        "advanced_metrics": get_all_advanced_metrics(project_id),
         "run_queue": queue_runtime_stats(),
         "visual_qa": _visual_qa_health_payload(),
         "bash_tool": bash_tool_health(),
         "text_editor_tool": text_editor_tool_health(),
+        "scope": {"project_id": project_id} if project_id else {"scope": "global"},
     }
 
 

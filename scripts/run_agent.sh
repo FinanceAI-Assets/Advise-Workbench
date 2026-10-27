@@ -294,12 +294,30 @@ OO_ENABLED="$(env_get OPENOBSERVE_ENABLED)"
 OO_URL="$(env_get OPENOBSERVE_URL)"; OO_URL="${OO_URL:-http://localhost:5080}"
 OO_PORT="$(echo "$OO_URL" | sed -E 's#.*:([0-9]+)/?$#\1#')"
 OO_UP=0
+OO_REMOTE=0
+OO_START_LOCAL=0
+
+# Check if OpenObserve is remote (Cloudflare tunnel, HTTPS, or not localhost)
+case "$OO_URL" in
+  *cloudflare*|*https://*|*trycloudflare*) OO_REMOTE=1 ;;
+esac
+
 if [ "$OO_ENABLED" = "true" ]; then
-  S="$(check_port openobserve "$OO_PORT" "$OO_URL/healthz")"
-  case "$S" in up) OO_UP=1; pass "OpenObserve already running on $OO_PORT" ;;
-    free) if [ -x "$ROOT/.tools/openobserve/openobserve" ]; then pass "port $OO_PORT is free for OpenObserve"
-          else fail "OPENOBSERVE_ENABLED=true but OpenObserve is not installed" "./scripts/openobserve.sh setup"; fi ;;
-    *) fail "port $OO_PORT is used by ${S#busy:}" "stop that process or change OPENOBSERVE_URL" ;; esac
+  if [ "$OO_REMOTE" = 1 ]; then
+    # Remote OpenObserve - just note it, don't try to start
+    pass "OpenObserve configured: remote instance at $OO_URL (metrics will export there)"
+    OO_UP=1  # Don't try to start it
+  else
+    # Local OpenObserve - check port and availability
+    S="$(check_port openobserve "$OO_PORT" "$OO_URL/healthz")"
+    case "$S" in up) OO_UP=1; pass "OpenObserve already running on $OO_PORT" ;;
+      free) if [ -x "$ROOT/.tools/openobserve/openobserve" ]; then
+              pass "port $OO_PORT is free; will start OpenObserve"
+              OO_START_LOCAL=1
+            else
+              warn "OPENOBSERVE_ENABLED=true but OpenObserve is not installed" "./scripts/openobserve.sh setup"; fi ;;
+      *) warn "port $OO_PORT is used by ${S#busy:}; cannot start OpenObserve locally" "stop that process or change OPENOBSERVE_URL or set OPENOBSERVE_ENABLED=false" ;; esac
+  fi
 fi
 
 section "Optional tools"
@@ -373,13 +391,15 @@ if [ "$BRIDGE_MODE" = 1 ] && [ "$BRIDGE_UP" = 0 ]; then
   start_service bridge "$ROOT" "$PY" "$BRIDGE" --port "$BRIDGE_PORT" --claude "$(command -v claude)"
   wait_http bridge "http://127.0.0.1:$BRIDGE_PORT/" 20 "$PID_bridge" || cleanup 1
 fi
-if [ "$OO_ENABLED" = "true" ] && [ "$OO_UP" = 0 ]; then
+if [ "$OO_START_LOCAL" = 1 ]; then
+  # Start local OpenObserve only if configured for local and port is free
   start_service openobserve "$ROOT" "$ROOT/scripts/openobserve.sh" start
   wait_http openobserve "$OO_URL/healthz" 60 "$PID_openobserve" || cleanup 1
 fi
 if [ "$BACKEND_UP" = 0 ]; then
   # start_service backend "$ROOT" "$VENV/bin/uvicorn" src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
   # wait_http backend "http://127.0.0.1:$BACKEND_PORT/health" 120 "$PID_backend" || cleanup 1
+  export PYTHONIOENCODING=utf-8
   start_service backend "$ROOT" "$VENV_BIN/uvicorn$VENV_EXE_EXT" src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
   wait_http backend "http://127.0.0.1:$BACKEND_PORT/health" 120 "$PID_backend" || cleanup 1
 fi

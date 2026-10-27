@@ -15,15 +15,27 @@ Configuration:
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 from typing import Optional
 
 from src.core.db.models import Run
 from src.core.db.session import SessionLocal
 from src.core.storage import workspace_path
+from src.core.observability.advanced_metrics import record_quality_evaluation
 from .content_quality_evaluator import evaluate_run_quality
 
 logger = logging.getLogger(__name__)
+
+def safe_print(msg: str) -> None:
+    """Print safely, avoiding unicode encoding errors."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        try:
+            sys.stdout.buffer.write(msg.encode('utf-8', errors='replace') + b'\n')
+        except Exception:
+            print(msg.encode('ascii', errors='replace').decode('ascii'))
 
 
 class QualityEvaluationHook:
@@ -79,7 +91,7 @@ class QualityEvaluationHook:
             # ]
             artifact_paths = [
                 f for f in run_dir.rglob("*")
-                if f.is_file() and f.suffix.lower() in [".docx", ".pptx", ".pdf"]
+                if f.is_file() and f.suffix.lower() in [".docx", ".pptx", ".pdf", ".xlsx"]
             ]
 
             if not artifact_paths:
@@ -216,13 +228,13 @@ def trigger_quality_evaluation(
     """Trigger quality evaluation for a run using Sheldon's LLM."""
     db = None
     try:
-        print(f"[TRIGGER_EVAL] Starting for {project_id}/{run_id}")
+        safe_print(f"[TRIGGER_EVAL] Starting for {project_id}/{run_id}")
         db = SessionLocal()
 
         # Check if evaluation already exists
         report_path = workspace_path(project_id) / f"{run_id}_quality_metrics.json"
         if report_path.exists() and not force:
-            print(f"[TRIGGER_EVAL] Report already exists, loading from cache")
+            safe_print("[TRIGGER_EVAL] Report already exists, loading from cache")
             logger.info(f"Quality evaluation already exists: {report_path}")
             import json
             with open(report_path) as f:
@@ -231,26 +243,22 @@ def trigger_quality_evaluation(
         # Get all artifact files from workspace run directory
         run_dir = workspace_path(project_id) / "runs" / run_id
         if not run_dir.exists():
-            print(f"[TRIGGER_EVAL] Run directory not found: {run_dir}")
+            safe_print(f"[TRIGGER_EVAL] Run directory not found (job completed)")
             logger.warning(f"Run directory not found: {run_dir}")
-            return {"success": False, "error": f"Run directory not found: {run_dir}"}
+            return {"success": False, "error": "Run directory not found"}
 
         # Find artifact files - ONLY DOCX, PPTX, PDF (not internal metadata files)
-        # OLD: artifact_paths = [
-        #     f for f in run_dir.rglob("*")
-        #     if f.is_file() and f.suffix.lower() in [".docx", ".pptx", ".xlsx", ".pdf", ".json", ".txt", ".md"]
-        # ]
         artifact_paths = [
             f for f in run_dir.rglob("*")
-            if f.is_file() and f.suffix.lower() in [".docx", ".pptx", ".pdf"]
+            if f.is_file() and f.suffix.lower() in [".docx", ".pptx", ".pdf", ".xlsx"]
         ]
 
         if not artifact_paths:
-            print(f"[TRIGGER_EVAL] No artifacts found in {run_dir}")
+            safe_print(f"[TRIGGER_EVAL] No artifacts found (run_id={run_id})")
             logger.warning(f"No artifacts found for run {run_id}")
             return {"success": False, "error": "No artifacts found"}
 
-        print(f"[TRIGGER_EVAL] Found {len(artifact_paths)} artifacts to evaluate")
+        safe_print(f"[TRIGGER_EVAL] Found {len(artifact_paths)} artifacts to evaluate")
 
         # Get run for context
         run = db.query(Run).filter(Run.id == run_id).first()
@@ -269,6 +277,32 @@ def trigger_quality_evaluation(
             user_instructions=user_instructions,
             project_context=project_context
         )
+
+        # Record quality evaluation metrics for OpenObserve (4 evaluation metrics + grade/score)
+        if isinstance(result, dict):
+            # Extract from summary if available, otherwise use root level
+            summary = result.get("summary", {})
+            completeness = (summary.get("completeness_avg", 0) or 0) / 5.0  # Convert 1-5 scale to 0-1
+            clarity_readability = (summary.get("clarity_readability_avg", 0) or 0) / 5.0
+            faithfulness_usefulness = (summary.get("faithfulness_usefulness_avg", 0) or 0) / 5.0
+            content_accuracy = (summary.get("content_accuracy_avg", 0) or 0) / 5.0
+            grade = result.get("quality_grade") or summary.get("quality_grade")
+            score = summary.get("overall_quality_score", 0)
+
+            record_quality_evaluation(
+                completeness=completeness,
+                clarity_readability=clarity_readability,
+                faithfulness_usefulness=faithfulness_usefulness,
+                content_accuracy=content_accuracy,
+                grade=grade,
+                score=score,
+                project_id=project_id,
+            )
+            try:
+                safe_print(f"[QUALITY_EVAL_METRIC] Completeness: {completeness:.2f}, Clarity: {clarity_readability:.2f}, Faithfulness: {faithfulness_usefulness:.2f}, Accuracy: {content_accuracy:.2f}")
+            except Exception:
+                safe_print("[QUALITY_EVAL_METRIC] Metrics recorded successfully")
+            logger.info(f"Recorded quality metrics - Complete: {completeness}, Clarity: {clarity_readability}, Faithfulness: {faithfulness_usefulness}, Accuracy: {content_accuracy}")
 
         return result
 

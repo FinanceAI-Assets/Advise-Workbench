@@ -42,6 +42,10 @@ from src.memory.short_term.conversation_digest import build_conversation_digest_
 from src.guardrails.hooks import hook_execution_exists, record_hook_execution, run_hooks_sync, sync_disabled_hooks_from_db
 from src.core.observability.langfuse_tracing import langfuse_event, langfuse_span
 from src.core.observability.metrics import increment, observe_latency, record_run_trace, set_gauge
+from src.core.observability.advanced_metrics import record_application_request, record_agent_call
+from src.core.observability.agent_rag_metrics import AgentMetricsTracker, RAGMetricsTracker
+from src.core.observability.tool_metrics import ToolMetricsTracker
+from src.core.observability.application_metrics import get_application_metrics
 from src.guardrails.permission_pipeline import evaluate_permission_pipeline
 from src.guardrails.policy import PROPOSAL_SKILL_ID
 from src.evaluation.run_evaluator_pipeline import (
@@ -1156,7 +1160,14 @@ def fail_run_job(job: RunJob, exc: Exception) -> RunOutcome:
     append_run_event(session, run_id, "failed", {"error": str(exc), "traceback": tb[-3000:]})
     session.commit()
     increment("run_failed_total")
-    observe_latency("run_execution", (perf_counter() - started_at) * 1000.0)
+    elapsed_ms = (perf_counter() - started_at) * 1000.0
+    observe_latency("run_execution", elapsed_ms)
+
+    # Record application-level metrics for failed runs (per-project per-run)
+    run_cost = _run_cost or calculate_run_cost_usd(**_run_usage)
+    record_application_request(duration_ms=elapsed_ms, success=False, cost=run_cost, project_id=project_id)
+    print(f"[APP_METRICS] Run failed - Duration: {elapsed_ms:.0f}ms, Cost: ${run_cost:.4f}, Project: {project_id}")
+
     record_run_trace(
         "run_execution_failed",
         project_id=project_id,
@@ -1551,6 +1562,10 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 raise err_holder["error"]
             return result_holder.get("value", {})
 
+        # Initialize trackers for agent and tool metrics
+        agent_tracker = AgentMetricsTracker(agent_name="coordinator")
+        tool_tracker = ToolMetricsTracker(tool_name="run_coordinator")
+
         try:
             with project_token_context(project_id), run_llm_budget(int(settings.anthropic_max_tokens_per_run or 0), run_id=run_id):
                 try:
@@ -1559,11 +1574,18 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                         "run.coordinator",
                         attributes={"project_id": project_id, "run_id": run_id},
                     ):
-                        state = _run_coordinator_async()
+                        with agent_tracker.track_call():
+                            with tool_tracker.track_tool_call():
+                                state = _run_coordinator_async()
+                    agent_tracker.track_task_completion(success=True)
+                    tool_tracker.track_success(success=True, necessary=True)
+                    print(f"[AGENT_METRICS] Coordinator completed successfully")
                 finally:
                     _run_usage = get_run_usage()
                     _run_cost = calculate_run_cost_usd(**_run_usage)
         except RunAborted:
+            agent_tracker.track_task_completion(success=False)
+            tool_tracker.track_success(success=False, necessary=True)
             session.refresh(run)
             if _timeout_tripped["v"]:
                 append_run_event(
@@ -1584,8 +1606,25 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             _write_token_usage(run, _run_usage, _run_cost)
             run.status = "failed"
             session.commit()
+
+            # Record application metrics even on abort
+            try:
+                print(f"\n[METRICS_RECORD_ABORT] Recording metrics before abort...")
+                abort_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                abort_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=abort_elapsed_ms,
+                    success=False,
+                    cost=abort_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_ABORT] ✅ Metrics recorded on abort - Duration: {abort_elapsed_ms:.0f}ms, Cost: ${abort_cost:.4f}\n")
+            except Exception as metric_err:
+                print(f"[METRICS_RECORD_ABORT] ⚠️ Failed to record metrics: {metric_err}\n")
             return False, run.error_message
         except RunBudgetExceeded as budget_exc:
+            agent_tracker.track_task_completion(success=False)
+            tool_tracker.track_success(success=False, necessary=True)
             session.refresh(run)
             append_run_event(
                 session,
@@ -1597,6 +1636,21 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             run.status = "failed"
             run.error_message = str(budget_exc)[:2000]
             session.commit()
+
+            # Record application metrics even on budget exceeded
+            try:
+                print(f"\n[METRICS_RECORD_BUDGET] Recording metrics before budget exceeded...")
+                budget_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                budget_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=budget_elapsed_ms,
+                    success=False,
+                    cost=budget_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_BUDGET] ✅ Metrics recorded on budget exceeded - Duration: {budget_elapsed_ms:.0f}ms, Cost: ${budget_cost:.4f}\n")
+            except Exception as metric_err:
+                print(f"[METRICS_RECORD_BUDGET] ⚠️ Failed to record metrics: {metric_err}\n")
             return False, str(budget_exc)
         for _rep_key, _rep_model in (("qa_report", QaReportDoc), ("guardrail_report", GuardrailReportDoc)):
             _raw_rep = state.get(_rep_key)
@@ -1673,6 +1727,8 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             session.commit()
             append_run_event(session, run_id, "failed", {"error": run.error_message})
             session.commit()
+            agent_tracker.track_task_completion(success=False)
+            tool_tracker.track_success(success=False, necessary=True)
             increment("run_failed_total")
             observe_latency("run_execution", (perf_counter() - started_at) * 1000.0)
             record_run_trace(
@@ -1681,6 +1737,21 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 run_id=run_id,
                 extra={"error": run.error_message[:200]},
             )
+
+            # Record application metrics even on missing outputs
+            try:
+                print(f"\n[METRICS_RECORD_MISSING_OUTPUTS] Recording metrics for missing outputs...")
+                missing_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                missing_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=missing_elapsed_ms,
+                    success=False,
+                    cost=missing_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_MISSING_OUTPUTS] ✅ Metrics recorded - Duration: {missing_elapsed_ms:.0f}ms, Cost: ${missing_cost:.4f}\n")
+            except Exception as metric_err:
+                print(f"[METRICS_RECORD_MISSING_OUTPUTS] ⚠️ Failed to record metrics: {metric_err}\n")
             return False, run.error_message
         append_run_event(
             session,
@@ -1760,12 +1831,14 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
         print(f"[PHASE-GENERATE] All artifacts generated and persisted to disk")
 
         # ==================== TRIGGER QUALITY EVALUATION (after artifacts are generated) ====================
-        print(f"\n{'='*80}")
-        print(f"[QUALITY_EVAL_TRIGGER] Starting quality evaluation pipeline")
-        print(f"[QUALITY_EVAL_TRIGGER] Project: {project_id}, Run: {run_id}")
-        print(f"[QUALITY_EVAL_TRIGGER] Status: Quality evaluation enabled={settings.quality_evaluation_enabled}")
-        print(f"{'='*80}\n")
         import sys
+        try:
+            print(f"\n{'='*80}")
+            print(f"[QUALITY_EVAL_TRIGGER] Starting quality evaluation pipeline")
+            print(f"[QUALITY_EVAL_TRIGGER] Status: Quality evaluation enabled={settings.quality_evaluation_enabled}")
+            print(f"{'='*80}\n")
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write(b"[QUALITY_EVAL_TRIGGER] Starting quality evaluation\n")
         sys.stdout.flush()
 
         if settings.quality_evaluation_enabled:
@@ -1838,15 +1911,57 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             print(f"[QUALITY_EVAL_TRIGGER] To enable, set QUALITY_EVALUATION_ENABLED=true in .env\n")
             sys.stdout.flush()
 
+        # ==================== RECORD APPLICATION METRICS AT END OF GENERATE ====================
+        # Recording metrics HERE ensures they're captured even if later phases fail
+        try:
+            try:
+                print(f"\n{'='*80}")
+                print(f"[METRICS_RECORD_GENERATE] Recording application metrics at end of GENERATE phase")
+            except UnicodeEncodeError:
+                sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Recording metrics\n")
+
+            try:
+                generate_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                generate_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=generate_elapsed_ms,
+                    success=True,
+                    cost=generate_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_GENERATE] ✅ Application metrics recorded")
+                print(f"[METRICS_RECORD_GENERATE] - Duration: {generate_elapsed_ms:.0f}ms")
+                print(f"[METRICS_RECORD_GENERATE] - Cost: ${generate_cost:.4f}")
+            except UnicodeEncodeError:
+                sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Metrics recorded successfully\n")
+            except Exception as calc_err:
+                print(f"[METRICS_RECORD_GENERATE] ⚠️ Metric calculation error: {calc_err}")
+            finally:
+                try:
+                    print(f"{'='*80}\n")
+                except UnicodeEncodeError:
+                    pass
+        except Exception as metric_err:
+            try:
+                print(f"[METRICS_RECORD_GENERATE] ⚠️ Failed to record metrics: {metric_err}")
+            except Exception:
+                sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Metrics recording complete\n")
+        finally:
+            sys.stdout.flush()
+
         print(f"[PHASE-GENERATE] Continuing to next phase...\n")
     except Exception as phase_exception:
-        print(f"\n{'='*80}")
-        print(f"[PHASE-GENERATE] [ERROR] EXCEPTION CAUGHT:")
-        print(f"   Type: {type(phase_exception).__name__}")
-        print(f"   Message: {phase_exception}")
-        import traceback
-        print(f"   Traceback:\n{traceback.format_exc()}")
-        print(f"{'='*80}\n")
+        try:
+            print(f"\n{'='*80}")
+            print(f"[PHASE-GENERATE] [ERROR] EXCEPTION CAUGHT:")
+            print(f"   Type: {type(phase_exception).__name__}")
+            print(f"   Message: {str(phase_exception).encode('utf-8', errors='replace').decode('utf-8', errors='replace')}")
+            import traceback
+            tb_str = traceback.format_exc().encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+            print(f"   Traceback:\n{tb_str}")
+            print(f"{'='*80}\n")
+        except Exception as log_err:
+            print(f"[PHASE-GENERATE] [ERROR] Failed to log exception: {log_err}")
         raise
     finally:
         _keep(job, locals())
@@ -2442,8 +2557,11 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
         print(f"[DEBUG-FINALIZE] 10g. Session committed after hooks")
         print(f"[DEBUG-FINALIZE] 11. About to increment metrics")
         increment("run_done_total")
-        observe_latency("run_execution", (perf_counter() - started_at) * 1000.0)
         elapsed_ms = (perf_counter() - started_at) * 1000.0
+        observe_latency("run_execution", elapsed_ms)
+
+        print(f"[DEBUG-FINALIZE] Note: Application metrics were already recorded at end of GENERATE phase")
+
         print(f"[DEBUG-FINALIZE] 12. Elapsed time: {elapsed_ms:.0f}ms")
         if elapsed_ms > 30_000:
             print(f"[DEBUG-FINALIZE] 12a. Long-running completion, appending watchdog event")

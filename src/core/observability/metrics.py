@@ -78,6 +78,48 @@ _PROMETHEUS_COUNTER_HELP: dict[str, str] = {
     # Per-agent variants also exist: subagent_context_offered_chars_<agent>_total /
     # subagent_context_consumed_chars_<agent>_total (agent = pptx, docx, xlsx, pdf, narrative).
     "subagent_context_truncated_total": "Subagent prompt-context assemblies where offered context exceeded the consumed excerpt cap.",
+    # AGENT METRICS
+    "agent_coordinator_call_count_total": "Coordinator agent call invocations.",
+    "agent_coordinator_retry_total": "Coordinator agent retry calls.",
+    "agent_coordinator_task_success_total": "Coordinator agent successful tasks.",
+    "agent_pptx_agent_call_count_total": "PPTX agent call invocations.",
+    "agent_pptx_agent_retry_total": "PPTX agent retry calls.",
+    "agent_pptx_agent_task_success_total": "PPTX agent successful tasks.",
+    "agent_docx_agent_call_count_total": "DOCX agent call invocations.",
+    "agent_docx_agent_retry_total": "DOCX agent retry calls.",
+    "agent_docx_agent_task_success_total": "DOCX agent successful tasks.",
+    "agent_xlsx_agent_call_count_total": "XLSX agent call invocations.",
+    "agent_xlsx_agent_retry_total": "XLSX agent retry calls.",
+    "agent_xlsx_agent_task_success_total": "XLSX agent successful tasks.",
+    "agent_pdf_agent_call_count_total": "PDF agent call invocations.",
+    "agent_pdf_agent_retry_total": "PDF agent retry calls.",
+    "agent_pdf_agent_task_success_total": "PDF agent successful tasks.",
+    "agent_narrative_agent_call_count_total": "Narrative agent call invocations.",
+    "agent_narrative_agent_retry_total": "Narrative agent retry calls.",
+    "agent_narrative_agent_task_success_total": "Narrative agent successful tasks.",
+    # RAG METRICS
+    "rag_relevant_chunks_total": "RAG retrieval relevant chunks retrieved.",
+    "rag_retrieved_chunks_total": "RAG retrieval total chunks fetched.",
+    "rag_supported_facts_total": "RAG groundedness: supported/grounded facts.",
+    "rag_total_facts_total": "RAG total facts in responses.",
+    "rag_utilized_chunks_total": "RAG context chunks actually used in response.",
+    "rag_retrieval_latency_ms": "RAG retrieval operation latency (ms).",
+    # TOOL METRICS
+    "tool_calls_total": "Total tool executions (all tools, all phases).",
+    "tool_calls_success_total": "Tool calls completed successfully.",
+    "tool_calls_necessary_total": "Tool calls deemed necessary (not skippable).",
+    "tool_call_latency_ms": "Individual tool execution latency (ms).",
+    # APPLICATION METRICS
+    "app_requests_total": "Total application requests/runs processed.",
+    "app_failed_requests_total": "Application requests that failed.",
+    "app_request_latency_ms": "Request end-to-end processing latency (ms).",
+    "app_cost_total": "Cumulative cost (LLM tokens, infrastructure).",
+    # QUALITY EVALUATION METRICS
+    "quality_eval_runs_total": "Quality evaluation runs executed.",
+    "quality_eval_grade_total": "Cumulative quality grades (basis points).",
+    "quality_eval_score_total": "Cumulative quality scores (basis points).",
+    "quality_eval_passed_total": "Quality evaluations passed threshold.",
+    "quality_eval_failed_total": "Quality evaluations failed threshold.",
 }
 
 
