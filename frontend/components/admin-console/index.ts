@@ -9,10 +9,6 @@ export { DeliverableLifecyclePanel } from "@/components/admin-console/Deliverabl
 export { PracticeInventoryTable } from "@/components/admin-console/PracticeInventoryTable";
 export { IngestionJobPanel } from "@/components/admin-console/IngestionJobPanel";
 export { QualityReviewPanel } from "@/components/admin-console/QualityReviewPanel";
-export { SkillRegistryList } from "@/components/admin-console/SkillRegistryList";
-export { SkillDefinitionPanel } from "@/components/admin-console/SkillDefinitionPanel";
-export { TestResultsPanel } from "@/components/admin-console/TestResultsPanel";
-export { ReleaseApprovalPanel } from "@/components/admin-console/ReleaseApprovalPanel";
 export { ReviewQueueTable } from "@/components/admin-console/ReviewQueueTable";
 export { SelectedReviewPanel } from "@/components/admin-console/SelectedReviewPanel";
 export { PolicyControlsPanel } from "@/components/admin-console/PolicyControlsPanel";

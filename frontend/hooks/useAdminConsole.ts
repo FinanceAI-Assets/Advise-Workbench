@@ -9,7 +9,6 @@ import type {
   AdminLibraryDetail,
   AdminOverviewDetail,
   AdminReviewsGovernanceDetail,
-  AdminSkillsManagementDetail,
   AuditTrailEvent,
   RiskQueueRow,
   SelectedEngagementDetail,
@@ -81,7 +80,6 @@ export function useLibraryUpload() {
   });
 }
 
-export const useAdminSkillsQuery = () => useAdminQuery<AdminSkillsManagementDetail>(["skills"], "/api/admin/skills");
 
 export const useAdminReviewsQuery = (selected: string) =>
   useAdminQuery<AdminReviews>(["reviews", selected], `/api/admin/reviews?selected=${encodeURIComponent(selected)}`);

@@ -666,61 +666,6 @@ export type AdminLibraryDetail = {
   release?: LibraryReleaseDetail;
 };
 
-export type SkillRegistryItem = {
-  id: string;
-  name: string;
-  candidateMeta: string;
-  publishedMeta: string;
-};
-
-export type PermissionRow = { id: string; role: string; useSkill: string; defineApprove: string };
-
-export type SkillDefinitionDetail = {
-  id: string;
-  code: string;
-  name: string;
-  versionLabel: string;
-  owner: string;
-  approvalState: string;
-  instructionContract: string[];
-  requiredInputSchema: string;
-  outputSchema: string;
-  retrievalScope: string;
-  evidenceThreshold: string;
-  permissions: PermissionRow[];
-  changelog: string;
-};
-
-export type TestChecklistRow = { id: string; label: string; state: string };
-
-export type TestResultsDetail = {
-  id: string;
-  passCount: number;
-  totalCount: number;
-  failLabel: string;
-  runMeta: string;
-  checklist: TestChecklistRow[];
-  failure: { title: string; description: string } | null;
-};
-
-export type ReleaseApprovalCheck = { id: string; label: string; state: string };
-
-export type ReleaseApprovalDetail = {
-  reviewerName: string;
-  reviewerRole: string;
-  checks: ReleaseApprovalCheck[];
-  footnote: string;
-};
-
-export type AdminSkillsManagementDetail = {
-  publishedCount: number;
-  candidateCount: number;
-  registry: SkillRegistryItem[];
-  definition: SkillDefinitionDetail;
-  testResults: TestResultsDetail;
-  releaseApproval: ReleaseApprovalDetail;
-};
-
 export type ReviewQueueRow = {
   id: string;
   itemReference: string;
