@@ -1,24 +1,29 @@
-"""Anthropic Messages API through the official SDK."""
+"""Anthropic Messages API through the official SDK. The full feature set: tools, vision, thinking, bash/text-editor."""
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Any
 
-from src.core.config import settings
-# ORIGINAL CODE (commented):
-# from src.llm.capabilities import Capabilities
-# from src.llm.config import LLMConfig
-#
-#
-# class AnthropicProvider:
-#     name = "anthropic"
-#     capabilities = Capabilities(tools=True, vision=True, thinking=True, anthropic_tools=True)
-
-# NEW CODE (inherit from BaseLLMProvider for factory pattern support):
-from src.llm.base_provider import BaseLLMProvider
+from src.llm.base_provider import BaseLLMProvider, HealthStatus
 from src.llm.capabilities import Capabilities
 from src.llm.config import LLMConfig
+from src.llm.errors import LLMError, LLMTimeoutError, LLMUnavailableError, parse_retry_after, status_error
+
+
+def map_anthropic_error(exc: Exception, provider: str) -> Exception:
+    """Translate an ``anthropic`` SDK exception (also raised by AnthropicBedrock) into an LLMError."""
+    import anthropic
+
+    if isinstance(exc, anthropic.APITimeoutError):
+        return LLMTimeoutError(str(exc), provider=provider)
+    if isinstance(exc, anthropic.APIConnectionError):
+        return LLMUnavailableError(str(exc), provider=provider)
+    if isinstance(exc, anthropic.APIStatusError):
+        retry_after = parse_retry_after(exc.response.headers.get("retry-after")) if exc.response is not None else None
+        return status_error(exc.status_code, str(exc), provider=provider, retry_after=retry_after)
+    return exc
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -26,33 +31,29 @@ class AnthropicProvider(BaseLLMProvider):
     capabilities = Capabilities(tools=True, vision=True, thinking=True, anthropic_tools=True)
 
     def __init__(self, config: LLMConfig) -> None:
-        self._config = config
-
-    @property
-    def default_models(self) -> dict[str, str]:
-        """
-        PHASE 2 (ENVIRONMENT-ONLY):
-        Models come from LLMConfig.models, which are populated from environment variables only.
-        No fallback to settings or hardcoded defaults.
-
-        Commented out (Legacy):
-        # return {
-        #     "default": settings.anthropic_claude_model,
-        #     "planning": str(getattr(settings, "anthropic_planning_model", "") or ""),
-        #     "critique": str(getattr(settings, "anthropic_critique_model", "") or ""),
-        # }
-        """
-        return {
-           "default": self._config.models.get("default", ""),
-            "planning": self._config.models.get("planning", ""),
-            "critique": self._config.models.get("critique", ""),
-        }
-
-    def _api_key(self) -> str:
-        return (self._config.api_key or settings.anthropic_api_key or "").strip()
+        super().__init__(config)
+        self._client: Any = None
+        self._client_lock = threading.Lock()
 
     def is_enabled(self) -> bool:
-        return bool(self._api_key())
+        return bool(self._config.api_key)
+
+    def _new_client(self) -> Any:
+        import anthropic  # resolved at call time so tests can patch anthropic.Anthropic
+
+        kwargs: dict[str, Any] = {"api_key": self._config.api_key, "timeout": self._config.timeout_sec, "max_retries": 0}
+        if self._config.base_url:
+            kwargs["base_url"] = self._config.base_url
+        return anthropic.Anthropic(**kwargs)
+
+    @property
+    def client(self) -> Any:
+        """One SDK client per provider instance: it is thread-safe and keeps its HTTP connections warm."""
+        if self._client is None:
+            with self._client_lock:
+                if self._client is None:
+                    self._client = self._new_client()
+        return self._client
 
     def create_message(
         self,
@@ -62,18 +63,30 @@ class AnthropicProvider(BaseLLMProvider):
         on_event: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> Any:
-        # Lazy import so unit tests can run without the dependency installed/configured.
-        from anthropic import Anthropic  # type: ignore
+        try:
+            if stream:
+                api = self.client.beta.messages if beta else self.client.messages
+                with api.stream(**kwargs) as response:
+                    for _ in response:
+                        if on_event:
+                            on_event()
+                    return response.get_final_message()
+            api = self.client.beta.messages if beta else self.client.messages
+            return api.create(**kwargs)
+        except LLMError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — anything else is mapped or re-raised unchanged
+            mapped = map_anthropic_error(exc, self._config.label)
+            if mapped is exc:
+                raise
+            raise mapped from exc
 
-        client_kwargs: dict[str, Any] = {"api_key": self._api_key()}
-        if self._config.base_url:
-            client_kwargs["base_url"] = self._config.base_url
-        client = Anthropic(**client_kwargs)
-        if stream:
-            with client.messages.stream(**kwargs) as response:
-                for _ in response:
-                    if on_event:
-                        on_event()
-                return response.get_final_message()
-        api = client.beta.messages if beta else client.messages
-        return api.create(**kwargs)
+    def health_check(self) -> HealthStatus:
+        if not self.is_enabled():
+            return HealthStatus(ok=False, detail="ANTHROPIC_API_KEY (or LLM_API_KEY) is not set")
+        return HealthStatus(ok=True, detail="configured")
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None

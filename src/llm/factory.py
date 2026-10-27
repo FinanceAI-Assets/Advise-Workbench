@@ -1,106 +1,111 @@
-"""Provider factory for dynamic LLM provider instantiation.
+"""Provider factory: name -> implementation, plus a cache of live instances.
 
-This factory enables registration of providers and dynamic instantiation
-without hardcoded if-elif chains. Supports easy addition of new providers.
+Implementations are registered as ``"module:Class"`` strings and imported on first use, so an optional
+dependency (boto3 for Bedrock) is only needed when that provider is selected. Instances are cached by
+config fingerprint: SDK clients and HTTP connection pools are reused across calls, and a settings change
+(or a test monkeypatching settings) produces a fresh instance.
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
-from typing import Any
+import threading
+from collections import OrderedDict
 
 from src.llm.base_provider import BaseLLMProvider
+from src.llm.config import LLMConfig
+from src.llm.errors import LLMConfigError
 
 logger = logging.getLogger(__name__)
 
+_CACHE_SIZE = 8
+
 
 class ProviderRegistry:
-    """Registry for LLM providers using Factory pattern.
-
-    Allows runtime registration and dynamic instantiation of providers
-    without hardcoded provider logic.
-    """
-
-    _providers: dict[str, type[BaseLLMProvider]] = {}
-
-    @classmethod
-    def register(cls, name: str, provider_class: type[BaseLLMProvider]) -> None:
-        """Register a provider class.
-
-        Args:
-            name: Provider identifier (e.g., "anthropic", "openai", "groq")
-            provider_class: Class that inherits from BaseLLMProvider
-
-        Raises:
-            ValueError: If provider_class doesn't inherit from BaseLLMProvider
-        """
-        if not issubclass(provider_class, BaseLLMProvider):
-            raise ValueError(
-                f"Provider class {provider_class.__name__} must inherit from BaseLLMProvider"
-            )
-        cls._providers[name] = provider_class
-        logger.debug(f"Registered provider: {name} -> {provider_class.__name__}")
+    _providers: dict[str, str | type[BaseLLMProvider]] = {
+        "anthropic": "src.llm.providers.anthropic_api:AnthropicProvider",
+        "bedrock": "src.llm.providers.bedrock:BedrockProvider",
+        "claude_cli": "src.llm.providers.claude_cli:ClaudeCliProvider",
+        "openai_compatible": "src.llm.providers.openai_compatible:OpenAICompatibleProvider",
+        "azure_openai": "src.llm.providers.azure_openai:AzureOpenAIProvider",
+    }
+    _instances: OrderedDict[str, BaseLLMProvider] = OrderedDict()
+    _lock = threading.Lock()
 
     @classmethod
-    def create(cls, name: str, config: Any) -> BaseLLMProvider:
-        """Create a provider instance.
-
-        Args:
-            name: Provider identifier (e.g., "anthropic", "openai", "groq")
-            config: Configuration object passed to provider __init__
-
-        Returns:
-            Instantiated provider
-
-        Raises:
-            ValueError: If provider name not registered
-        """
-        if name not in cls._providers:
-            available = ", ".join(cls._providers.keys())
-            raise ValueError(
-                f"Unknown provider: {name!r}. Available providers: {available}"
-            )
-        provider_class = cls._providers[name]
-        return provider_class(config)
+    def register(cls, name: str, provider: str | type[BaseLLMProvider]) -> None:
+        """Add or replace a provider: a ``BaseLLMProvider`` subclass or a ``"module:Class"`` path."""
+        if not isinstance(provider, str) and not issubclass(provider, BaseLLMProvider):
+            raise TypeError(f"{provider!r} must subclass BaseLLMProvider")
+        with cls._lock:
+            cls._providers[name] = provider
 
     @classmethod
     def list_providers(cls) -> list[str]:
-        """List all registered provider names."""
-        return list(cls._providers.keys())
+        return list(cls._providers)
 
     @classmethod
     def is_registered(cls, name: str) -> bool:
-        """Check if a provider is registered."""
         return name in cls._providers
 
+    @classmethod
+    def provider_class(cls, name: str) -> type[BaseLLMProvider]:
+        target = cls._providers.get(name)
+        if target is None:
+            raise LLMConfigError(f"Unknown provider {name!r}. Available: {', '.join(cls._providers)}")
+        if not isinstance(target, str):
+            return target
+        module_name, _, class_name = target.partition(":")
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            raise LLMConfigError(
+                f"Provider {name!r} needs a package that is not installed ({exc.name or exc}). "
+                "Run `pip install -r requirements.txt`."
+            ) from exc
+        provider_cls = getattr(module, class_name)
+        with cls._lock:
+            cls._providers[name] = provider_cls
+        return provider_cls
 
-# Register built-in providers at module load time
-def _register_built_in_providers() -> None:
-    """Register all built-in providers."""
+    @classmethod
+    def create(cls, name: str, config: LLMConfig) -> BaseLLMProvider:
+        """A new, uncached instance."""
+        return cls.provider_class(name)(config)
+
+    @classmethod
+    def get(cls, config: LLMConfig) -> BaseLLMProvider:
+        """The cached instance for ``config``, created on first use."""
+        key = config.fingerprint
+        with cls._lock:
+            instance = cls._instances.get(key)
+            if instance is not None:
+                cls._instances.move_to_end(key)
+                return instance
+        created = cls.create(config.provider, config)
+        with cls._lock:
+            instance = cls._instances.setdefault(key, created)
+            cls._instances.move_to_end(key)
+            # Evicted instances are dropped, not closed: another thread may still be mid-call on one.
+            while len(cls._instances) > _CACHE_SIZE:
+                cls._instances.popitem(last=False)
+        if instance is not created:
+            _close_quietly(created)  # another thread won the race; this one was never used
+        return instance
+
+    @classmethod
+    def clear(cls) -> None:
+        """Close and drop every cached instance (shutdown, tests)."""
+        with cls._lock:
+            instances = list(cls._instances.values())
+            cls._instances.clear()
+        for instance in instances:
+            _close_quietly(instance)
+
+
+def _close_quietly(provider: BaseLLMProvider) -> None:
     try:
-        from src.llm.providers.anthropic_api import AnthropicProvider
-        ProviderRegistry.register("anthropic", AnthropicProvider)
-    except ImportError:
-        logger.warning("Could not import AnthropicProvider")
-
-    try:
-        from src.llm.providers.claude_cli import ClaudeCliProvider
-        ProviderRegistry.register("claude_cli", ClaudeCliProvider)
-    except ImportError:
-        logger.warning("Could not import ClaudeCliProvider")
-
-    try:
-        from src.llm.providers.openai_compatible import OpenAICompatibleProvider
-        ProviderRegistry.register("openai_compatible", OpenAICompatibleProvider)
-    except ImportError:
-        logger.warning("Could not import OpenAICompatibleProvider")
-
-    try:
-        from src.llm.providers.groq import GroqProvider
-        ProviderRegistry.register("groq", GroqProvider)
-    except ImportError:
-        logger.warning("Could not import GroqProvider")
-
-
-# Initialize registry when module loads
-_register_built_in_providers()
+        provider.close()
+    except Exception:  # noqa: BLE001 — closing must never break a caller
+        logger.debug("closing provider %s failed", provider.name, exc_info=True)

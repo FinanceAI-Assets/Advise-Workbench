@@ -124,13 +124,57 @@ class Settings(BaseSettings):
     openobserve_stream: str = "advise_workbench"
     openobserve_metrics_interval_sec: int = 15
 
-    # Model provider. Empty values fall back to config/model_config.yaml (see src/llm/config.py).
-    llm_provider: str = ""  # anthropic | claude_cli | openai_compatible
+    # Model provider (src/llm/config.py resolves these; see .env.example for one block per provider).
+    # LLM_PROVIDER: claude_cli | anthropic | openai | openai_compatible | azure_openai | bedrock, or an
+    # OpenAI-compatible preset: groq | openrouter | mistral | deepseek | together | xai | ollama | lmstudio | litellm.
+    # The generic LLM_* values override the provider-specific ones below, so all keys can sit in .env at
+    # once and switching provider is a one-line change.
+    llm_provider: str = ""
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
     llm_planning_model: str = ""
     llm_critique_model: str = ""
+    llm_timeout_sec: float = 180.0  # default per-request timeout when the caller passes none
+    llm_max_retries: int = 3  # retries for rate limits, timeouts and 5xx (not for bad requests or auth)
+    llm_circuit_breaker_failures: int | None = None  # None -> anthropic_circuit_breaker_failures
+    llm_circuit_breaker_reset_sec: int | None = None  # None -> anthropic_circuit_breaker_reset_sec
+    llm_fallback_provider: str = ""  # optional second provider used when the primary is unavailable
+    llm_fallback_model: str = ""
+    llm_required: bool = False  # true: refuse to start when the provider config is invalid (production)
+
+    anthropic_model: str = ""  # falls back to anthropic_claude_model
+    claude_cli_path: str = "claude"
+    claude_cli_model: str = ""  # empty -> the CLI's own default model
+    claude_cli_timeout_sec: float = 600.0
+    claude_cli_tools_enabled: bool = True  # expose the app's tools to the CLI over a loopback MCP server
+
+    openai_api_key: str = ""
+    openai_base_url: str = ""
+    openai_model: str = ""
+    groq_api_key: str = ""
+    openrouter_api_key: str = ""
+    mistral_api_key: str = ""
+    deepseek_api_key: str = ""
+    together_api_key: str = ""
+    xai_api_key: str = ""
+    litellm_api_key: str = ""
+    openai_compat_supports_tools: bool = True
+    openai_compat_supports_vision: bool = True
+    openai_compat_max_tokens_param: str = "auto"  # auto | max_tokens | max_completion_tokens
+
+    azure_openai_endpoint: str = ""  # https://<resource>.openai.azure.com
+    azure_openai_api_key: str = ""
+    azure_openai_api_version: str = "2024-10-21"  # empty -> the v1 API (/openai/v1, model in the body)
+    azure_openai_deployment: str = ""
+
+    aws_region: str = ""
+    aws_profile: str = ""
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_session_token: str = ""
+    bedrock_model: str = ""  # e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    bedrock_anthropic_tools_enabled: bool = False  # bash / text-editor betas, only for models that support them
 
     anthropic_api_key: str = ""
     anthropic_claude_model: str = "claude-haiku-4-5"

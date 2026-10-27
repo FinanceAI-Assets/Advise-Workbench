@@ -88,9 +88,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 section "Model access"
-# Provider: LLM_PROVIDER in .env, else `provider:` in config/model_config.yaml, else anthropic.
+# Provider: LLM_PROVIDER in .env (see .env.example for every option), else anthropic.
 PROVIDER="$(env_get LLM_PROVIDER)"
-[ -z "$PROVIDER" ] && PROVIDER="$(sed -n 's/^provider:[[:space:]]*\([a-z_]*\).*/\1/p' "$ROOT/config/model_config.yaml" 2>/dev/null | head -n 1)"
 PROVIDER="${PROVIDER:-anthropic}"
 BASE_URL="$(env_get ANTHROPIC_BASE_URL)"
 API_KEY="$(env_get ANTHROPIC_API_KEY)"
@@ -115,13 +114,6 @@ case "$PROVIDER" in
     USES_CLI=1
     pass "provider claude_cli: the backend calls the Claude Code CLI directly (no bridge, no API key)"
     check_claude_cli ;;
-  openai_compatible)
-    LLM_MODEL_SET="$(env_get LLM_MODEL)"
-    [ -z "$LLM_MODEL_SET" ] && LLM_MODEL_SET="$(awk '/^models:/{f=1;next} f&&/^[^ ]/{f=0} f&&/default:/{gsub(/.*default:[[:space:]]*|"|#.*/,""); print; exit}' "$ROOT/config/model_config.yaml" 2>/dev/null | tr -d '[:space:]')"
-    if [ -n "$LLM_MODEL_SET" ]; then pass "provider openai_compatible, model $LLM_MODEL_SET"
-    else fail "provider openai_compatible needs a model" "set LLM_MODEL in .env or models.default in config/model_config.yaml"; fi
-    if [ -n "$(env_get LLM_API_KEY)" ] || [ -n "$(env_get LLM_BASE_URL)" ]; then pass "LLM_API_KEY or LLM_BASE_URL is set (not validated here)"
-    else fail "provider openai_compatible needs LLM_API_KEY (or LLM_BASE_URL for a local server)" "add it to .env"; fi ;;
   anthropic)
     if [ "$BRIDGE_MODE" = 1 ]; then
       USES_CLI=1
@@ -135,7 +127,15 @@ case "$PROVIDER" in
     else
       fail "no model access configured" "set a real ANTHROPIC_API_KEY, or LLM_PROVIDER=claude_cli to use the signed-in Claude Code CLI, or see docs/04-development/model-providers.md"
     fi ;;
-  *) fail "unknown LLM_PROVIDER '$PROVIDER'" "use anthropic, claude_cli or openai_compatible" ;;
+  *)
+    # openai, azure_openai, bedrock and the OpenAI-compatible presets: the app's own validator decides.
+    if [ -x "$VPY" ]; then
+      if REPORT="$(cd "$ROOT" && "$VPY" -m src.llm check 2>/dev/null)"; then
+        pass "provider $PROVIDER is configured ($(printf '%s' "$REPORT" | sed -n 's/^models: *//p'))"
+      else
+        fail "provider $PROVIDER is not ready: $(printf '%s' "$REPORT" | sed -n 's/^status: *//p')" "fix .env as described in .env.example, then run: make llm.check"
+      fi
+    else warn "provider $PROVIDER is checked once .venv exists" "run with --fix, then: make llm.check"; fi ;;
 esac
 
 if [ "$USES_CLI" = 1 ]; then
