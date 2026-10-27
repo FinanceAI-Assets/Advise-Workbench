@@ -15,6 +15,7 @@ from src.agents.specialists._shared import (
     _model,
     _run_post_processor,
 )
+from src.prompts.registry import get_prompt
 
 
 def run_narrative_agent(ctx: AgentContext) -> AgentOutput:
@@ -26,14 +27,11 @@ def run_narrative_agent(ctx: AgentContext) -> AgentOutput:
     pm = _model(ctx)
     actx = (ctx.assembled_context or "").strip()
     if _shared.is_claude_enabled():
+        # [EXTERNALIZED to config/prompts/agent_narrative_fallback.yaml]
+        fallback_system = get_prompt("agent_narrative_fallback").render_system()
         sb = _build_system_from_skill(
             ctx, "narrative",
-            fallback_system=(
-                "You are a management consultant writing a client-facing briefing note. "
-                "Audience: a senior stakeholder who will not read technical details — they need insight, not procedure. "
-                "Tone: authoritative, direct, no hedging language ('it appears', 'it seems', 'we believe'). "
-                "Return ONLY valid Markdown starting with a # heading. No HTML. No preamble."
-            ),
+            fallback_system=fallback_system,
         )
         user = (
             "Write an executive briefing note from the ProcessModel and context excerpt below.\n\n"

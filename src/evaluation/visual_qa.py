@@ -9,6 +9,7 @@ from typing import Any
 
 from src.core.config import settings
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.llm.model_tiers import critique_model
 from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.llm.claude import _extract_first_json_object
@@ -946,14 +947,14 @@ def run_visual_quality_check(project_id: str, run_id: str, run_dir: Path) -> dic
                 logger.info("Generic visual QA skipped: configured provider does not support vision")
                 payload = {"status": "skip", "summary": "Vision not available", "findings": []}
             else:
-                system_prompt = (
-                    "You are a document visual QA reviewer. Inspect the provided rendered document images only. "
-                    "Return strict JSON with keys: status (pass|fail), summary (string), findings (string[]). "
-                    + (
-                        "Use strict visual criteria (layout, typography, spacing, hierarchy, table quality) because these are native document renders."
-                        if strict_mode
-                        else "These are surrogate text renders. Focus on content structure and organization signals; do not fail only for typography/styling limitations."
-                    )
+                # [EXTERNALIZED to config/prompts/visual_qa_reviewer.yaml]
+                visual_criteria = (
+                    "Use strict visual criteria (layout, typography, spacing, hierarchy, table quality) because these are native document renders."
+                    if strict_mode
+                    else "These are surrogate text renders. Focus on content structure and organization signals; do not fail only for typography/styling limitations."
+                )
+                system_prompt = get_prompt("visual_qa_reviewer").render_system(
+                    visual_criteria_mode=visual_criteria
                 )
                 user_prompt = (
                     f"Project: {project_id}\nRun: {run_id}\n\n"

@@ -11,6 +11,7 @@ from src.agents.specialists._shared import (
     _model,
     _run_post_processor,
 )
+from src.prompts.registry import get_prompt
 
 
 def run_sop_agent(ctx: AgentContext) -> AgentOutput:
@@ -21,14 +22,11 @@ def run_sop_agent(ctx: AgentContext) -> AgentOutput:
     """
     pm = _model(ctx)
     if _shared.is_claude_enabled():
+        # [EXTERNALIZED to config/prompts/agent_sop_fallback.yaml]
+        fallback_system = get_prompt("agent_sop_fallback").render_system()
         sb = _build_system_from_skill(
             ctx, "sop",
-            fallback_system=(
-                "You are a technical procedure writer. "
-                "Audience: an operator who must execute this process without prior context. "
-                "Register: formal, imperative, present-tense verbs (e.g. 'Submit the form', not 'You should submit'). "
-                "Return ONLY valid Markdown. No HTML. No preamble. The document must start with a # heading."
-            ),
+            fallback_system=fallback_system,
         )
         user = (
             "Write a Standard Operating Procedure (SOP) from the ProcessModel below.\n\n"

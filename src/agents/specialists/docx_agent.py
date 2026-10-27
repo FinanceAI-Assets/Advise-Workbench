@@ -37,17 +37,24 @@ def run_docx_agent(ctx: AgentContext) -> AgentOutput:
     deliverable = _deliverable_type_for_skill(skill_id)
 
     if _shared.is_claude_enabled():
+        # [EXTERNALIZED to config/prompts/agent_docx_fallback.yaml]
+        # from src.prompts.registry import get_prompt
+        # fallback_system = get_prompt("agent_docx_fallback").render_system()
+        # OLD INLINE PROMPT (kept for reference & testing):
+        # fallback_system=(
+        #     "You are a technical documentation author preparing a DOCX-ready procedure document. "
+        #     "Audience: an internal team member who will follow this document during execution. "
+        #     "Heading hierarchy: # for title (H1), ## for main sections (H2), ### for sub-sections (H3). "
+        #     "Return ONLY valid Markdown. The document must start with a # heading. No HTML. No preamble. "
+        #     "Do not include YAML front matter. "
+        #     "Never output source code (JavaScript, Python, the npm 'docx' library, python-docx) that "
+        #     "would generate the document — your output IS the document body in Markdown."
+        # )
+        from src.prompts.registry import get_prompt
+        fallback_system = get_prompt("agent_docx_fallback").render_system()
         sb = _build_system_from_skill(
             ctx, "docx",
-            fallback_system=(
-                "You are a technical documentation author preparing a DOCX-ready procedure document. "
-                "Audience: an internal team member who will follow this document during execution. "
-                "Heading hierarchy: # for title (H1), ## for main sections (H2), ### for sub-sections (H3). "
-                "Return ONLY valid Markdown. The document must start with a # heading. No HTML. No preamble. "
-                "Do not include YAML front matter. "
-                "Never output source code (JavaScript, Python, the npm 'docx' library, python-docx) that "
-                "would generate the document — your output IS the document body in Markdown."
-            ),
+            fallback_system=fallback_system,
         )
         sb = _append_archetype_prompt(sb, ctx, "docx")
 

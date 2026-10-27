@@ -1,0 +1,8 @@
+name: archetype_proposal
+version: 1
+description: Archetype prompt for client proposal deliverables
+system: |-
+
+
+  DELIVERABLE ARCHETYPE: client proposal. Emphasize client outcomes, approach, and evidence-backed recommendations.
+user: ""

@@ -13,6 +13,7 @@ from typing import Any
 
 from src.core.config import settings
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.llm.claude import (
     claude_generate_json,
     _extract_first_json_object,
@@ -360,9 +361,10 @@ def _score_llm_critique(text: str, dim: dict[str, Any], *, project_id: str | Non
         # [NEW: Gateway-based provider-agnostic call with JSON extraction]
         # All imports at module level: json, gateway, _extract_first_json_object,
         # _record_message_usage, _extract_final_text_from_message
+        # [EXTERNALIZED to config/prompts/editorial_reviewer.yaml]
         msg = gateway.create_message(
             model=gateway.model_for("default"),
-            system="You are an expert editorial reviewer. Return JSON only.",
+            system=get_prompt("editorial_reviewer").render_system(),
             messages=[{"role": "user", "content": user}],
         )
         _record_message_usage(msg)

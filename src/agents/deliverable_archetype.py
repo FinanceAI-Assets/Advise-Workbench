@@ -6,6 +6,7 @@ import re
 from typing import Any, Literal
 
 from src.guardrails.policy import has_proposal_intent
+from src.prompts.registry import get_prompt
 
 Archetype = Literal["process_doc", "advisory_pov", "proposal"]
 
@@ -114,36 +115,11 @@ def is_meta_process_model(pm: dict[str, Any] | None) -> bool:
 
 def archetype_prompt_block(archetype: Archetype, output_type: str) -> str:
     """Appendable prompt guidance keyed by archetype and output channel."""
+    # [EXTERNALIZED to config/prompts/archetype_*.yaml]
     out = output_type.strip().lower()
     if archetype == "advisory_pov":
-        if out == "pptx":
-            return (
-                "\n\nDELIVERABLE ARCHETYPE: advisory point-of-view deck.\n"
-                "Content MUST describe the client's subject-domain process (e.g. Record-to-Report: "
-                "journals → intercompany → reconciliation → close → consolidation → reporting), "
-                "NOT the meta-workflow of writing or producing this deck.\n"
-                "Required storyline: why-now; client process landscape; per-stage agentic intervention map; "
-                "value hypothesis; risks and controls; 90-day path.\n"
-                "Inline source labels on factual claims, e.g. '(source: internal estimate; illustrative)' "
-                "when ungrounded. Close with a 'Sources and assumptions' slide."
-            )
-        if out == "docx":
-            return (
-                "\n\nDELIVERABLE ARCHETYPE: advisory point-of-view note.\n"
-                "Write about the client's domain process and AI intervention opportunities — "
-                "never about creating documents, decks, or POV production steps.\n"
-                "Include: executive summary, domain process landscape, intervention map by stage, "
-                "value hypothesis, risks, and recommended path.\n"
-                "Add inline '(source: ...)' markers on key claims and end with an H2 "
-                "'## Sources and assumptions'."
-            )
-        return (
-            "\n\nDELIVERABLE ARCHETYPE: advisory point-of-view. "
-            "Focus on subject-domain content, not document-production workflow."
-        )
+        # Load from YAML with output_type template variable
+        return get_prompt("archetype_advisory_pov").render_system(output_type=out)
     if archetype == "proposal":
-        return (
-            "\n\nDELIVERABLE ARCHETYPE: client proposal. "
-            "Emphasize client outcomes, approach, and evidence-backed recommendations."
-        )
+        return get_prompt("archetype_proposal").render_system()
     return ""

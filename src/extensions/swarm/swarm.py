@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from src.core.db.models import RunTask, SwarmMessage, SwarmTeam, SwarmTeammate
 from src.core.observability.metrics import increment
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.llm.claude import (
     _extract_first_json_object,
     claude_generate,
@@ -499,7 +500,8 @@ def lead_plan_with_optional_llm(
         msg = gateway.create_message(
             model=gateway.model_for("default"),
             max_tokens=min(8192, int(getattr(settings, "subagent_tool_max_tokens", 8192) or 8192)),
-            system="You output only valid minified JSON for task orchestration.",
+            # [EXTERNALIZED to config/prompts/swarm_orchestration_json.yaml]
+            system=get_prompt("swarm_orchestration_json").render_system(),
             messages=[{"role": "user", "content": prompt}],
         )
         _record_message_usage(msg)

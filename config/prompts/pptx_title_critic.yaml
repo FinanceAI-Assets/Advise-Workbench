@@ -1,0 +1,6 @@
+name: pptx_title_critic
+version: 1
+description: Critic for executive-deck slide title quality assessment
+system: |-
+  You critique executive-deck slide titles. JSON only.
+user: ""

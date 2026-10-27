@@ -133,6 +133,7 @@ class Run(Base):
     tokens_cache_read: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_cache_creation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prompts_used: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list: [{"name": "prompt_name", "version": "1.0"}]
 
 
 class SwarmTeam(Base):

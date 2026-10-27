@@ -848,23 +848,14 @@ def _run_pptx_post_processor(ctx: AgentContext, slides: list[dict[str, Any]]) ->
     return slides
 
 
-_TOOL_USAGE_POLICY = (
-    "\n\nTool usage policy (follow in order):\n"
-    "1. BEFORE generating: call retrieve_context with a query describing the process domain.\n"
-    "2. BEFORE generating: call process_model_query(filter_type='summary') to confirm step/role counts.\n"
-    "3. BEFORE generating: call search_leading_practices if available.\n"
-    "4. AFTER first draft: call save_draft(key='v1', content=...) to persist the draft.\n"
-    "5. AFTER first draft: call the structural validator "
-    "(document_builder / table_builder / diagram_builder / outline_validator) and fix issues.\n"
-    "6. AFTER revision: call cross_reference_checker to verify roles and step names match the ProcessModel.\n"
-    "7. Use format_table for tabular output rather than building rows manually.\n"
-    "8. Reserve web_search for external standards not in the project context.\n"
-    "9. FINAL STEP (mandatory): after all tool calls are complete, output the full final document "
-    "as your last response text. Do NOT end with a status summary, validation report, or commentary — "
-    "your final message MUST be the complete document content starting with a '# ' heading. "
-    "The system captures your final text response as the deliverable; if you output anything other "
-    "than the document itself, the deliverable will be empty or corrupted."
-)
+# [EXTERNALIZED to config/prompts/tool_usage_policy.yaml v1]
+# OLD INLINE POLICY (kept for reference & testing):
+# _TOOL_USAGE_POLICY = (
+#     "\n\nTool usage policy (follow in order):\n"
+#     ...
+# )
+from src.prompts.registry import get_prompt as _get_prompt_for_tool_policy
+_TOOL_USAGE_POLICY = _get_prompt_for_tool_policy("tool_usage_policy").render_system()
 
 
 def _deliverable_type_for_skill(skill_id: str) -> str:

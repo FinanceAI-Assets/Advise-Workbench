@@ -54,6 +54,7 @@ from src.guardrails.policy import (
 from src.memory.retrieval import TieredContextEngine
 from src.llm import gateway
 from src.llm.claude import _extract_first_json_object
+from src.prompts.registry import get_prompt
 from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.workflows.orchestrator import append_memory_event, append_run_event, enqueue_run_execution
 from src.extensions.swarm.swarm import persist_instruction_broadcast_swarm_event_payload
@@ -590,13 +591,9 @@ def _propose_discovery_questions(
             # max_tokens=200,
             max_tokens=1000,  # NEW: Increased for Groq models with reasoning/thinking capabilities
             temperature=0.4,
-            #system=(
-            system=(
-                "You are Sheldon, a consulting copilot. Be a thoughtful colleague, not a form.\n"
-                "Acknowledge what the user just shared (do NOT re-ask anything already captured).\n"
-                "Then ask ONLY the single most important missing question from the list below.\n"
-                "Keep it to 2-3 sentences. No numbered lists. One emoji max.\n"
-                + (f"Already established: {known_summary}\n" if known_summary else "")
+            # [EXTERNALIZED to config/prompts/sheldon_discovery_question.yaml]
+            system=get_prompt("sheldon_discovery_question").render_system(
+                known_summary_context=(f"Already established: {known_summary}\n" if known_summary else "")
             ),
             user=(
                 f"User said: {instruction}\n\n"
@@ -727,26 +724,14 @@ def _persist_conversational_response(
     known_block = "\n".join(known_bits) if known_bits else "(none captured yet)"
     missing_block = ", ".join(missing_slots) if missing_slots else "(none — all required inputs captured)"
 
-    system_prompt = (
-        "You are Sheldon, a consulting copilot. Respond as a thoughtful colleague, NOT a vending machine.\n"
-        "You MUST ground every response in the captured context below. Do NOT ask the user for information "
-        "that is already present. When context contains client, audience, outcome, or win themes, "
-        "acknowledge them explicitly and move the conversation forward.\n"
-        "If missing_slots is non-empty, ask ONLY for those. If missing_slots is empty, confirm readiness "
-        "and offer to create a specific deliverable (e.g. propose PPTX vs DOCX) — but do NOT say 'Plan Ready'.\n"
-        "Keep replies concise (2-4 sentences). Use at most 1 emoji. Never return the generic 'Great topic!' template.\n"
-        "When using facts sourced from the project wiki, cite inline as '(source: [Wiki: Title])'. "
-        "Only cite titles from allowed_wiki_refs.\n"
-        "HARD RULE: You are a text-only interface. You CANNOT execute, build, draft, or create anything. "
-        "NEVER claim to be starting work, drafting slides, building a document, or promise delivery by a "
-        "specific time (e.g. 'in 90 minutes', 'shortly', 'now'). If the user says 'go ahead' or asks you "
-        "to start, respond: 'Type \"go\" to queue the run and I will start immediately.' Nothing else."
+    # [EXTERNALIZED to config/prompts/sheldon_context_reply.yaml]
+    wiki_insight = (
+        "\nIf relevant, start with a one-line 'Heads up:' insight grounded in a wiki fact "
+        "from allowed_wiki_refs, then continue the normal reply."
+    ) if unsurfaced_refs else ""
+    system_prompt = get_prompt("sheldon_context_reply").render_system(
+        wiki_insight_context=wiki_insight
     )
-    if unsurfaced_refs:
-        system_prompt += (
-            "\nIf relevant, start with a one-line 'Heads up:' insight grounded in a wiki fact "
-            "from allowed_wiki_refs, then continue the normal reply."
-        )
     if routed_intent in {"clarify", "discovery_answer"} and routed_confidence < 0.6 and project_id and settings.wiki_aware_discovery_enabled:
         # Phase 2: lightweight, budgeted wiki lookup before response generation.
         from src.memory.knowledge.wiki_query import _get_wiki_index, _search_wiki_pages
@@ -877,22 +862,8 @@ def _persist_acknowledgment_response(
         known_bits.append(f"- Win themes: {', '.join(str(t) for t in themes)}")
     known_block = "\n".join(known_bits) if known_bits else "(none captured yet)"
 
-    system_prompt = """You are Sheldon, an energetic creative partner.
-The user just sent a brief acknowledgment (like "sounds good", "makes sense", "great").
-
-You MUST ground your reply in the captured context below. Reference the client, outcome,
-or win themes by name if they are known. Do not ask for information already captured.
-
-Respond with 1-2 sentences that:
-1. Acknowledge their response warmly, referencing what was just discussed
-2. Either continue the discussion naturally OR gently ask what they'd like to do next
-3. Keep Sheldon's personality (energetic, supportive)
-
-Keep it SHORT — 1-2 sentences max. Don't be verbose.
-
-HARD RULE: You are a text-only interface. You CANNOT execute, build, draft, or create anything.
-NEVER say you are starting work, drafting, building, or promise delivery by a specific time.
-If the user wants to proceed, tell them to type "go" — that is the only way to queue a run."""
+    # [EXTERNALIZED to config/prompts/sheldon_acknowledgment.yaml]
+    system_prompt = get_prompt("sheldon_acknowledgment").render_system()
 
     user_prompt = f"""Captured context (known slots):
 {known_block}
@@ -980,13 +951,8 @@ def _update_conversation_summary(
     if not transcript.strip():
         return False
 
-    system = (
-        "You are a concise summarizer for a consulting copilot conversation. "
-        "Produce a factual, third-person summary (max 200 words) covering: "
-        "what the user is trying to accomplish, any client/outcome/audience/win-theme facts stated, "
-        "key decisions made, and the current stage of the conversation. "
-        "Do not include pleasantries or filler. Output plain prose."
-    )
+    # [EXTERNALIZED to config/prompts/sheldon_conversation_summary.yaml]
+    system = get_prompt("sheldon_conversation_summary").render_system()
     user = f"Conversation transcript to summarize:\n\n{transcript}\n\nSummary:"
 
     try:
@@ -1149,18 +1115,8 @@ def _persist_contextual_response(db: Session, conv: Conversation, user_message: 
     # gateway imported at module level (line 55)
     from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
-    system_prompt = """You are Sheldon, a helpful execution partner in an active project discussion.
-The user has asked a follow-up question about previous context in the conversation.
-
-Provide a direct, helpful response that:
-1. References the recent context/findings mentioned
-2. Answers their specific question directly
-3. Offers next steps or recommendations if appropriate
-4. Maintains Sheldon's personality (helpful, strategic, professional)
-
-Keep it concise (2-3 sentences) unless the question requires more detail.
-Do NOT offer generic recommendations - be specific to what was just discussed.
-"""
+    # [EXTERNALIZED to config/prompts/sheldon_followup_handler.yaml]
+    system_prompt = get_prompt("sheldon_followup_handler").render_system()
 
     user_prompt = f"""Prior context from conversation:
 {prior_context}
@@ -1218,23 +1174,8 @@ def _persist_out_of_scope_message(db: Session, conv: Conversation, user_request:
     # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
     # from src.llm.claude import claude_generate
 
-    system_prompt = """You are Sheldon, a helpful and witty digital teammate.
-A user has asked for something outside your current capabilities.
-
-Generate a SHORT (2-3 sentences max) response that:
-1. Acknowledges what they asked for with humor and understanding
-2. Explains it's not in your wheelhouse today in a funny, professional way
-3. Suggests they log feedback for future features
-4. Offers what you CAN help with (proposals, models, reports, documentation, etc.)
-
-Keep it light and entertaining while maintaining professionalism. Use personality and wit.
-Do NOT be apologetic or negative - be confident and fun about it.
-
-Examples of great tone:
-- "Love the ambition! 🚀 Flight booking isn't our jam yet, but we'd love to add it someday.
-  For now, I'm your go-to for proposals, reports, and process documentation—log your feature request and we'll get working on it!"
-- "That's a creative one! 😄 We're still building that superpower. How about I help you with something in our current toolkit instead—proposals, models, documentation?"
-"""
+    # [EXTERNALIZED to config/prompts/sheldon_out_of_scope.yaml]
+    system_prompt = get_prompt("sheldon_out_of_scope").render_system()
 
     user_prompt = f"User request: {user_request}\n\nGenerate a short, witty response acknowledging this request is out of scope (no quotes, just the message):"
 

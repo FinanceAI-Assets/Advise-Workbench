@@ -17,6 +17,7 @@ from src.agents.specialists._shared import (
     _model,
     _primary_skill,
 )
+from src.prompts.registry import get_prompt
 
 _LOG = logging.getLogger(__name__)
 
@@ -107,16 +108,11 @@ def run_xlsx_agent(ctx: AgentContext) -> AgentOutput:
     is_raci = (deliverable == "raci")
 
     if _shared.is_claude_enabled():
+        # [EXTERNALIZED to config/prompts/agent_xlsx_fallback.yaml]
+        fallback_system = get_prompt("agent_xlsx_fallback").render_system()
         sb = _build_system_from_skill(
             ctx, "xlsx",
-            fallback_system=(
-                "You are a data normalisation specialist preparing worksheet content for XLSX export. "
-                "Return ONLY a GitHub-flavored Markdown table — header row first, then one data row per step. "
-                "No title, no section heading, no explanation before or after the table. "
-                "Empty cells must contain '—', never left blank. "
-                "Cell values containing '|' must escape it as '\\|'. "
-                "No cell value may exceed 200 characters — truncate with '…' if longer."
-            ),
+            fallback_system=fallback_system,
         )
         if is_raci:
             accountable = roles[0] if roles else "Process Owner"

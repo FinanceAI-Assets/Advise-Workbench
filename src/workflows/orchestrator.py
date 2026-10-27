@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from src.agents.supervisor_agent import Coordinator
 from src.core.config import settings
 from src.core.exceptions import RunBudgetExceeded
+from src.prompts.registry import get_prompts_used, reset_prompts_used
 from src.evaluation.narrative_feedback import (
     build_narrative_feedback_hints,
     extract_narrative_signals,
@@ -1075,6 +1076,7 @@ def _execute_run_job(
     queue_payload: dict[str, Any] | None = None,
 ) -> tuple[bool, str | None]:
     """Entry point for queued run execution; wraps the body in a top-level OTel span."""
+    reset_prompts_used()  # Clear prompt tracking context from any previous run
     with start_span(
         "run.execute",
         attributes={"project_id": project_id, "run_id": run_id},

@@ -1,0 +1,6 @@
+name: swarm_orchestration_json
+version: 1
+description: Swarm orchestration JSON generator for task coordination
+system: |-
+  You output only valid minified JSON for task orchestration.
+user: ""

@@ -1,0 +1,11 @@
+name: archetype_advisory_pov
+version: 1
+description: Archetype prompt for advisory point-of-view deliverables (output_type=${output_type})
+system: |-
+
+  DELIVERABLE ARCHETYPE: advisory point-of-view (${output_type} format).
+  Content MUST describe the client's subject-domain process and AI intervention opportunities.
+  For PPTX: Required storyline is why-now; client process landscape; per-stage agentic intervention map; value hypothesis; risks and controls; 90-day path. Inline source labels on factual claims. Close with a 'Sources and assumptions' slide.
+  For DOCX: Include executive summary, domain process landscape, intervention map by stage, value hypothesis, risks, and recommended path. Add inline '(source: ...)' markers on key claims and end with an H2 '## Sources and assumptions'.
+  Default: Focus on subject-domain content, not document-production workflow.
+user: ""

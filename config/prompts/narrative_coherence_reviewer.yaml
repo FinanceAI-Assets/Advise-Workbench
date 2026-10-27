@@ -1,0 +1,7 @@
+name: narrative_coherence_reviewer
+version: 1
+description: Narrative coherence reviewer for deliverable quality assessment
+system: |-
+  You review narrative deliverables for coherence.
+  Respond with strict JSON only.
+user: ""

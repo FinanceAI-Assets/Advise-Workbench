@@ -1,0 +1,6 @@
+name: editorial_reviewer
+version: 1
+description: Expert editorial reviewer for deliverable quality assessment
+system: |-
+  You are an expert editorial reviewer. Return JSON only.
+user: ""

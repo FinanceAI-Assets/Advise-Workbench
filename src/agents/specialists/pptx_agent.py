@@ -30,8 +30,16 @@ from src.agents.specialists._shared import (
     _skill_instruction,
     _storyline_spine_block,
 )
+from src.prompts.registry import get_prompt
 
 _LOG = logging.getLogger(__name__)
+
+
+def _get_pptx_fallback_system() -> str:
+    """Load PPTX fallback system prompt from config/prompts/agent_pptx_fallback.yaml."""
+    # [EXTERNALIZED to config/prompts/agent_pptx_fallback.yaml v1]
+    # OLD INLINE PROMPT kept in YAML for reference and testing
+    return get_prompt("agent_pptx_fallback").render_system()
 
 
 def _matching_context_lines(text: str, keywords: tuple[str, ...], *, max_chars: int = 600) -> str:
@@ -572,74 +580,7 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
     if _shared.is_claude_enabled():
         sb = _build_system_from_skill(
             ctx, "pptx",
-            fallback_system=(
-                "You are generating a production-ready PowerPoint presentation deck. "
-                "Your JSON output will be immediately rendered into a fully-branded .pptx file that users can download and open. "
-                "Use varied, professional slide types — not just bullet lists. "
-                "Return ONLY a JSON object with a single top-level key 'slides' containing an array. "
-                "No prose, no markdown fences, no explanation. The JSON must be parseable with json.loads().\n\n"
-                "CRITICAL: Always populate slides with actual data. Never generate empty arrays for stat_cards, column_cards, or table rows.\n\n"
-                "HEADLINE RULE: Every slide title MUST be an insight assertion — a claim a senior executive would quote. "
-                "Test: a good title completes 'This deck argues that ___.' "
-                "BAD: 'Risk Management' | GOOD: 'Four Failure Modes That Derail Programs Like This' "
-                "BAD: 'Current State Overview' | GOOD: 'Manual Reconciliation Consumes 40% of Finance Capacity' "
-                "BAD: 'Proposed Approach' | GOOD: 'A Five-Layer Operating Model That Eliminates the Bottleneck' "
-                "BAD: 'Process Scale & Scope' | GOOD: 'Manual Work Consumes 40% of Capacity' "
-                "BAD: 'Three Pillars' | GOOD: 'Three Levers That Collapse the Bottleneck' "
-                "BAD: 'Savings Opportunity' | GOOD: '$400M Left on the Table Annually'\n\n"
-                "VISUAL RHYTHM: Use fill values to signal slide purpose:\n"
-                "  'dark'     → heavyweight impact: economic reframe, proof trace, evidence\n"
-                "  'green'    → opportunity/action: solution pillars, win themes, calls-to-action\n"
-                "  'mid_dark' → evidence: delivery phases, secondary proof metrics, step boxes\n"
-                "  'gray'     → reference/detail: supporting tables, supplementary stats\n"
-                "Within stat_cards and column_cards, ALWAYS vary fills across cards "
-                "(e.g., dark/mid_dark/gray or dark/green/gray). "
-                "Never assign the same fill to all cards in one slide.\n\n"
-                "SECTION RHYTHM: For 10+ slide decks, insert slide_type='section_divider' "
-                "between major narrative acts (after slide 3 and after slide 7). "
-                "section_divider title = the act's governing question (e.g., 'Why Act Now?').\n\n"
-                "EYEBROW: Set the 'subtitle' field to a short ALL-CAPS context label "
-                "(2–4 words, e.g., 'THE CENTRAL INSIGHT', 'REDEFINING THE BOTTLENECK'). "
-                "This renders above the main title as visual hierarchy.\n\n"
-                "EXAMPLE — stat_cards slide (slide_type=\"stat_cards\"):\n"
-                '{"slide_type": "stat_cards", "title": "Manual Work Consumes 40% of Finance Capacity", "stat_cards": [\n'
-                '  {"stat": "14", "label": "Process Steps", "description": "Each a manual handoff that adds cycle time and error risk", "fill": "dark"},\n'
-                '  {"stat": "5", "label": "Key Roles", "description": "Procurement, Finance, Stores, Treasury, Vendors — all in silos", "fill": "mid_dark"},\n'
-                '  {"stat": "$450M", "label": "Annual Spend at Risk", "description": "High-volume P2P with no automated controls", "fill": "gray"}\n'
-                ']}\n\n'
-                "EXAMPLE — column_cards slide (slide_type=\"column_cards\"):\n"
-                '{"slide_type": "column_cards", "title": "Three Levers That Collapse the Bottleneck", "column_cards": [\n'
-                '  {"heading": "Governance", "accent": "green", "body": "Centralize vendor master; enforce controls before a single invoice is processed"},\n'
-                '  {"heading": "Quality Gates", "accent": "dark", "body": "Activate QM module; block failures at source, not after the fact"},\n'
-                '  {"heading": "End-to-End Automation", "accent": "gray", "body": "OCR invoices; DMEE payment integration — zero manual keying"}\n'
-                ']}\n\n'
-                "EXAMPLE — table slide (slide_type=\"table\"):\n"
-                '{"slide_type": "table", "title": "The Handoff Map: Where Delays Compound", "table": {\n'
-                '  "headers": ["Step", "Owner", "Inputs → Outputs"],\n'
-                '  "rows": [\n'
-                '    ["1. Create PR", "Dept Head", "Material list → PR in ME51N"],\n'
-                '    ["2. Countersign", "Finance", "PR >INR 50K → Approved"],\n'
-                '    ["3. Create PO", "Procurement", "PR → PO in ME21N"]\n'
-                "  ]\n"
-                '}}\n\n'
-                "EXAMPLE — chart slide (slide_type=\"chart\"):\n"
-                '{"slide_type": "chart", "title": "Savings Accelerate After Month 6", "chart": {\n'
-                '  "type": "column", "categories": ["Q1","Q2","Q3","Q4"],\n'
-                '  "series": [{"name": "Cumulative Savings ($M)", "values": [15, 38, 65, 92]}],\n'
-                '  "subtitle": "Source: FY2024 management accounts"\n'
-                '}}\n\n'
-                "EXAMPLE — big_number slide (slide_type=\"big_number\"):\n"
-                '{"slide_type": "big_number", "title": "$400M Left on the Table Annually", "big_number": {\n'
-                '  "stat": "$400M–$600M", "label": "Annual Savings Run-Rate",\n'
-                '  "context": "Achievable by Month 18 with full $6B spendbase coverage.", "fill": "dark"}}\n\n'
-                "EXAMPLE — process_flow slide (slide_type=\"process_flow\"):\n"
-                '{"slide_type": "process_flow", "title": "Five Steps, One Owner at Each Gate", "process_flow": {"steps": [\n'
-                '  {"label": "Initiation", "description": "Request raised in ERP system", "fill": "dark"},\n'
-                '  {"label": "Review", "description": "Finance validates against approved budget", "fill": "green"},\n'
-                '  {"label": "Approval", "description": "CFO signs off digitally", "fill": "mid_dark"}\n'
-                ']}}\n\n'
-                "RULE: Do NOT generate empty stat_cards=[], column_cards=[], or table.rows=[]. Always populate with real data.\n"
-            ),
+            fallback_system=_get_pptx_fallback_system(),
         )
         sb = _append_archetype_prompt(sb, ctx, "pptx")
         # Executive-deck consistency & altitude rules (applied on every pptx path).

@@ -1,0 +1,6 @@
+name: swarm_task_executor
+version: 1
+description: Swarm task executor for completing short workflow tasks
+system: |-
+  You complete short workflow tasks for a document run. Reply concisely.
+user: ""

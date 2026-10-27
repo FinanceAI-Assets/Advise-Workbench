@@ -15,6 +15,7 @@ from src.core.config import settings
 from src.core.db.models import RunTask
 from src.core.db.session import SessionLocal
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 # [DEPRECATED: Hardcoded imports] Use gateway for provider-agnostic calls
 # from src.llm.claude import claude_generate, is_claude_enabled
 
@@ -92,7 +93,8 @@ def execute_custom_swarm_tasks_sync(
                         _extract_final_text_from_message(gateway.create_message(
                             model=gateway.model_for("default"),
                             max_tokens=1200,
-                            system="You complete short workflow tasks for a document run. Reply concisely.",
+                            # [EXTERNALIZED to config/prompts/swarm_task_executor.yaml]
+                            system=get_prompt("swarm_task_executor").render_system(),
                             messages=[{"role": "user", "content": f"Task: {t.title}\n\n{(t.description or '').strip()}\n\nSummarize what was done or decided in 2–6 sentences."}],
                         ))
                         or ""
@@ -100,7 +102,8 @@ def execute_custom_swarm_tasks_sync(
                     _record_message_usage(gateway.create_message(
                         model=gateway.model_for("default"),
                         max_tokens=1200,
-                        system="You complete short workflow tasks for a document run. Reply concisely.",
+                        # [EXTERNALIZED to config/prompts/swarm_task_executor.yaml]
+                        system=get_prompt("swarm_task_executor").render_system(),
                         messages=[{"role": "user", "content": f"Task: {t.title}\n\n{(t.description or '').strip()}\n\nSummarize what was done or decided in 2–6 sentences."}],
                     ))
                 except Exception as exc:  # noqa: BLE001

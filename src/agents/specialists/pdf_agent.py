@@ -15,6 +15,7 @@ from src.agents.specialists._shared import (
     _primary_skill,
     _run_post_processor,
 )
+from src.prompts.registry import get_prompt
 
 
 def run_pdf_agent(ctx: AgentContext) -> AgentOutput:
@@ -29,14 +30,11 @@ def run_pdf_agent(ctx: AgentContext) -> AgentOutput:
     deliverable = _deliverable_type_for_skill(skill_id)
 
     if _shared.is_claude_enabled():
+        # [EXTERNALIZED to config/prompts/agent_pdf_fallback.yaml]
+        fallback_system = get_prompt("agent_pdf_fallback").render_system()
         sb = _build_system_from_skill(
             ctx, "pdf",
-            fallback_system=(
-                "You are a management consultant authoring a client-facing report for PDF export. "
-                "Audience: a senior decision-maker who reads the executive summary first. "
-                "Tone: authoritative, factual, present tense. No hedging phrases. "
-                "Return ONLY valid Markdown. The document must start with a # heading. No HTML. No preamble."
-            ),
+            fallback_system=fallback_system,
         )
         if deliverable == "narrative":
             user = (

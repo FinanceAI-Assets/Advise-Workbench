@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.llm.claude import _extract_first_json_object
 from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
@@ -382,10 +383,8 @@ class NarrativeCoherenceRule(QualityRule):
         snippet = (text or "").strip()
         if len(snippet) > 8000:
             snippet = snippet[:8000]
-        system_prompt = (
-            "You review narrative deliverables for coherence. "
-            "Respond with strict JSON only."
-        )
+        # [EXTERNALIZED to config/prompts/narrative_coherence_reviewer.yaml]
+        system_prompt = get_prompt("narrative_coherence_reviewer").render_system()
         user_prompt = (
             "You review a narrative deliverable (output type: "
             f"{output_type}) for narrative coherence.\n\n"

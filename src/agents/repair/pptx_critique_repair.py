@@ -9,6 +9,7 @@ from typing import Any
 from src.agents.base_agent import AgentContext
 from src.core.config import settings
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.llm.claude import _extract_first_json_object
 from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
     # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
@@ -204,7 +205,8 @@ def critique_slides(
                 model=gateway.model_for(critique_model()),
                 temperature=0.1,
                 max_tokens=600,
-                system="You critique executive-deck slide titles. JSON only.",
+                # [EXTERNALIZED to config/prompts/pptx_title_critic.yaml]
+                system=get_prompt("pptx_title_critic").render_system(),
                 messages=[{"role": "user", "content": user}],
             )
             _record_message_usage(msg)

@@ -17,6 +17,7 @@ from typing import Any
 from src.core.config import settings
 from src.memory.knowledge.wiki_ingest import _migrate_meta_directory, _parse_source
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.llm.claude import (
     claude_generate_json,
     # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
@@ -1015,8 +1016,9 @@ def _llm_find_relationships(pages: dict) -> list:
                 summary = paras[0][:200] if paras else ""
             page_list.append({"id": pid, "title": data["title"], "summary": summary})
 
+        # [EXTERNALIZED to config/prompts/wiki_relationship_analyzer.yaml]
         result = claude_generate_json(
-            system="You are a knowledge management assistant. Identify semantic relationships between wiki pages.",
+            system=get_prompt("wiki_relationship_analyzer").render_system(),
             user=(
                 f"Wiki pages:\n{json.dumps(page_list, indent=2)}\n\n"
                 "Identify all pairs of pages that are meaningfully related (share topics, "

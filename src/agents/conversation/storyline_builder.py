@@ -21,6 +21,7 @@ from src.core.db.models import MemoryItem
 from src.core.config import settings
 from src.llm.model_tiers import planning_model
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.llm.claude import (
     _extract_first_json_object,
     claude_generate_json,
@@ -176,17 +177,8 @@ def propose_arcs(
         for k, v in ARC_LIBRARY.items()
     )
 
-    system = (
-        "You are Sheldon, a strategic consulting copilot helping to design a presentation narrative.\n"
-        "Given the project context, recommend which 2 narrative arcs from the provided list are most appropriate.\n"
-        "For each arc, give a 1-2 sentence reasoning that is SPECIFIC to this client and outcome — "
-        "reference the client name, industry, audience, and win themes.\n"
-        "Also give a 1-sentence personal recommendation for which arc to start with and why.\n"
-        "Return JSON: {\"recommended_arcs\": [\"arc_key1\", \"arc_key2\"], "
-        "\"reasoning\": {\"arc_key\": \"...\", ...}, "
-        "\"recommendation\": \"arc_key\", "
-        "\"recommendation_rationale\": \"...\"}"
-    )
+    # [EXTERNALIZED to config/prompts/storyline_arc_recommender.yaml]
+    system = get_prompt("storyline_arc_recommender").render_system()
     user = (
         f"Client: {client_name}" + (f" ({client_industry})" if client_industry else "") + "\n"
         f"Primary outcome: {primary_outcome}\n"
@@ -381,28 +373,12 @@ def build_storyline_contract(
     audience = str(discovery_slots.get("audience") or "").strip()
     enrich_str = json.dumps(enrichment or {}, ensure_ascii=False)[:1200]
 
-    system = (
-        "You are a partner-level consulting storyliner building the narrative spine of a "
-        "board-grade deck BEFORE any slide is drawn. Apply the Minto pyramid principle and the "
-        "chosen arc rigorously.\n\n"
-        f"Chosen arc: {arc_def['name']}\n"
-        f"Arc structure: {arc_def['structure']}\n\n"
-        "Rules (non-negotiable):\n"
-        "1. Every action_title is a full ASSERTION that carries the argument (subject + verb + "
-        "specific claim), never a topic label. BAD: 'Current State'. GOOD: 'Manual hand-offs add "
-        "11 days and $2.4M of rework to every close'.\n"
-        "2. One idea per slide. Supporting slides must be MECE and must ladder up to the "
-        "governing_thought.\n"
-        "3. Assign each slide a role_in_arc drawn from the chosen arc's stages.\n"
-        "4. required_evidence must reference a metric/fact present in the process summary or "
-        "enrichment data; if none exists, write 'assumption — to validate'. Never invent numbers.\n"
-        "5. suggested_visual MUST be one of: " + ", ".join(STORYLINE_VISUAL_VOCAB) + ". Favour "
-        "diagrams/data over bullets; use 'bullets' at most once. When required_evidence is a "
-        "numeric claim ($, %, KPI, FTE, cycle time), suggested_visual MUST be one of: "
-        + ", ".join(sorted(NUMERIC_VISUALS)) + ".\n\n"
-        "Return ONLY JSON: {\"governing_thought\": \"...\", \"slides\": [{\"slide_number\": 1, "
-        "\"action_title\": \"...\", \"role_in_arc\": \"...\", \"key_message\": \"...\", "
-        "\"required_evidence\": \"...\", \"suggested_visual\": \"...\"}, ...]}"
+    # [EXTERNALIZED to config/prompts/storyline_spine_builder.yaml]
+    system = get_prompt("storyline_spine_builder").render_system(
+        arc_name=arc_def['name'],
+        arc_structure=arc_def['structure'],
+        visual_vocab=", ".join(STORYLINE_VISUAL_VOCAB),
+        numeric_visuals=", ".join(sorted(NUMERIC_VISUALS))
     )
     user = (
         f"Client: {client_name}" + (f" ({client_industry})" if client_industry else "") + "\n"

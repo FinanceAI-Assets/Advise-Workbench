@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 
 from src.llm.claude import (
     claude_generate,
@@ -529,8 +530,9 @@ def _evaluate_answer_quality(answer: str, pages: list, question: str) -> dict | 
         return None
 
     try:
+        # [EXTERNALIZED to config/prompts/wiki_qa_reviewer.yaml]
         result = claude_generate_json(
-            system="You are a QA reviewer. Return strict JSON only.",
+            system=get_prompt("wiki_qa_reviewer").render_system(),
             user=(
                 f"Question: {question}\n\nAnswer: {answer}\n\n"
                 "Rate the answer. Return JSON: "

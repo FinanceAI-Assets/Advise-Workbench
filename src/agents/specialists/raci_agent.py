@@ -16,6 +16,7 @@ from src.agents.specialists._shared import (
     _pref,
     _run_post_processor,
 )
+from src.prompts.registry import get_prompt
 
 
 def _raci_deterministic_updates(pm: ProcessModel, preferred: str) -> dict[str, Any]:
@@ -81,20 +82,11 @@ def run_raci_agent(ctx: AgentContext) -> AgentOutput:
     preferred = _pref(ctx, "raci", "xlsx")
     llm_target = "Markdown table" if preferred in {"markdown", "xlsx"} else "strict HTML table"
     if _shared.is_claude_enabled():
+        # [EXTERNALIZED to config/prompts/agent_raci_fallback.yaml]
+        fallback_system = get_prompt("agent_raci_fallback").render_system(llm_target=llm_target)
         sb = _build_system_from_skill(
             ctx, "raci",
-            fallback_system=(
-                f"You are a RACI matrix author. "
-                f"Output format: {llm_target}. "
-                "Return ONLY the table — no preamble, no section headings, no explanation. "
-                "RACI definitions: "
-                "R (Responsible) = the role that executes the activity. "
-                "A (Accountable) = the role that owns the outcome and signs off — EXACTLY ONE per row. "
-                "C (Consulted) = roles whose input is required before the step completes. "
-                "I (Informed) = roles notified after the step completes. "
-                "A role may hold multiple letters in one cell (e.g. 'R/A') only when the same person is both executor and owner. "
-                "Never leave Accountable blank."
-            ),
+            fallback_system=fallback_system,
         )
         user = (
             "Build a RACI matrix from the ProcessModel below.\n\n"

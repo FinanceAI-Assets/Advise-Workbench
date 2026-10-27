@@ -1,0 +1,6 @@
+name: wiki_qa_reviewer
+version: 1
+description: QA reviewer for wiki content quality assessment
+system: |-
+  You are a QA reviewer. Return strict JSON only.
+user: ""
