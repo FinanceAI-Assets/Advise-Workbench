@@ -6,7 +6,9 @@ export { ControlsAuditPanel } from "@/components/admin-console/ControlsAuditPane
 export { AdminEngagementsTable } from "@/components/admin-console/AdminEngagementsTable";
 export { SelectedEngagementPanel } from "@/components/admin-console/SelectedEngagementPanel";
 export { DeliverableLifecyclePanel } from "@/components/admin-console/DeliverableLifecyclePanel";
-export { PracticeInventoryTable } from "@/components/admin-console/PracticeInventoryTable";
+export { PracticeInventoryPanel } from "@/components/admin-console/PracticeInventoryPanel";
+export { PipelineStepper } from "@/components/admin-console/PipelineStepper";
+export { LibraryBadge, LibraryWarning } from "@/components/admin-console/LibraryStatus";
 export { IngestionJobPanel } from "@/components/admin-console/IngestionJobPanel";
 export { QualityReviewPanel } from "@/components/admin-console/QualityReviewPanel";
 export { ReviewQueueTable } from "@/components/admin-console/ReviewQueueTable";

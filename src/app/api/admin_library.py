@@ -571,6 +571,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
         "pipelineSteps": pipeline_steps,
         "latestIngestionJob": {
             "id": latest["id"].lower(),
+            "submittedAt": _when(latest.get("uploadedAt")),
             "filename": latest["filename"],
             "meta": f"{latest.get('sizeBytes', 0) / 1024 / 1024:.1f} MB · Uploaded by {latest['submittedBy']} · {latest['classification']}",
             "status": "Published" if latest.get("release") else "Indexed" if latest.get("readable") else "Not readable",
@@ -592,6 +593,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
             "maturity": job.get("maturity") or practice.maturity,
             "practiceOwner": job["owner"],
             "approver": reviewer or "Not assigned",
+            "sourceAttribution": job.get("rights", ""),
             "sourceQualityChecks": [{"id": g["id"], "label": g["label"], "state": "Passed" if g["passed"] else g["result"]} for g in gates],
             "warning": blocker,
             "footnote": (f"Published {live_version} remains available to users. " if live_version and not published else "")
