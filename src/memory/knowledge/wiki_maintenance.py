@@ -95,6 +95,7 @@ class WikiMaintenanceManager:
     def _log_maintenance(self, action: str, details: dict[str, Any]) -> None:
         """Log maintenance action."""
         try:
+            self.wiki_dir.mkdir(parents=True, exist_ok=True)
             log_entry = {
                 "timestamp": datetime.now(IST).isoformat(),
                 "action": action,

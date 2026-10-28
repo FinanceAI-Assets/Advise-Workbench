@@ -1,4 +1,4 @@
-.PHONY: llm.check dev.secret db.up db.down db.migrate db.reset redis.up redis.down pptx.canvas.parity lint test coverage dev doctor
+.PHONY: dev.secret db.up db.down db.migrate db.reset redis.up redis.down shared.check pptx.canvas.parity lint test coverage dev doctor
 
 # Check the environment, then run bridge + backend + frontend together (Ctrl+C stops all).
 dev:
@@ -65,6 +65,11 @@ redis.up:
 
 redis.down:
 	docker compose stop redis
+
+# Connectivity test against the team's shared services (see docs/06-deployment-operations/SHARED_SERVICES.md).
+# Reads the shared-service links and keys from .env.
+shared.check:
+	python3 scripts/check_shared_services.py --env .env --ca system --only qdrant,s3,embeddings,telemetry
 
 pptx.canvas.parity:
 	python3 scripts/spikes/pptx_canvas_parity_spike.py --strict

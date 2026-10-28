@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     auth_allow_self_signup: bool = False
     # Comma-separated email domains that may sign in. Empty allows any domain.
     auth_allowed_email_domains: str = "deloitte.com"
+    # Microsoft Entra ID (OIDC) sign-in. Disabled until a client ID and secret are configured.
+    microsoft_sso_client_id: str = ""
+    microsoft_sso_client_secret: str = ""
+    microsoft_sso_tenant_id: str = "organizations"
+    microsoft_sso_redirect_uri: str = "http://localhost:8000/api/auth/microsoft/callback"
+    microsoft_sso_frontend_redirect_uri: str = "http://localhost:3000/login"
+    microsoft_sso_scopes: str = "openid profile email"
     # Comma-separated emails permitted to mutate the shared leading_practice wiki.
     # Empty in development = any authenticated user (matches historical behavior);
     # in staging/production, an empty list blocks all LP mutations.
@@ -421,6 +428,23 @@ class Settings(BaseSettings):
     # When True, deck.pdf is produced by converting the rendered PPTX with LibreOffice
     # (pixel-faithful); the ReportLab outline renderer remains the fail-open fallback.
     deck_pdf_via_soffice_enabled: bool = True
+
+    # Content Quality Evaluation: automatic LLM-based content scoring on run completion.
+    quality_evaluation_enabled: bool = Field(
+        default=True,
+        description="Enable automatic content quality evaluation",
+        validation_alias="QUALITY_EVALUATION_ENABLED"
+    )
+    quality_evaluation_async: bool = Field(
+        default=True,
+        description="Run evaluation asynchronously (don't block run completion)",
+        validation_alias="QUALITY_EVALUATION_ASYNC"
+    )
+    quality_evaluation_model: str = Field(
+        default="claude-opus-5-5",
+        description="Claude model to use for quality evaluation",
+        validation_alias="QUALITY_EVALUATION_MODEL"
+    )
     soffice_convert_timeout_sec: float = 120.0
     # Optional explicit path to the LibreOffice ``soffice`` binary. When unset,
     # discovery falls back to PATH then common install locations. Set this when

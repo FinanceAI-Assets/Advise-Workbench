@@ -7,7 +7,7 @@ import { ShellSidebar } from "@/components/shell/ShellSidebar";
 import { ShellTopbar } from "@/components/shell/ShellTopbar";
 import { useAuth } from "@/lib/auth-context";
 
-const noShellRoutes = ["/login", "/admin/console"];
+const noShellRoutes = ["/login", "/signup", "/admin/console"];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -17,7 +17,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   // One guard for every page: no session means sign in first.
   useEffect(() => {
-    if (ready && !token && !pathname.startsWith("/login")) {
+    if (ready && !token && !pathname.startsWith("/login") && !pathname.startsWith("/signup")) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     }
   }, [ready, token, pathname, router]);
