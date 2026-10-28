@@ -36,20 +36,8 @@ const allowlistFiles = new Set(
   [
     // Temporary allowlist until the “Full-route WCAG + Token” wave is complete.
     // Add paths relative to `frontend/`.
-    "components/run-studio/ZoneCLiveMonitor.tsx",
-    "components/run-studio/ToolActivityFeed.tsx",
-    // Outside current to-do wave (still enforced elsewhere).
-    "app/customize/page.tsx",
-    "app/projects/new/page.tsx",
-    "app/memory/page.tsx",
-    "app/projects/[pid]/page.tsx",
-    "app/projects/[pid]/runs/[rid]/page.tsx",
     "components/documents/DocumentUploader.tsx",
-    "components/DrawioCollabEditor.tsx",
     "components/ErrorBoundary.tsx",
-    "components/excel/ConflictResolutionPanel.tsx",
-    "components/excel/ExcelIntegrationPanel.tsx",
-    "components/run-studio/ZoneAInstruction.tsx",
     "components/shell/ShellTopbar.tsx",
     // If you see a false positive, allowlist the specific file path only.
   ].map((p) => path.join(frontendRoot, p)),

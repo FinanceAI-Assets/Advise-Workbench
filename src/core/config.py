@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     auth_allow_self_signup: bool = False
     # Comma-separated email domains that may sign in. Empty allows any domain.
     auth_allowed_email_domains: str = "deloitte.com"
+    # Microsoft Entra ID (OIDC) sign-in. Disabled until a client ID and secret are configured.
+    microsoft_sso_client_id: str = ""
+    microsoft_sso_client_secret: str = ""
+    microsoft_sso_tenant_id: str = "organizations"
+    microsoft_sso_redirect_uri: str = "http://localhost:8000/api/auth/microsoft/callback"
+    microsoft_sso_frontend_redirect_uri: str = "http://localhost:3000/login"
+    microsoft_sso_scopes: str = "openid profile email"
     # Comma-separated emails permitted to mutate the shared leading_practice wiki.
     # Empty in development = any authenticated user (matches historical behavior);
     # in staging/production, an empty list blocks all LP mutations.

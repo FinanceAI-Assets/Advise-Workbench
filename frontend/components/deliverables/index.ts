@@ -5,3 +5,8 @@ export { SlideThumbnailNav } from "@/components/deliverables/SlideThumbnailNav";
 export { SlideEvidencePanel } from "@/components/deliverables/SlideEvidencePanel";
 export { WordArtifactPanel } from "@/components/deliverables/WordArtifactPanel";
 export { ArtifactViewer } from "@/components/deliverables/ArtifactViewer";
+export { ExportApprovalNotice } from "@/components/deliverables/ExportApprovalNotice";
+export { SlideNavigator } from "@/components/deliverables/SlideNavigator";
+export { DocumentOutline, WordDocumentReader, toPages } from "@/components/deliverables/WordDocumentReader";
+export { EvidenceRegisterView } from "@/components/deliverables/EvidenceRegisterView";
+export { DeliverablesOverview, formatRunTime } from "@/components/deliverables/DeliverablesOverview";

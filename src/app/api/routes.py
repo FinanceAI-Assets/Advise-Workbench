@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from src.app.api import (
     admin_console,
+    admin_library,
     agent_bash,
     auth,
     documents,
@@ -33,6 +34,7 @@ router.include_router(reviews.router, prefix="/reviews", tags=["reviews"])
 router.include_router(library.router, tags=["library"])
 router.include_router(workbench.router, tags=["workbench"])
 router.include_router(admin_console.router, prefix="/admin", tags=["admin-console"])
+router.include_router(admin_library.router, prefix="/admin", tags=["admin-library"])
 router.include_router(documents.router, prefix="/documents", tags=["documents"])
 router.include_router(runs.router, prefix="/runs", tags=["runs"])
 router.include_router(swarm.router, prefix="/runs", tags=["swarm"])

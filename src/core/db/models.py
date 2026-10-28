@@ -22,6 +22,7 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     job_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_admin: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="user", server_default="user")
 
 
 class RefreshToken(Base):

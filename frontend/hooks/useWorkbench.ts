@@ -95,6 +95,15 @@ export function useStartConversationMutation(pid: string) {
   );
 }
 
+/** Start a conversation in an engagement chosen at call time (the Conversation picker page). */
+export function useStartConversationInMutation() {
+  return useWorkbenchMutation<{ pid: string; title: string }>(
+    ({ pid, title }) => ({ path: `/api/engagements/${enc(pid)}/conversations`, body: { title } }),
+    "Could not start the conversation",
+    [["conversation-context"], ["conversation"], ["conversation-usage"]]
+  );
+}
+
 export function useActivateConversationMutation(pid: string) {
   return useWorkbenchMutation<string>(
     (cid) => ({ path: `/api/engagements/${enc(pid)}/conversations/${enc(cid)}/activate` }),
@@ -276,6 +285,21 @@ export function usePracticeActions(id: string) {
       keys
     ),
   };
+}
+
+export type LibraryAnswer = {
+  answer: string;
+  practices: Array<{ id: string; title: string; category: string }>;
+  documents: Array<{ practiceId: string; practice: string; filename: string }>;
+  sources: Array<{ heading: string; source: string; text: string }>;
+};
+
+export function useLibraryAskMutation() {
+  return useWorkbenchMutation<string, LibraryAnswer>(
+    (question) => ({ path: "/api/library/ask", body: { question } }),
+    "Could not answer the question",
+    []
+  );
 }
 
 export function useSkillsQuery(q: string) {

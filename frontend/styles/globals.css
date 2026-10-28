@@ -35,11 +35,15 @@ a:hover {
   text-decoration: underline;
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
+/* In the base layer so Tailwind utilities (text-sm, font-medium, ...) on controls still apply;
+   unlayered rules would override every layered utility. */
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
 }
 
 .mono {
@@ -65,6 +69,58 @@ select {
 .surface-muted {
   border: 1px solid var(--surface-border);
   background: var(--surface-muted);
+}
+
+/* The administrator workspace is intentionally denser than the end-user
+   workspace so operational tables and review panels remain visible together. */
+.admin-console-shell {
+  --admin-content-bg: #f3f5f2;
+}
+
+.admin-console-shell .admin-console-main {
+  max-width: none;
+  background: var(--admin-content-bg);
+}
+
+.admin-console-shell .admin-page {
+  gap: 16px;
+}
+
+.admin-console-shell .admin-breadcrumb {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.admin-console-shell .admin-page-title {
+  font-size: 24px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.admin-console-shell .admin-page-subtitle {
+  font-size: 12px;
+}
+
+.admin-console-shell .deloitte-surface,
+.admin-console-shell [class*="rounded-lg"][class*="border"] {
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.admin-console-shell table {
+  font-size: 11px;
+}
+
+.admin-console-shell th {
+  font-size: 9px;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.admin-console-shell td,
+.admin-console-shell th {
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
 .status-pill {
@@ -173,30 +229,20 @@ select {
   color: var(--status-failed-text);
 }
 
-.input-select-base {
-  border-radius: var(--radius-md);
-  border: 1px solid var(--light-gray);
-  background: var(--surface-default);
-  padding: 0.75rem 1rem;
-  font-size: var(--text-sm-size);
-  color: var(--text-default);
+/* Component layer, so size and spacing utilities passed to <Select className> win. */
+@layer components {
+  .input-select-base {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--light-gray);
+    background: var(--surface-default);
+    padding: 0.75rem 1rem;
+    font-size: var(--text-sm-size);
+    color: var(--text-default);
+  }
 }
 
 .shell-sidebar a {
   color: inherit !important;
-}
-
-.project-studio-compact {
-  font-size: 13px;
-}
-
-.project-studio-compact h1 {
-  font-size: 1.35rem;
-}
-
-.project-studio-compact h2,
-.project-studio-compact h3 {
-  font-size: 0.9rem;
 }
 
 @media (prefers-reduced-motion: reduce) {
