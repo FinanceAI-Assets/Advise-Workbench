@@ -49,7 +49,6 @@ Designs of individual modules.
 | [TOKEN_BUDGET_IMPLEMENTATION.md](03-design/TOKEN_BUDGET_IMPLEMENTATION.md) | Token Budget & Context Compression - Implementation Guide |
 | [conversation-graph.md](03-design/conversation-graph.md) | Sheldon's conversation: turn phases, graph driver and background replies |
 | [financial-modules-build-plan.md](03-design/financial-modules-build-plan.md) | Financial Analysis Modules — Build Plan |
-| [guided-journey-view.md](03-design/guided-journey-view.md) | Guided view: the six-step project journey |
 | [langgraph-run-graph.md](03-design/langgraph-run-graph.md) | Run execution with LangGraph |
 | [leading-practice-rag.md](03-design/leading-practice-rag.md) | Leading Practice library: retrieval pipeline |
 | [memory-context-prompts.md](03-design/memory-context-prompts.md) | Memory, context and prompts |
@@ -61,7 +60,6 @@ Working on the code: integration guides and conventions.
 | Document | Title |
 |---|---|
 | [anthropic_skills_reconciliation.md](04-development/anthropic_skills_reconciliation.md) | Anthropic skills reconciliation (mapped built-ins) |
-| [frontend-integration-guide.md](04-development/frontend-integration-guide.md) | Advise Workbench — Component Integration Guide |
 | [layering.md](04-development/layering.md) | Layering rules |
 | [model-providers.md](04-development/model-providers.md) | Model providers |
 
@@ -116,7 +114,7 @@ Plans, tickets and phase summaries.
 
 Historical documents, kept unchanged for reference.
 
-48 files. See the folder: [99-archive/](99-archive/).
+51 files. See the folder: [99-archive/](99-archive/).
 
 ## Elsewhere in the repo
 

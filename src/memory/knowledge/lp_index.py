@@ -2,7 +2,8 @@
 
 Sources:
 - the folder named by ``LP_LIBRARY_LOCAL_PATH`` (``.md`` and ``.txt`` files, any depth);
-- the shared leading-practice wiki pages under ``<workspace>/leading_practices/wiki``.
+- the shared leading-practice wiki pages under ``<workspace>/leading_practices/wiki``;
+- practices released from the admin console's library pipeline, under ``<workspace>/leading_practices/published``.
 
 The passages are kept in ``<workspace>/.lp_index/index.json`` and their embeddings next to it.
 Both are rebuilt when a source file is added, changed or removed.
@@ -59,6 +60,9 @@ def _source_files() -> list[tuple[str, Path]]:
     wiki = Path(settings.workspace_root) / "leading_practices" / "wiki"
     if wiki.is_dir():
         files += [("wiki", p) for p in sorted(wiki.rglob("*.md")) if ".meta" not in p.parts]
+    published = Path(settings.workspace_root) / "leading_practices" / "published"
+    if published.is_dir():
+        files += [("published", p) for p in sorted(published.glob("*.md"))]
     return files
 
 

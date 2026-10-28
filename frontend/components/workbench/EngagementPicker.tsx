@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
@@ -9,13 +10,27 @@ import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageF
 import { useEngagementsQuery } from "@/hooks/useEngagements";
 
 /** Sidebar "Conversation" and "Deliverables" outside an engagement: choose which engagement to open. */
-export function EngagementPicker({ area, title, subtitle }: { area: "conversation" | "deliverables"; title: string; subtitle: string }) {
+export function EngagementPicker({
+  area,
+  title,
+  subtitle,
+  actions,
+  children,
+}: {
+  area: "conversation" | "deliverables";
+  title: string;
+  subtitle: string;
+  actions?: ReactNode;
+  // Shown above the engagement list, e.g. the new conversation form.
+  children?: ReactNode;
+}) {
   const engagements = useEngagementsQuery({ q: "", status: "active", mine: false, page: 1 });
   if (engagements.isPending) return <PageSkeleton />;
   const rows = engagements.data?.items ?? [];
   return (
-    <PageFrame breadcrumb={`User workspace / ${title}`} title={title} subtitle={subtitle}>
+    <PageFrame breadcrumb={`User workspace / ${title}`} title={title} subtitle={subtitle} actions={actions}>
       <ErrorNote error={engagements.error} />
+      {children}
       {rows.length === 0 ? (
         <EmptyState title="No engagements yet" description="Create an engagement first.">
           <Link href="/engagements/new">Create an engagement</Link>

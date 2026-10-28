@@ -1,9 +1,9 @@
 "use client";
 
-import { Bookmark, Plus, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bookmark, MessageSquareText, Plus, Search } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 
-import { PracticeCard, PracticeDetailPanel, TaxonomyPanel } from "@/components/lp-library";
+import { LibraryAssistant, PracticeCard, PracticeDetailPanel, TaxonomyPanel } from "@/components/lp-library";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
@@ -79,6 +79,8 @@ function PracticePanel({ id }: { id: string }) {
 export default function LibraryPage() {
   const [filters, setFilters] = useState<LibraryFilters>(INITIAL);
   const [selected, setSelected] = useState("");
+  const [askOpen, setAskOpen] = useState(false);
+  const closeAsk = useCallback(() => setAskOpen(false), []);
   const library = useLibraryQuery(filters);
   const set = (change: Partial<LibraryFilters>) => setFilters((prev) => ({ ...prev, ...change }));
 
@@ -103,10 +105,16 @@ export default function LibraryPage() {
           : "Approved, versioned guidance you can cite in engagement conversations."
       }
       actions={
-        <Button variant="secondary" className="flex items-center gap-2" onClick={() => set({ savedOnly: !filters.savedOnly })}>
-          <Bookmark size={16} aria-hidden />
-          {filters.savedOnly ? "All practices" : `My saved practices (${data?.savedCount ?? 0})`}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" className="flex items-center gap-2" onClick={() => setAskOpen((open) => !open)} aria-pressed={askOpen}>
+            <MessageSquareText size={16} aria-hidden />
+            Ask the Library
+          </Button>
+          <Button variant="secondary" className="flex items-center gap-2" onClick={() => set({ savedOnly: !filters.savedOnly })}>
+            <Bookmark size={16} aria-hidden />
+            {filters.savedOnly ? "All practices" : `My saved practices (${data?.savedCount ?? 0})`}
+          </Button>
+        </div>
       }
     >
       <ErrorNote error={library.error} />
@@ -159,6 +167,16 @@ export default function LibraryPage() {
         </div>
         <div>{activeId ? <PracticePanel key={activeId} id={activeId} /> : null}</div>
       </div>
+      {askOpen ? (
+        <LibraryAssistant
+          onClose={closeAsk}
+          onOpenPractice={(id) => {
+            // Show the practice even when the current filters hide its card.
+            if (!cards.some((card) => card.id === id)) setFilters(INITIAL);
+            setSelected(id);
+          }}
+        />
+      ) : null}
     </PageFrame>
   );
 }
