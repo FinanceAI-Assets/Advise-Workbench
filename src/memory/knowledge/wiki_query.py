@@ -9,6 +9,15 @@ import logging
 import re
 from pathlib import Path
 
+from src.llm import gateway
+
+from src.llm.claude import (
+    claude_generate,
+    claude_generate_json,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
+
 _LOG = logging.getLogger(__name__)
 _embed_model = None
 _faiss_index = None
@@ -414,7 +423,10 @@ def _synthesize_answer(question: str, pages: list, wiki_type: str = "", project_
     Pages are ordered: primary matches (top 5 from embedding rerank) then related pages
     (discovered via graph). The LLM is told which are which so it can weight them.
     """
-    from src.llm.claude import claude_generate, is_claude_enabled
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # from src.llm.claude import claude_generate, is_claude_enabled
+    #from src.llm import gateway
+    from src.llm.claude import claude_generate
 
     if not pages:
         return "No relevant wiki pages found to answer this question. Try ingesting some documents first."
@@ -426,7 +438,11 @@ def _synthesize_answer(question: str, pages: list, wiki_type: str = "", project_
         schema = _load_wiki_schema(wiki_type, project_id)
     schema_prefix = f"Wiki schema and conventions:\n{schema}\n\n" if schema else ""
 
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     # Fallback: concatenate excerpts
+    # [NEW: Gateway-based provider-agnostic check]
+    if not gateway.is_enabled():
         # Fallback: concatenate excerpts
         parts = []
         for page in pages[:3]:
@@ -503,9 +519,13 @@ def _extract_citations(answer: str, pages: list) -> list:
 
 def _evaluate_answer_quality(answer: str, pages: list, question: str) -> dict | None:
     """Lightweight quality check on the synthesized answer."""
-    from src.llm.claude import claude_generate_json, is_claude_enabled
-
-    if not is_claude_enabled() or not answer or not pages:
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # from src.llm.claude import claude_generate_json, is_claude_enabled
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled() or not answer or not pages:
+    #     return None
+    # [NEW: Gateway-based provider-agnostic check]
+    if not gateway.is_enabled() or not answer or not pages:
         return None
 
     try:

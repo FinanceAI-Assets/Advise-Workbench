@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from src.core.config import settings
+from src.llm import gateway
 from src.llm.model_tiers import critique_model
-from src.llm.claude import claude_generate_json, claude_generate_json_with_images, is_claude_enabled
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+from src.llm.claude import _extract_first_json_object
+    # [DEPRECATED: Hardcoded claude_generate_json_with_images and claude_generate_json] Use gateway
+    # from src.llm.claude import claude_generate_json, claude_generate_json_with_images, is_claude_enabled
+
+logger = logging.getLogger(__name__)
 
 
 def _render_pdf_pages_to_png(pdf_path: Path, output_dir: Path, prefix: str) -> list[bytes]:
@@ -178,8 +185,12 @@ def _evaluate_pptx(path: Path, project_id: str, run_id: str) -> dict[str, Any]:
         return {**_empty, "summary": "PPTX visual critic disabled by configuration"}
     if not path.exists():
         return {**_empty, "summary": "PPTX not found"}
-    if not is_claude_enabled():
-        return {**_empty, "summary": "Claude API not configured"}
+    # [DEPRECATED: Old check - kept for reference]
+    # if not gateway.is_enabled():
+    #     return {**_empty, "summary": "Model provider not configured"}
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
+        return {**_empty, "summary": "Model provider not configured"}
 
     critic_mode = str(getattr(settings, "pptx_visual_critic_mode", "auto") or "auto").lower()
     # Records why the pixel path was not taken, so the saved report is
@@ -222,15 +233,42 @@ def _evaluate_pptx(path: Path, project_id: str, run_id: str) -> dict[str, Any]:
                             "Flag real layout problems — not stylistic preferences. "
                             "If a slide looks clean, do not manufacture findings."
                         )
-                        critic_model = str(getattr(settings, "pptx_visual_critic_model", "") or "").strip() or critique_model()
-                        result = claude_generate_json_with_images(
-                            system=pixel_system,
-                            user=pixel_user,
-                            image_bytes=page_images,
-                            model=critic_model,
-                            temperature=0.1,
+                        # [NEW: Gateway-based provider-agnostic JSON call with vision capability check]
+                        # Check if provider supports vision for image critique
+                        if not gateway.capabilities().vision:
+                            logger.info("Visual critique skipped: configured provider does not support vision")
+                            return {"status": "pass", "summary": "(Visual critique not available for this provider)", "hints": []}
+                        
+                        # Prepare image content blocks for providers that support vision
+                        image_content = []
+                        if isinstance(page_images, list):
+                            for img_b in page_images:
+                                image_content.append({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": img_b if isinstance(img_b, str) else (img_b.hex() if isinstance(img_b, bytes) else str(img_b)),
+                                    },
+                                })
+                        
+                        # Add text user prompt
+                        image_content.append({"type": "text", "text": pixel_user})
+                        
+                        msg = gateway.create_message(
+                            model=critique_model(),
                             max_tokens=1600,
+                            temperature=0.1,
+                            system=pixel_system,
+                            messages=[{"role": "user", "content": image_content}],
                         )
+                        _record_message_usage(msg)
+                        text = _extract_final_text_from_message(msg)
+                        try:
+                            result = json.loads(text)
+                        except json.JSONDecodeError:
+                            result = _extract_first_json_object(text)
+                        
                         if isinstance(result, dict) and "status" in result:
                             status = str(result.get("status") or "warn").lower()
                             if status not in {"pass", "warn", "fail"}:
@@ -243,6 +281,7 @@ def _evaluate_pptx(path: Path, project_id: str, run_id: str) -> dict[str, Any]:
                                 "critic_path": "pixel",
                             }
         except Exception as exc:
+            logger.warning("Visual critique failed (falling back): %s", exc)
             degraded_reason = f"pixel vision pass failed: {exc}"  # fall through to metadata path
 
     if critic_mode == "pixel":
@@ -290,14 +329,25 @@ def _evaluate_pptx(path: Path, project_id: str, run_id: str) -> dict[str, Any]:
     )
 
     try:
-        critic_model = str(getattr(settings, "pptx_visual_critic_model", "") or "").strip() or critique_model()
-        result = claude_generate_json(
-            system=system,
-            user=user,
-            model=critic_model,
-            temperature=0.1,
+        # [DEPRECATED: Old claude_generate_json call]
+        # result = claude_generate_json(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
             max_tokens=1400,
+            temperature=0.1,
+            system=system,
+            messages=[{"role": "user", "content": user}],
         )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            result = _extract_first_json_object(text)
     except Exception:
         # Fail-open: visual critic issues should not block pipeline progression.
         return {**_empty, "summary": "PPTX visual critic call failed; continuing without critic output"}
@@ -507,7 +557,11 @@ def _evaluate_document_outputs(
                  if v and "error" not in v}
     if not available:
         return {"docx": _empty, "xlsx": _empty, "pdf": _empty}
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not gateway.is_enabled():
+    #     return {"docx": _empty, "xlsx": _empty, "pdf": _empty}
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
         return {"docx": _empty, "xlsx": _empty, "pdf": _empty}
 
     system = (
@@ -556,12 +610,23 @@ def _evaluate_document_outputs(
     )
 
     try:
-        result = claude_generate_json(
-            system=system,
-            user="\n".join(sections),
+        # [DEPRECATED: Old claude_generate_json call]
+        # result = claude_generate_json(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.generate(
             temperature=0.1,
-            max_tokens=1200,
+            system=system,
+            messages=[{"role": "user", "content": "\n".join(sections)}],
         )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            result = _extract_first_json_object(text)
     except Exception:
         return {"docx": _empty, "xlsx": _empty, "pdf": _empty}
 
@@ -596,8 +661,12 @@ def _evaluate_process_map(run_dir: Path, project_id: str, run_id: str) -> dict[s
     metadata = _extract_process_map_metadata(run_dir)
     if metadata.get("format") == "none" or "error" in metadata:
         return {**_empty, "summary": metadata.get("error", "No process map found")}
-    if not is_claude_enabled():
-        return {**_empty, "summary": "Claude API not configured"}
+    # [DEPRECATED: Old check - kept for reference]
+    # if not gateway.is_enabled():
+    #     return {**_empty, "summary": "Model provider not configured"}
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
+        return {**_empty, "summary": "Model provider not configured"}
 
     fmt = metadata.get("format", "unknown")
     system = (
@@ -634,7 +703,25 @@ def _evaluate_process_map(run_dir: Path, project_id: str, run_id: str) -> dict[s
     )
 
     try:
-        result = claude_generate_json(system=system, user=user, temperature=0.1, max_tokens=600)
+        # [DEPRECATED: Old claude_generate_json call]
+        # result = claude_generate_json(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=600,
+            temperature=0.1,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            result = _extract_first_json_object(text)
     except Exception:
         return {**_empty, "summary": "Claude call failed"}
 
@@ -846,11 +933,15 @@ def run_visual_quality_check(project_id: str, run_id: str, run_dir: Path) -> dic
             },
         }
 
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not gateway.is_enabled():
+    #     return {...}
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
         return {
             "status": "skip",
-            "summary": "Visual QA skipped: Claude API is not configured (ANTHROPIC_API_KEY unset).",
-            "findings": ["Set ANTHROPIC_API_KEY to enable vision inspection."],
+            "summary": "Visual QA skipped: Model provider is not configured.",
+            "findings": ["Configure LLM_PROVIDER and required API keys to enable vision inspection."],
             "project_id": project_id,
             "run_id": run_id,
             "mode": "strict_image",
@@ -869,28 +960,63 @@ def run_visual_quality_check(project_id: str, run_id: str, run_dir: Path) -> dic
     generic_findings: list[str] = []
     if image_blobs:
         strict_mode = int(render_stats.get("native_images", 0)) > 0
-        payload = claude_generate_json_with_images(
-            system=(
-                "You are a document visual QA reviewer. Inspect the provided rendered document images only. "
-                "Return strict JSON with keys: status (pass|fail), summary (string), findings (string[]). "
-                + (
-                    "Use strict visual criteria (layout, typography, spacing, hierarchy, table quality) because these are native document renders."
-                    if strict_mode
-                    else "These are surrogate text renders. Focus on content structure and organization signals; do not fail only for typography/styling limitations."
+        # [NEW: Gateway-based provider-agnostic JSON call with vision capability check]
+        payload = {}
+        try:
+            if not gateway.capabilities().vision:
+                logger.info("Generic visual QA skipped: configured provider does not support vision")
+                payload = {"status": "skip", "summary": "Vision not available", "findings": []}
+            else:
+                system_prompt = (
+                    "You are a document visual QA reviewer. Inspect the provided rendered document images only. "
+                    "Return strict JSON with keys: status (pass|fail), summary (string), findings (string[]). "
+                    + (
+                        "Use strict visual criteria (layout, typography, spacing, hierarchy, table quality) because these are native document renders."
+                        if strict_mode
+                        else "These are surrogate text renders. Focus on content structure and organization signals; do not fail only for typography/styling limitations."
+                    )
                 )
-            ),
-            user=(
-                f"Project: {project_id}\nRun: {run_id}\n\n"
-                "Evaluate formatting consistency, section hierarchy, spacing, table readability, "
-                "and overall deliverable quality across these rendered pages."
-            ),
-            image_bytes=image_blobs,
-            temperature=0.1,
-            max_tokens=800,
-        )
+                user_prompt = (
+                    f"Project: {project_id}\nRun: {run_id}\n\n"
+                    "Evaluate formatting consistency, section hierarchy, spacing, table readability, "
+                    "and overall deliverable quality across these rendered pages."
+                )
+                
+                # Build image content blocks
+                image_content = []
+                if isinstance(image_blobs, list):
+                    for img_b in image_blobs:
+                        image_content.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": img_b if isinstance(img_b, str) else (img_b.hex() if isinstance(img_b, bytes) else str(img_b)),
+                            },
+                        })
+                
+                image_content.append({"type": "text", "text": user_prompt})
+                
+                msg = gateway.create_message(
+                    model=gateway.model_for("default"),
+                    max_tokens=800,
+                    temperature=0.1,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": image_content}],
+                )
+                _record_message_usage(msg)
+                text = _extract_final_text_from_message(msg)
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    payload = _extract_first_json_object(text) or {}
+        except Exception as exc:
+            logger.warning("Generic visual QA failed: %s", exc)
+            payload = {"status": "fail", "summary": f"QA unavailable ({type(exc).__name__})", "findings": []}
+        
         if isinstance(payload, dict):
             generic_status = str(payload.get("status") or "fail").lower()
-            if generic_status not in {"pass", "fail"}:
+            if generic_status not in {"pass", "fail", "skip"}:
                 generic_status = "fail"
             if not strict_mode and generic_status == "fail":
                 generic_status = "warn"

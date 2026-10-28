@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from src.llm.claude import claude_generate_json, is_claude_enabled
+# [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
+from src.llm import gateway
+from src.llm.claude import claude_generate_json
+# is_claude_enabled
 from src.prompts.registry import get_prompt
 from src.core.observability.langfuse_tracing import langfuse_span
 from src.core.observability.metrics import increment
@@ -109,7 +112,12 @@ class GuardrailPipeline:
 
         # Evaluate sequentially, stop at first fail.
         for gate_key in gate_order:
-            if not is_claude_enabled():
+            # [DEPRECATED: Old check - kept for reference]
+            # if not is_claude_enabled():
+            #     gate_result, reason = self._local_gate_eval(gate_key, outputs)
+            # else: ...
+            # [NEW: Use provider-agnostic gateway check]
+            if not gateway.is_enabled():
                 gate_result, reason = self._local_gate_eval(gate_key, outputs)
             else:
                 try:

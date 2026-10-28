@@ -42,16 +42,26 @@ def _reply(text: str | None = None, tool_calls: list | None = None, finish: str 
     return httpx.Response(200, json={"model": "small-model", "choices": [{"message": message, "finish_reason": finish}], "usage": {"prompt_tokens": 11, "completion_tokens": 7}})
 
 
-def test_default_provider_is_anthropic_with_tiered_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("llm_provider", "llm_model", "llm_planning_model", "llm_critique_model", "llm_base_url", "llm_api_key"):
+def test_anthropic_config_and_tiered_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("llm_provider", "llm_model", "llm_api_key", "llm_planning_model", "llm_critique_model", "anthropic_api_key", "anthropic_model"):
         monkeypatch.setattr(settings, name, "")
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
-    assert load_llm_config().provider == "anthropic"
-    assert gateway.model_for("default") == settings.anthropic_claude_model
-    assert gateway.model_for("planning") == settings.anthropic_planning_model
+
+    with pytest.raises(ValueError, match="LLM_PROVIDER is required"):
+        load_llm_config()
+    assert gateway.is_enabled() is False  # unconfigured: False, never an exception
+
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        load_llm_config()
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
+    monkeypatch.setattr(settings, "llm_planning_model", "claude-opus-4-8")
+    config = load_llm_config()
+    assert config.provider == "anthropic" and config.api_key == "sk-ant-test"
+    assert config.models["default"] == settings.anthropic_claude_model  # built-in default when no model is set
+    assert gateway.model_for("planning") == "claude-opus-4-8"
+    assert gateway.model_for("critique") == settings.anthropic_claude_model
     assert gateway.capabilities().thinking is True
-    assert gateway.is_enabled() is False  # no key
-    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
     assert gateway.is_enabled() is True
 
 
@@ -128,15 +138,24 @@ def test_provider_errors_are_raised(openai_settings: None, monkeypatch: pytest.M
 
 
 def test_provider_without_tools_writes_in_one_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.agents import tool_agent as claude_tools
-    from src.llm import claude
+    from src.agents import tool_agent
 
     monkeypatch.setattr(settings, "llm_provider", "claude_cli")
+    monkeypatch.setattr(settings, "claude_cli_tools_enabled", False)
+    monkeypatch.setattr(settings, "llm_model", "claude-haiku-4-5")
+    monkeypatch.setattr(gateway, "is_enabled", lambda: True)
     assert gateway.capabilities().tools is False
-    monkeypatch.setattr(claude_tools, "is_claude_enabled", lambda: True)
-    monkeypatch.setattr(claude, "claude_generate", lambda **kwargs: "# written directly")
-    out = claude_tools.run_subagent_tool_loop(system="s", user="u", project_id="p", tool_defs=[{"name": "t"}], native_context={})
-    assert out == {"text": "# written directly", "tool_trace": [], "model": gateway.model_for("default"), "rounds": 1}
+
+    calls: list[dict] = []
+
+    def fake_create_message(**kwargs):
+        calls.append(kwargs)
+        return type("Msg", (), {"content": [{"type": "text", "text": "# written directly"}]})()
+
+    monkeypatch.setattr(gateway, "create_message", fake_create_message)
+    out = tool_agent.run_subagent_tool_loop(system="s", user="u", project_id="p", tool_defs=[{"name": "t"}], native_context={})
+    assert out == {"text": "# written directly", "tool_trace": [], "model": "claude-haiku-4-5", "rounds": 1}
+    assert "tools" not in calls[0]
 
 
 def test_message_translation_helpers() -> None:

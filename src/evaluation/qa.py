@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
-from src.llm.claude import claude_generate_json, is_claude_enabled
+from src.llm import gateway
+from src.llm.claude import (
+    claude_generate_json,
+    _extract_first_json_object,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.core.observability.langfuse_tracing import langfuse_span
 from src.core.observability.metrics import increment
 from src.tools.registry import get_tool
@@ -22,8 +30,7 @@ class QAAgentLoop:
             return bytes(value).decode("utf-8", errors="replace")
         if isinstance(value, (list, dict, tuple, set)):
             try:
-                import json
-
+                # [NEW: json already imported at module level]
                 return json.dumps(value, ensure_ascii=False)
             except (TypeError, ValueError):
                 return str(value)
@@ -94,7 +101,13 @@ class QAAgentLoop:
             except Exception:
                 verifications["web_search"][out_key] = []
 
-        if not is_claude_enabled():
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import claude_generate_json, is_claude_enabled
+        # [DEPRECATED: Old check - kept for reference]
+        # if not is_claude_enabled():
+        #     passed = all(v >= threshold for v in fallback_scores.values())
+        # [NEW: Gateway-based provider-agnostic check]
+        if not gateway.is_enabled():
             passed = all(v >= threshold for v in fallback_scores.values())
             remediation = self._build_remediation_instructions(outputs, fallback_scores, threshold)
             increment("qa_runs_total")
@@ -131,7 +144,23 @@ class QAAgentLoop:
             )
 
             try:
-                res = claude_generate_json(system=system, user=user)
+                # [DEPRECATED: Old claude_generate_json call]
+                # res = claude_generate_json(...)
+                
+                # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+                # All imports at module level: json, gateway, _extract_first_json_object,
+                # _record_message_usage, _extract_final_text_from_message
+                msg = gateway.create_message(
+                    model=gateway.model_for("default"),
+                    system=system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                _record_message_usage(msg)
+                text = _extract_final_text_from_message(msg)
+                try:
+                    res = json.loads(text)
+                except json.JSONDecodeError:
+                    res = _extract_first_json_object(text)
                 scores = res.get("scores") if isinstance(res, dict) else None
                 if not isinstance(scores, dict):
                     raise ValueError("Invalid scores in QA result")

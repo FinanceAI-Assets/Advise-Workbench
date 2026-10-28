@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.storage import workspace_path
+from src.llm import gateway
 
 _LOG = logging.getLogger(__name__)
 
@@ -301,8 +302,12 @@ class SynthesisEngine:
             )
 
             try:
-                from src.llm.claude import claude_generate, is_claude_enabled
-                if not is_claude_enabled():
+                # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+                # from src.llm.claude import claude_generate, is_claude_enabled
+                # gateway imported at module level (line ~23)
+                from src.llm.claude import claude_generate
+                # [NEW: Gateway-based provider-agnostic check]
+                if not gateway.is_enabled():
                     raise RuntimeError("Claude disabled")
                 storyline = self._load_storyline_draft()
                 storyline_hint = ""

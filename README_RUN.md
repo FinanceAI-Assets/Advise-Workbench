@@ -48,8 +48,11 @@ Open `.env` and set the lines for your model option:
 |---|---|
 | Claude Code through the bridge | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` and `ANTHROPIC_API_KEY=not-used-cli-bridge` |
 | Claude Code directly | `LLM_PROVIDER=claude_cli` |
-| Anthropic API key | `ANTHROPIC_API_KEY=<your key>` |
-| OpenAI-style service | `LLM_PROVIDER=openai_compatible`, `LLM_MODEL=<model>`, `LLM_API_KEY=<key>`, `LLM_BASE_URL=<address>` |
+| Anthropic API key | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=<your key>` |
+| OpenAI / Azure OpenAI / AWS Bedrock | `LLM_PROVIDER=openai`, `azure_openai` or `bedrock`, plus that provider's block in `.env.example` |
+| Other OpenAI-style service | `LLM_PROVIDER=groq`, `openrouter`, `ollama`, … or `openai_compatible` with `LLM_BASE_URL`; see `docs/04-development/model-providers.md` |
+
+Check the choice with `make llm.check` (add `PING=1` to send one tiny request).
 
 Then let the start script check and install everything:
 

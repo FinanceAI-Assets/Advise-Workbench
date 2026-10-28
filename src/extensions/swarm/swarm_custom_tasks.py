@@ -14,7 +14,9 @@ from sqlalchemy import select
 from src.core.config import settings
 from src.core.db.models import RunTask
 from src.core.db.session import SessionLocal
-from src.llm.claude import claude_generate, is_claude_enabled
+from src.llm import gateway
+# [DEPRECATED: Hardcoded imports] Use gateway for provider-agnostic calls
+# from src.llm.claude import claude_generate, is_claude_enabled
 
 _LOG = logging.getLogger(__name__)
 
@@ -75,19 +77,32 @@ def execute_custom_swarm_tasks_sync(
                 emit_event("swarm.custom_task_started", {"task_id": t.id, "title": t.title})
             db.commit()
 
+            # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+            # from src.llm.claude import claude_generate, is_claude_enabled
+            pass
+            
             summary = ""
             ok = True
-            if is_claude_enabled():
+            # [NEW: Gateway-based provider-agnostic imports for task summaries]
+            # gateway imported at module level (line ~13)
+            from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+            if gateway.is_enabled():
                 try:
                     summary = (
-                        claude_generate(
-                            system="You complete short workflow tasks for a document run. Reply concisely.",
-                            user=f"Task: {t.title}\n\n{(t.description or '').strip()}\n\n"
-                            "Summarize what was done or decided in 2–6 sentences.",
+                        _extract_final_text_from_message(gateway.create_message(
+                            model=gateway.model_for("default"),
                             max_tokens=1200,
-                        )
+                            system="You complete short workflow tasks for a document run. Reply concisely.",
+                            messages=[{"role": "user", "content": f"Task: {t.title}\n\n{(t.description or '').strip()}\n\nSummarize what was done or decided in 2–6 sentences."}],
+                        ))
                         or ""
                     ).strip()
+                    _record_message_usage(gateway.create_message(
+                        model=gateway.model_for("default"),
+                        max_tokens=1200,
+                        system="You complete short workflow tasks for a document run. Reply concisely.",
+                        messages=[{"role": "user", "content": f"Task: {t.title}\n\n{(t.description or '').strip()}\n\nSummarize what was done or decided in 2–6 sentences."}],
+                    ))
                 except Exception as exc:  # noqa: BLE001
                     _LOG.warning("custom swarm task LLM failed %s: %s", t.id, exc)
                     summary = f"error:{exc}"[:800]

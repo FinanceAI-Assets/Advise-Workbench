@@ -209,7 +209,7 @@ The oversized project-studio files once listed here for splitting (`hooks/useRun
 
 ### 5A. Run on any API-based model
 - **Today:** the Anthropic client is constructed directly in 6 places (`services/claude.py`, `services/claude_tools.py`); about 60 call sites use three functions.
-- **Target:** every caller uses `src/llm/gateway.py`. `config/model_config.yaml` picks the provider (`anthropic`, `claude_cli`, `openai_compatible` for OpenAI, Groq, Azure, local) and the model per tier.
+- **Target:** every caller uses `src/llm/gateway.py`. `LLM_PROVIDER` in `.env` picks the provider (`claude_cli`, `anthropic`, `openai`, `azure_openai`, `bedrock`, or an OpenAI-compatible preset) and the model per tier; `config/model_config.yaml` was retired in favour of env-only settings (see `docs/04-development/model-providers.md`).
 - **Capability flags** handle differences: no extended thinking → plain planning call; no vision → visual QA skipped with a clear note; no tool calling → single-shot generation.
 - **Cost:** prompts and skills are tuned for Claude; each new provider needs a baseline run (`scripts/evaluate.py`) before users get it.
 

@@ -14,7 +14,9 @@ from src.core.config import settings
 from src.core.db.models import User
 from src.core.db.session import get_db
 from src.tools.code_executor.bash_rate_limit import check_rate_limit
-from src.llm.claude import is_claude_enabled
+# [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
+# from src.llm.claude import is_claude_enabled
+from src.llm import gateway
 from src.agents.tool_agent import run_claude_tools_loop
 
 router = APIRouter()
@@ -41,7 +43,11 @@ def bash_capable_turn(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     require_project_role(pid, {"Owner", "Editor"}, user, db)
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     raise HTTPException(status_code=503, detail="Claude is not configured (ANTHROPIC_API_KEY)")
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
         raise HTTPException(status_code=503, detail="Claude is not configured (ANTHROPIC_API_KEY)")
 
     if body.allow_bash and not settings.bash_tool_enabled:

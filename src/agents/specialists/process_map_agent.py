@@ -7,6 +7,7 @@ from src.agents.base_agent import AgentContext, AgentOutput
 from src.prompts.prompt_hygiene import process_model_json_block
 from src.deliverables.process_map.drawio_builder import process_model_to_drawio_xml
 from src.agents.specialists import _shared
+from src.llm import gateway
 from src.agents.specialists._shared import (
     _build_system_from_skill,
     _model,
@@ -124,7 +125,21 @@ def run_drawio_agent(ctx: AgentContext) -> AgentOutput:
         xml_out = _shared._run_subagent_tool_loop_text(ctx, agent_id="process_map", system=sb.system, user=user, temperature=sb.temperature, max_rounds=sb.max_rounds)
         if not xml_out:
             try:
-                xml_out = _shared.claude_generate(system=sb.system, user=user, temperature=sb.temperature, max_tokens=1600)
+                # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+                # xml_out = _shared.claude_generate(system=sb.system, user=user, temperature=sb.temperature, max_tokens=1600)
+                
+                # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+                # gateway imported at module level (line ~11)
+                from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+                msg = gateway.create_message(
+                    model=gateway.model_for("default"),
+                    max_tokens=1600,
+                    temperature=sb.temperature,
+                    system=sb.system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                _record_message_usage(msg)
+                xml_out = _extract_final_text_from_message(msg)
             except Exception:  # noqa: BLE001 — fallback
                 xml_out = None
         normalized = _normalize_drawio_xml(xml_out) if isinstance(xml_out, str) else None

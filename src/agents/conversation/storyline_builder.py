@@ -20,11 +20,13 @@ from sqlalchemy.orm import Session
 from src.core.db.models import MemoryItem
 from src.core.config import settings
 from src.llm.model_tiers import planning_model
+from src.llm import gateway
 from src.llm.claude import (
     _extract_first_json_object,
     claude_generate_json,
     claude_generate_with_thinking,
-    is_claude_enabled,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
 )
 from src.memory.knowledge.leading_practices import leading_practice_library_service as _lp
 
@@ -360,7 +362,13 @@ def build_storyline_contract(
     disabled or the LLM call fails, so callers never hard-fail on the spine.
     """
     arc_key = arc_key if arc_key in ARC_LIBRARY else "pyramid"
-    if not getattr(settings, "storyline_contract_enabled", True) or not is_claude_enabled():
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # from src.llm.claude import ..., is_claude_enabled
+    # [DEPRECATED: Old check - kept for reference]
+    # if not getattr(settings, "storyline_contract_enabled", True) or not is_claude_enabled():
+    #     return _fallback_contract(arc_key, target_slides)
+    # [NEW: Gateway-based provider-agnostic check]
+    if not getattr(settings, "storyline_contract_enabled", True) or not gateway.is_enabled():
         return _fallback_contract(arc_key, target_slides)
 
     arc_def = ARC_LIBRARY[arc_key]

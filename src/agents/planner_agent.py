@@ -24,6 +24,7 @@ from src.agents.specialists.document_agents import (
 from src.core.config import settings
 from src.core.state import AdviseWorkbenchState
 from src.app.schemas.llm_contracts import CoordinatorPlanResponse
+from src.llm import gateway
 from src.llm.claude import (
     _extract_first_json_object,
 )
@@ -368,7 +369,13 @@ class CoordinatorPlanning:
             self._emit_coordinator_plan(emit_event, plan, wanted=ceiling, contract_nodes=contract_nodes)
             return ceiling, plan
 
-        if not _coordinator_module.is_claude_enabled():
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import ..., is_claude_enabled
+        # [DEPRECATED: Old check - kept for reference]
+        # if not gateway.is_enabled():
+        #     plan = ExecutionPlan(...)
+        # [NEW: Gateway-based provider-agnostic check]
+        if not gateway.is_enabled():
             plan = ExecutionPlan(
                 ordered_output_types=list(ceiling),
                 rationale="",

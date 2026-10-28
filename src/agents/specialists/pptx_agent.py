@@ -8,7 +8,9 @@ from typing import Any
 from src.agents.base_agent import AgentContext, AgentOutput
 from src.prompts.prompt_hygiene import process_model_json_block, wrap_untrusted_bundle
 from src.core.state import ProcessModel
+from src.llm import gateway
 from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.agents.repair.pptx_critique_repair import (
     _critique_and_repair_pptx,
     _load_run_storyline,
@@ -1136,7 +1138,25 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
                 obj = None
         if not obj:
             try:
-                obj = _shared.claude_generate_json(system=sb.system, user=user, temperature=sb.temperature, max_tokens=8192)
+                # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+                # obj = _shared.claude_generate_json(system=sb.system, user=user, temperature=sb.temperature, max_tokens=8192)
+                
+                # [NEW: Gateway-based provider-agnostic call with JSON extraction - Supports all LLM providers]
+                # All imports at module level: json, gateway, _extract_first_json_object,
+                # _record_message_usage, _extract_final_text_from_message
+                msg = gateway.create_message(
+                    model=gateway.model_for("default"),
+                    max_tokens=8192,
+                    temperature=sb.temperature,
+                    system=sb.system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                _record_message_usage(msg)
+                text = _extract_final_text_from_message(msg)
+                try:
+                    obj = json.loads(text)
+                except json.JSONDecodeError:
+                    obj = _extract_first_json_object(text)
             except Exception:
                 obj = None
         slides = obj.get("slides") if isinstance(obj, dict) else None
