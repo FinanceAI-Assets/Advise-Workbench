@@ -3,6 +3,7 @@ import { AlertTriangle, Download } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { cn } from "@/lib/utils";
 import type { DeliverablesDetail } from "@/types/api";
 
 const STATUS_CLASS: Record<string, string> = {
@@ -14,10 +15,16 @@ const STATUS_CLASS: Record<string, string> = {
 export function WordArtifactPanel({
   docx,
   onDownload,
+  previewSections,
+  onOpen,
 }: {
   docx: DeliverablesDetail["docx"];
   onDownload?: () => void;
+  // Compact preview (All artifacts view): only the first sections, clamped, with a link to the full reader.
+  previewSections?: number;
+  onOpen?: () => void;
 }) {
+  const sections = previewSections ? docx.preview.sections.slice(0, previewSections) : docx.preview.sections;
   return (
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
@@ -35,10 +42,10 @@ export function WordArtifactPanel({
         <h3 className="text-lg font-semibold text-[var(--text-default)]">{docx.preview.title}</h3>
         <p className="text-xs text-[var(--text-muted)]">{docx.preview.meta}</p>
         <div className="space-y-3 border-t border-[var(--surface-border)] pt-3">
-          {docx.preview.sections.map((section) => (
-            <div key={section.heading}>
+          {sections.map((section, i) => (
+            <div key={`${section.heading}-${i}`}>
               <p className="text-sm font-semibold text-[var(--text-default)]">{section.heading}</p>
-              <p className="text-xs text-[var(--text-muted)]">{section.body}</p>
+              <p className={cn("text-xs text-[var(--text-muted)]", previewSections && "line-clamp-4")}>{section.body}</p>
             </div>
           ))}
         </div>
@@ -49,6 +56,11 @@ export function WordArtifactPanel({
       </div>
 
       <p className="text-xs text-[var(--text-muted)]">{docx.citationSummary}</p>
+      {onOpen ? (
+        <Button variant="secondary" type="button" onClick={onOpen} className="w-full text-sm">
+          Open document
+        </Button>
+      ) : null}
       <Button
         variant="secondary"
         type="button"

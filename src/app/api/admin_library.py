@@ -581,7 +581,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
             "provenanceMeta": "Source hash & uploader recorded",
             "warning": None if latest.get("readable") else _notice(
                 f"{latest['filename']} could not be read",
-                f"{latest.get('reason') or 'No text found'}. Upload a text-readable PDF or DOCX; the source is excluded from retrieval."),
+                f"{latest.get('reason') or 'No text found'}. Upload a text-readable PDF, Word, PowerPoint or Excel file; the source is excluded from retrieval."),
         },
         "qualityReview": {
             "id": practice.id,
@@ -612,7 +612,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
             "provenance": _notice("Provenance preserved",
                                   "Page and section locators are attached to each chunk. No classification or owner metadata is dropped."),
             "error": None if readable else _notice(
-                "No readable text", f"{job.get('reason') or 'The source could not be read'}. Upload a text-readable PDF or DOCX; this source is excluded from retrieval."),
+                "No readable text", f"{job.get('reason') or 'The source could not be read'}. Upload a text-readable PDF, Word, PowerPoint or Excel file; this source is excluded from retrieval."),
         },
         "indexValidation": {
             "subtitle": f"{job['id']} · {title} · {version} candidate",

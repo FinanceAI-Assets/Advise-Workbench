@@ -101,8 +101,8 @@ export default function AdminConsoleLibraryPage() {
     !uploaded && tab !== "source-upload" ? (
       <p className="rounded-md border border-[var(--surface-border)] bg-[var(--surface-muted)] px-3 py-2 text-xs text-[var(--text-muted)]">
         Sample walkthrough ·{" "}
-        {practice ? `${practice.toUpperCase()} has no uploaded source.` : "No sources have been uploaded yet."} Upload a PDF or
-        DOCX source to run these steps on real content.
+        {practice ? `${practice.toUpperCase()} has no uploaded source.` : "No sources have been uploaded yet."} Upload a PDF, Word,
+        PowerPoint or Excel source to run these steps on real content.
       </p>
     ) : null;
 
@@ -182,9 +182,7 @@ export default function AdminConsoleLibraryPage() {
         <>
           {message}
           {data.extraction ? <ExtractChunkTab extraction={data.extraction} onContinue={() => openTab("index-validate")} /> : <MissingStep />}
-          {modals}
         </>,
-        uploadButton,
       );
 
     case "index-validate":

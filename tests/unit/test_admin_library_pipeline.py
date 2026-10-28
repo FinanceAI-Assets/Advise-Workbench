@@ -173,6 +173,88 @@ def test_unreadable_and_unsupported_sources_are_rejected_or_excluded() -> None:
     assert not screen["qualityGates"]["canSubmit"]
 
 
+def _deck(topic: str) -> bytes:
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[1])  # title and content
+    slide.shapes.title.text = f"{topic} operating model"
+    slide.placeholders[1].text_frame.text = f"Assign one accountable owner for every {topic.lower()} decision."
+    slide.notes_slide.notes_text_frame.text = "Presenter note: confirm owners with the sponsor before rollout."
+    table_slide = deck.slides.add_slide(deck.slide_layouts[5])  # title only
+    table_slide.shapes.title.text = "Decision rights"
+    table = table_slide.shapes.add_table(2, 2, Inches(1), Inches(2), Inches(6), Inches(1)).table
+    for (r, c), text in {(0, 0): "Decision", (0, 1): "Owner", (1, 0): "Budget release", (1, 1): "Finance lead"}.items():
+        table.cell(r, c).text = text
+    group = table_slide.shapes.add_group_shape()
+    group.shapes.add_textbox(Inches(1), Inches(4), Inches(4), Inches(1)).text_frame.text = "Escalate unresolved items weekly."
+    buffer = io.BytesIO()
+    deck.save(buffer)
+    return buffer.getvalue()
+
+
+def _workbook(topic: str) -> bytes:
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Controls"
+    sheet.append(["Control", "Owner", "Frequency"])
+    sheet.append([f"{topic} access review", "IT risk", "Quarterly"])
+    book.create_sheet("Metrics").append(["Cycle time", 12, None, "days"])
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def test_powerpoint_and_excel_sources_are_read_slide_by_slide_and_sheet_by_sheet() -> None:
+    deck = practice_ingest.extract_blocks("model.pptx", _deck("Vendor"))
+    assert deck["parseMode"] == "pptx" and deck["pages"] == 2 and deck["readable"]
+    texts = [(b["kind"], b["text"], b["page"]) for b in deck["blocks"]]
+    assert ("heading", "Vendor operating model", 1) in texts
+    assert ("para", "Assign one accountable owner for every vendor decision.", 1) in texts
+    assert ("para", "Presenter note: confirm owners with the sponsor before rollout.", 1) in texts
+    assert ("para", "Budget release | Finance lead", 2) in texts
+    assert ("para", "Escalate unresolved items weekly.", 2) in texts  # text inside a grouped shape
+    assert sum(1 for kind, text, _ in texts if text == "Vendor operating model") == 1  # the title is not repeated
+
+    book = practice_ingest.extract_blocks("controls.xlsx", _workbook("Vendor"))
+    assert book["parseMode"] == "xlsx" and book["pages"] == 2 and book["readable"]
+    rows = [(b["kind"], b["text"], b["page"]) for b in book["blocks"]]
+    assert rows[0] == ("heading", "Controls", 1)
+    assert ("para", "Vendor access review | IT risk | Quarterly", 1) in rows
+    assert ("heading", "Metrics", 2) in rows
+    assert ("para", "Cycle time | 12 | days", 2) in rows  # empty cells are skipped
+
+
+def test_word_powerpoint_and_excel_sources_upload_together() -> None:
+    client = TestClient(fastapi_app)
+    admin, _ = _login(client, "admin", admin=True)
+    topic = f"Mixed {uuid.uuid4().hex[:6]}"
+    files = [
+        ("files", (f"{topic}.docx", _source(topic, attributed=True), DOCX)),
+        ("files", (f"{topic}.pptx", _deck(topic), "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
+        ("files", (f"{topic}.xlsx", _workbook(topic), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+    ]
+    data = {"owner": "Maya Patel", "rights": "Advisory Methods · Internal reuse permitted"}
+    resp = client.post("/api/admin/library/uploads", headers=admin, data=data, files=files)
+    assert resp.status_code == 201, resp.text
+    jobs = resp.json()["jobs"]
+    assert len(jobs) == 3 and all(job["readable"] for job in jobs)
+    assert len({job["practiceId"] for job in jobs}) == 3  # each file is its own candidate practice
+
+
+def test_older_office_formats_and_broken_archives_are_rejected_with_a_reason() -> None:
+    client = TestClient(fastapi_app)
+    admin, _ = _login(client, "admin", admin=True)
+    legacy = _upload(client, admin, b"\xd0\xcf\x11\xe0legacy", "deck.ppt")
+    assert legacy.status_code == 422 and "Save it as .pptx" in legacy.json()["detail"]
+    assert "Save it as .xlsx" in _upload(client, admin, b"\xd0\xcf\x11\xe0legacy", "sheet.xls").json()["detail"]
+    broken = _upload(client, admin, b"not a zip", "broken.pptx")
+    assert broken.status_code == 422 and "not a valid PPTX file" in broken.json()["detail"]
+
+
 def test_member_cannot_upload_library_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     # Development mode treats every signed-in user as an administrator (src/core/auth.py); outside it, it is enforced.
     monkeypatch.setattr(settings, "advise_workbench_env", "production")
