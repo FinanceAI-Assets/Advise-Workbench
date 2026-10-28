@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "@/lib/auth-context";
 import { fetchJson } from "@/lib/workbenchApi";
@@ -39,12 +39,14 @@ export type AdminReviews = Omit<AdminReviewsGovernanceDetail, "selectedReview"> 
   reviewers: Array<{ id: string; name: string }>;
 };
 
-function useAdminQuery<T>(key: unknown[], path: string) {
+function useAdminQuery<T>(key: unknown[], path: string, { keepPrevious = false } = {}) {
   const { api, token, user } = useAuth();
   return useQuery({
     queryKey: ["admin", ...key],
-    enabled: Boolean(token) && Boolean(user?.isAdmin),
+    enabled: Boolean(token) && Boolean(user),
     staleTime: 15 * 1000,
+    // Switching the selection keeps the current screen up while the next one loads.
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
     queryFn: () => fetchJson<T>(api, path, "Failed to load the admin console"),
   });
 }
@@ -57,7 +59,27 @@ export const useAdminEngagementsQuery = (q: string, selected: string) =>
     `/api/admin/engagements?q=${encodeURIComponent(q)}&selected=${encodeURIComponent(selected)}`
   );
 
-export const useAdminLibraryQuery = () => useAdminQuery<AdminLibrary>(["library"], "/api/admin/library");
+/** The library pipeline for one practice; with no practice, the latest upload (or the sample walkthrough). */
+export const useAdminLibraryQuery = (practice = "") =>
+  useAdminQuery<AdminLibrary>(["library", practice], `/api/admin/library?practice=${encodeURIComponent(practice)}`, {
+    keepPrevious: true,
+  });
+
+export type LibraryUploadJob = { id: string; practiceId: string; stage: string; outcome: string; readable: boolean };
+
+/** Upload practice sources: each file becomes an ingestion job that is extracted and validated straight away. */
+export function useLibraryUpload() {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (form: FormData) =>
+      fetchJson<{ jobs: LibraryUploadJob[] }>(api, "/api/admin/library/uploads", "The sources could not be uploaded", {
+        method: "POST",
+        body: form,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["admin"] }),
+  });
+}
 
 export const useAdminSkillsQuery = () => useAdminQuery<AdminSkillsManagementDetail>(["skills"], "/api/admin/skills");
 

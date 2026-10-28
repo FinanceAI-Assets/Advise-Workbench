@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 from src.core.config import settings
-from src.core.db.models import ChunkArchive, EmbeddingsMetadata, ExtractedFact, WikiPageDraft, WikiPageFinal
+from src.core.db.models import ChunkArchive, DocumentChunkLink, EmbeddingsMetadata, ExtractedFact, WikiPageDraft, WikiPageFinal
 from src.core.db.session import session_scope
 from src.core.embeddings.embedding_service import get_embedding_service
 from src.core.tz import ist_now
@@ -38,8 +38,9 @@ def extract_facts_from_chunks(ctx: dict[str, Any]) -> dict[str, Any]:
         texts = [
             t
             for (t,) in db.query(ChunkArchive.text)
-            .filter(ChunkArchive.document_file_id == ctx["document_file_id"])
-            .order_by(ChunkArchive.chunk_number)
+            .join(DocumentChunkLink, DocumentChunkLink.chunk_id == ChunkArchive.id)
+            .filter(DocumentChunkLink.document_file_id == ctx["document_file_id"])
+            .order_by(DocumentChunkLink.chunk_number)
         ]
     batches = batch_texts(texts, settings.knowledge_fact_batch_chars, settings.knowledge_max_fact_calls)
     facts = [f for batch in batches for f in extract_facts(batch, ctx["filename"])]

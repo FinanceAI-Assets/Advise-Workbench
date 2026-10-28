@@ -103,7 +103,7 @@ export default function AdminConsoleSkillsPage() {
       subtitle="Configure instructions and evidence contracts, test behavior, and require independent approval before publishing."
       actions={
         <>
-          <Link href="/admin/skills/new" className="!no-underline">
+          <Link href="/admin/console/skills/new" className="!no-underline">
             <Button variant="secondary" type="button" className="flex items-center gap-2 whitespace-nowrap">
               <Plus size={16} aria-hidden />
               New skill

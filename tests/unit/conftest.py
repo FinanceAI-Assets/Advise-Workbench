@@ -10,8 +10,6 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-chars-long-ok!")
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
 # Leading Practice search must not load the embedding model (seconds, and a network call) inside a test.
 os.environ["LP_RAG_SEMANTIC_ENABLED"] = "false"
-# A developer .env may switch the ingestion pipeline on; unit tests must never queue real Celery jobs.
-os.environ["DOCUMENT_PIPELINE_ENABLED"] = "false"
 
 
 @pytest.fixture
@@ -53,6 +51,8 @@ def _auth_allow_self_signup_for_integration_tests(monkeypatch: pytest.MonkeyPatc
     # Integration tests predate the collaborative storyline flow and only need a confirmed plan
     # to exercise downstream behaviour; the legacy discovery→plan path reaches ready_for_confirmation.
     monkeypatch.setattr(settings, "collaborative_building_enabled", False)
+    # Unit tests use in-process stand-ins for the shared services; a developer's CA file is irrelevant.
+    monkeypatch.setattr(settings, "ssl_ca_file", "")
 
 
 @pytest.fixture(autouse=True)

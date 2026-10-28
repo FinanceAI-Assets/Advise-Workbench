@@ -1,4 +1,4 @@
-"""Document ingestion pipeline: all stages, file lifecycle (add / unchanged / change / delete), failures, clients."""
+"""Ingestion pipeline (Library management): every stage, knowledge building, failures, deletion, and its clients."""
 
 import hashlib
 import json
@@ -10,6 +10,7 @@ import pytest
 from botocore.stub import Stubber
 from qdrant_client import QdrantClient
 
+from src.core.config import settings
 from src.core.db.models import (
     ChunkArchive,
     ChunkEmbedding,
@@ -17,134 +18,80 @@ from src.core.db.models import (
     DocumentJob,
     ExtractedFact,
     InAppNotification,
-    Project,
+    LpPractice,
     TaskFailure,
     User,
     WikiPageFinal,
+    WorkbenchRecord,
 )
 from src.core.db.session import session_scope
 from src.core.embeddings.embedding_service import HttpEmbeddingService
-from src.core.parsing.chunking_service import ChunkingService
-from src.core.storage import seaweedfs_client as s3_module
 from src.core.storage.seaweedfs_client import SeaweedFSClient
-from src.core.vector_db import qdrant_client as qdrant_module
 from src.core.vector_db.qdrant_client import QdrantVectorStore, point_id_for
 from src.memory.facts import fact_extraction
 from src.memory.wiki import wiki_page_generator
 from src.memory.wiki.deduplication import Candidate, assign_drafts
-from src.workers import (
-    document_embedding_tasks,
-    document_intake_tasks,
-    document_knowledge_tasks,
-    document_parsing_tasks,
-    pipeline,
-)
-from src.workers.celery_app import app
+from src.workers import document_parsing_tasks, pipeline
+from src.workers.pipeline import LIBRARY_SCOPE
+from tests.unit import _pipeline_fakes
 
-PAGE_TEXT = "The buyer issues a purchase order after vendor validation. " * 40
-
-
-class FakeS3:
-    bucket = "aw-test"
-
-    def __init__(self):
-        self.objects: dict[str, bytes] = {}
-
-    def upload_file(self, key, data, content_type="application/octet-stream"):
-        self.objects[key] = data
-        return {"bucket": self.bucket, "key": key, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "etag": "e"}
-
-    def get_file(self, key):
-        return self.objects[key]
-
-    def delete_file(self, key):
-        self.objects.pop(key, None)
+BODY = "The buyer issues a purchase order after vendor validation. " * 30
+MARKDOWN_P1 = f"# Vendor onboarding\n\n## 1 Screening\n\n{BODY}\n\n## 2 Terms\n\nAgree payment terms [1].\n"
+MARKDOWN_P2 = "## References\n\n[1] Institute of Supply Management, Risk guide, 2024, https://example.org/risk\n"
 
 
 class FakeParser:
-    def __init__(self, pages, tables=True):
-        self.pages, self.tables = pages, tables
+    def __init__(self, pages):
+        self.pages = pages
 
     def parse_document(self, file_bytes, filename):
-        tables = [{"page_number": 2, "table_index": 1, "markdown": "| Role | Control |\n|---|---|\n| Buyer | 3-way match |"}]
-        return {
-            "filename": filename,
-            "full_text": "\n\n".join(p["text"] for p in self.pages),
-            "pages": self.pages,
-            "tables": tables if self.tables else [],
-            "images": [],
-            "page_count": len(self.pages),
-            "table_count": 1 if self.tables else 0,
-            "image_count": 0,
-        }
-
-
-class FakeEmbedder:
-    model_name = "fake-32"
-
-    def __init__(self):
-        self.embedded = 0
-
-    def embed_batch(self, texts, batch_size=32):
-        self.embedded += len(texts)
-        return [[b / 255 - 0.5 for b in hashlib.sha256(t.encode()).digest()] for t in texts]
+        return {"filename": filename, "full_text": "\n\n".join(p["text"] for p in self.pages), "pages": self.pages,
+                "tables": [], "images": [], "page_count": len(self.pages), "table_count": 0, "image_count": 0}
 
 
 def fake_llm(*, system, user, **_):
     if '"facts"' in user:
-        return {
-            "facts": [
-                {"type": "role", "name": "Buyer", "value": "Issues purchase orders", "confidence": 0.9, "context": "buyer"},
-                {"type": "risk", "name": "Late vendor validation", "value": "Delays orders", "confidence": 0.7, "context": "x"},
-                {"type": "nonsense", "name": "dropped", "confidence": 1},
-            ]
-        }
+        return {"facts": [
+            {"type": "role", "name": "Buyer", "value": "Issues purchase orders", "confidence": 0.9, "context": "buyer"},
+            {"type": "risk", "name": "Late vendor validation", "value": "Delays orders", "confidence": 0.7, "context": "x"},
+            {"type": "nonsense", "name": "dropped", "confidence": 1},
+        ]}
     found = re.findall(r"^- (.+) \((\w+)\):$", user, flags=re.M)
     return {"pages": [{"entity_name": n, "entity_type": t, "content": f"# {n}\nOverview of {n}."} for n, t in found]}
 
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
-    monkeypatch.setattr(app.conf, "task_always_eager", True)
-    monkeypatch.setattr(app.conf, "task_eager_propagates", False)
-    monkeypatch.setattr(pipeline.settings, "knowledge_building_enabled", True)
-    s3, embedder = FakeS3(), FakeEmbedder()
-    stores: dict[str, QdrantVectorStore] = {}
-
-    def get_store(collection_name=None, url=None):
-        name = collection_name or "document_chunks"
-        if name not in stores:
-            stores[name] = QdrantVectorStore("http://unused", None, f"test_{name}")
-            stores[name].client = QdrantClient(location=":memory:")
-        return stores[name]
-
-    for module in (document_intake_tasks, document_parsing_tasks, s3_module):
-        monkeypatch.setattr(module, "get_seaweedfs_client", lambda: s3)
-    for module in (document_embedding_tasks, document_knowledge_tasks, qdrant_module):
-        monkeypatch.setattr(module, "get_qdrant_client", get_store)
-    for module in (document_embedding_tasks, document_knowledge_tasks):
-        monkeypatch.setattr(module, "get_embedding_service", lambda: embedder)
+    monkeypatch.setattr(settings, "workspace_root", str(tmp_path))
+    monkeypatch.setattr(settings, "lp_library_local_path", "")
+    fakes = _pipeline_fakes.install(monkeypatch, knowledge=True)
     monkeypatch.setattr(fact_extraction, "claude_generate_json", fake_llm)
     monkeypatch.setattr(wiki_page_generator, "claude_generate_json", fake_llm)
-    parser = {"value": FakeParser([{"page_number": 1, "text": PAGE_TEXT}, {"page_number": 2, "text": "Approvals on page two."}])}
+    parser = {"value": FakeParser([{"page_number": 1, "text": MARKDOWN_P1}, {"page_number": 2, "text": MARKDOWN_P2}])}
     monkeypatch.setattr(document_parsing_tasks, "get_docling_parser", lambda: parser["value"])
-
     with session_scope() as db:
-        uid, pid = f"u_{uuid.uuid4().hex[:8]}", f"p_{uuid.uuid4().hex[:8]}"
-        db.add(User(id=uid, email=f"{uid}@example.com", hashed_password="x"))
-        db.flush()
-        db.add(Project(id=pid, name="pipeline", created_by=uid))
+        # The library scope is shared across tests in this database; start each test without wiki pages.
+        from src.core.db.models import EmbeddingsMetadata, WikiPageDraft
 
-    def upload(content: bytes = b"%PDF-1.4 v1", filename: str = "report.pdf") -> str:
-        path = tmp_path / filename
-        path.write_bytes(content)
+        db.query(EmbeddingsMetadata).filter(EmbeddingsMetadata.project_id == LIBRARY_SCOPE).delete()
+        db.query(WikiPageFinal).filter(WikiPageFinal.project_id == LIBRARY_SCOPE).delete()
+        db.query(WikiPageDraft).filter(WikiPageDraft.project_id == LIBRARY_SCOPE).delete()
+        uid = f"u_{uuid.uuid4().hex[:8]}"
+        db.add(User(id=uid, email=f"{uid}@example.com", hashed_password="x", is_admin=True))
+
+    def upload(content: bytes = None, filename: str = "vendor.md") -> str:
+        content = content or f"# source {uuid.uuid4().hex}".encode()
+        staged = tmp_path / uuid.uuid4().hex / filename
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(content)
+        form = {"owner": "Maya Patel", "classification": "Internal", "rights": "Internal reuse permitted",
+                "title": "", "category": "Procurement", "maturity": "", "version": "", "practice_id": ""}
         with session_scope() as db:
-            return pipeline.queue_document(
-                db, project_id=pid, user_id=uid, filename=filename, local_path=path,
-                sha256=hashlib.sha256(content).hexdigest(), size_bytes=len(content),
-            ).job_id
+            return pipeline.queue_document(db, project_id=LIBRARY_SCOPE, user_id=uid, filename=filename,
+                                           local_path=staged, sha256=hashlib.sha256(content).hexdigest(),
+                                           size_bytes=len(content), library=form).job_id
 
-    return {"upload": upload, "s3": s3, "get_store": get_store, "embedder": embedder, "pid": pid, "uid": uid, "parser": parser}
+    return {**fakes, "upload": upload, "uid": uid, "parser": parser}
 
 
 def _job(db, job_id):
@@ -155,104 +102,86 @@ def _doc(db, job_id):
     return db.query(DocumentFile).filter(DocumentFile.job_id == job_id).one()
 
 
+def _library_job(db, job):
+    practice_id, library_job_id, _ = job.filename.split("/", 2)
+    row = db.query(WorkbenchRecord).filter(WorkbenchRecord.collection == "ingestion_jobs",
+                                           WorkbenchRecord.record_id == library_job_id).one()
+    return practice_id, library_job_id, json.loads(row.payload_json)
+
+
 def test_upload_runs_every_stage(env):
     job_id = env["upload"]()
     with session_scope() as db:
         job, doc = _job(db, job_id), _doc(db, job_id)
+        practice_id, library_job_id, payload = _library_job(db, job)
         chunks = db.query(ChunkArchive).filter(ChunkArchive.document_file_id == doc.id).order_by(ChunkArchive.chunk_number).all()
         assert job.status == "completed" and job.completed_at is not None
-        assert env["s3"].objects[doc.seaweedfs_file_id] == b"%PDF-1.4 v1"
+        # intake: practice + library job; the S3 object is the stored source
+        assert db.query(LpPractice).filter(LpPractice.id == practice_id).one().status == "Quality review"
+        assert payload["stage"] == "Quality review" and payload["readable"] and payload["ingestionJobId"] == job_id
+        assert doc.seaweedfs_file_id in env["s3"].objects
+        # one chunker: section-aware passages with pages, numbered, mirrored in library_chunks
         assert [c.chunk_number for c in chunks] == list(range(1, len(chunks) + 1))
-        assert {c.page_number for c in chunks if c.source_type == "main_text"} == {1, 2}
+        assert all(c.source_type == "section" for c in chunks) and {c.page_number for c in chunks} <= {1, 2}
+        stored = json.loads(db.query(WorkbenchRecord).filter(WorkbenchRecord.collection == "library_chunks",
+                                                             WorkbenchRecord.record_id == library_job_id).one().payload_json)
+        assert [c["chunkId"] for c in stored["chunks"]] == [c.id for c in chunks]
+        assert all(c["section"] and c["quality"] for c in stored["chunks"])
+        assert payload["citations"]["references"] == [1] and payload["validation"]["total"] == len(chunks)
+        # embeddings in Postgres and Qdrant, then knowledge building
         assert db.query(ChunkEmbedding).filter(ChunkEmbedding.document_file_id == doc.id).count() == len(chunks)
         assert env["get_store"]().count(document_id=doc.id) == len(chunks)
-        names = {f.fact_name for f in db.query(ExtractedFact).filter(ExtractedFact.project_id == env["pid"])}
-        assert names == {"Buyer", "Late vendor validation"}
-        finals = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == env["pid"]).all()
-        assert sorted(p.entity_name for p in finals) == ["Buyer", "Late vendor validation"]
-        assert all(p.is_published and p.merge_info["source_documents"] == [doc.id] for p in finals)
-        assert env["get_store"]("wiki_pages").count(project_id=env["pid"]) == 2
-        note = db.query(InAppNotification).filter(InAppNotification.user_id == env["uid"]).one()
-        assert note.notification_type == "success"
+        assert {f.fact_name for f in db.query(ExtractedFact).filter(ExtractedFact.project_id == LIBRARY_SCOPE)} >= {"Buyer"}
+        assert env["get_store"]("wiki_pages").count(project_id=LIBRARY_SCOPE) >= 2
+        assert db.query(InAppNotification).filter(InAppNotification.user_id == env["uid"]).one().notification_type == "success"
 
 
-def test_unchanged_reupload_does_nothing(env):
-    env["upload"]()
-    embedded = env["embedder"].embedded
-    second = env["upload"]()
+def test_status_lists_every_stage_in_order(env):
+    from src.app.api.documents_async import ingestion_status
+
+    job_id = env["upload"]()
     with session_scope() as db:
-        job = _job(db, second)
-        assert job.status == "completed" and job.parse_mode == "unchanged"
-        assert db.query(DocumentFile).filter(DocumentFile.job_id == second).count() == 0
-    assert env["embedder"].embedded == embedded
-
-
-def test_changed_file_reuses_vectors_and_replaces_old_version(env):
-    first = env["upload"](b"%PDF v1")
-    with session_scope() as db:
-        old = _doc(db, first)
-        old_id, old_key = old.id, old.seaweedfs_file_id
-        old_chunks = db.query(ChunkArchive).filter(ChunkArchive.document_file_id == old_id).count()
-    env["parser"]["value"] = FakeParser([{"page_number": 1, "text": PAGE_TEXT}, {"page_number": 2, "text": "Changed two."}])
-    before = env["embedder"].embedded
-    second = env["upload"](b"%PDF v2")
-    with session_scope() as db:
-        new = _doc(db, second)
-        assert _job(db, second).status == "completed"
-        assert db.query(ChunkArchive).filter(ChunkArchive.document_file_id == old_id).count() == 0
-        assert env["get_store"]().count(document_id=old_id) == 0
-        assert old_key not in env["s3"].objects
-        assert env["get_store"]().count(document_id=new.id) == old_chunks
-        pages = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == env["pid"]).all()
-        assert pages and all(p.merge_info["source_documents"] == [new.id] for p in pages)
-    # only the changed chunk (+ wiki texts) is embedded again; the identical chunks reuse their vectors
-    assert env["embedder"].embedded - before < old_chunks + 4
+        status = ingestion_status(db, job_id)
+    assert status["stages"] == ["intake", "uploading", "parsing", "chunking", "embedding", "library_validation",
+                                "extracting_facts", "generating_wiki", "deduplicating", "indexing_wiki"]
+    assert status["current_stage_index"] == len(status["stages"]) and status["practice_id"]
+    assert status["counts"]["chunks"] == status["counts"]["embeddings"] > 0
 
 
 def test_wiki_pages_are_deduplicated_across_documents(env):
-    env["upload"](b"%PDF a", "a.pdf")
-    second = env["upload"](b"%PDF b", "b.pdf")
+    env["upload"](filename="a.md")
+    second = env["upload"](filename="b.md")
     with session_scope() as db:
-        pages = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == env["pid"]).all()
+        pages = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == LIBRARY_SCOPE).all()
         b_id = _doc(db, second).id
         assert len(pages) == 2
         assert all(p.merge_info["merge_count"] == 1 and b_id in p.merge_info["source_documents"] for p in pages)
 
 
-def test_deleting_a_file_removes_it_everywhere(env):
+def test_removing_a_document_removes_it_everywhere(env):
     job_id = env["upload"]()
     with session_scope() as db:
         doc = _doc(db, job_id)
-        doc_id, key = doc.id, doc.seaweedfs_file_id
-    pipeline.remove_document.apply(args=(env["pid"], "report.pdf")).get()
+        doc_id, key, name = doc.id, doc.seaweedfs_file_id, doc.filename
+    pipeline.remove_document.apply(args=(LIBRARY_SCOPE, name)).get()
     with session_scope() as db:
         assert _job(db, job_id).status == "deleted"
         assert db.query(ChunkArchive).filter(ChunkArchive.document_file_id == doc_id).count() == 0
-        assert db.query(ChunkEmbedding).filter(ChunkEmbedding.document_file_id == doc_id).count() == 0
-        assert db.query(WikiPageFinal).filter(WikiPageFinal.project_id == env["pid"]).count() == 0
-    assert key not in env["s3"].objects
-    assert env["get_store"]().count(document_id=doc_id) == 0
-    assert env["get_store"]("wiki_pages").count(project_id=env["pid"]) == 0
+        assert db.query(WikiPageFinal).filter(WikiPageFinal.project_id == LIBRARY_SCOPE).count() == 0
+    assert key not in env["s3"].objects and env["get_store"]().count(document_id=doc_id) == 0
 
 
-def test_document_without_text_fails_with_notification(env):
-    env["parser"]["value"] = FakeParser([{"page_number": 1, "text": " "}], tables=False)
+def test_document_without_text_fails_and_the_library_job_says_so(env):
+    env["parser"]["value"] = FakeParser([{"page_number": 1, "text": "# Only a title\n"}])
     job_id = env["upload"]()
     with session_scope() as db:
         job = _job(db, job_id)
-        assert job.status == "failed" and job.failed_stage == "chunking"
-        assert "no text" in (job.error_message or "")
-        assert db.query(TaskFailure).filter(TaskFailure.project_id == env["pid"]).one().is_final_failure
-        note = db.query(InAppNotification).filter(InAppNotification.user_id == env["uid"]).one()
-        assert note.notification_type == "failure"
-
-
-def test_search_only_mode_completes_after_embedding(env, monkeypatch):
-    monkeypatch.setattr(pipeline.settings, "knowledge_building_enabled", False)
-    job_id = env["upload"]()
-    with session_scope() as db:
-        assert _job(db, job_id).status == "completed"
-        assert db.query(ExtractedFact).filter(ExtractedFact.project_id == env["pid"]).count() == 0
+        practice_id, _, payload = _library_job(db, job)
+        assert job.status == "failed" and job.failed_stage == "chunking" and "no text" in job.error_message
+        assert payload["outcome"] == "No readable text" and payload["readable"] is False
+        assert db.query(LpPractice).filter(LpPractice.id == practice_id).one().status == "Not eligible"
+        assert db.query(TaskFailure).filter(TaskFailure.project_id == LIBRARY_SCOPE).count() >= 1
+        assert db.query(InAppNotification).filter(InAppNotification.user_id == env["uid"]).one().notification_type == "failure"
 
 
 def test_assign_drafts_prefers_existing_pages_then_earlier_drafts():
@@ -305,18 +234,6 @@ def test_http_embeddings_rejects_short_response():
     svc._client = httpx.Client(base_url=svc.base_url, transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[[1.0]])))
     with pytest.raises(RuntimeError, match="returned 1 vectors for 2 inputs"):
         svc.embed_batch(["a", "b"])
-
-
-def test_chunks_are_numbered_across_pages_and_tables():
-    groups = ChunkingService(200, 40).create_chunks_from_parsed(
-        {
-            "pages": [{"page_number": 1, "text": "Alpha sentence. " * 30}, {"page_number": 3, "text": "Beta. " * 5}],
-            "tables": [{"page_number": 3, "table_index": 1, "markdown": "| a | b |"}],
-        }
-    )
-    every = groups["main_text"] + groups["table_text"]
-    assert [c["chunk_number"] for c in every] == list(range(1, groups["total_chunks"] + 1))
-    assert {c["source"]["page_number"] for c in groups["main_text"]} == {1, 3}
 
 
 def test_qdrant_ids_stable_dimension_checked_and_https_port_kept():

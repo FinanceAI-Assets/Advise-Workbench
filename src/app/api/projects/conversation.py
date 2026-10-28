@@ -788,50 +788,6 @@ def _persist_conversational_response(
     }
 
 
-def _persist_grounded_answer(
-    db: Session,
-    conv: Conversation,
-    user_message: str,
-    prior_messages: list[dict],
-    *,
-    project_id: str,
-) -> dict:
-    """Answer a factual question through the query pipeline (cited sources or 'insufficient evidence')."""
-    from src.query.pipeline import answer_question, format_answer
-
-    history = [
-        {"role": str(m.get("role")), "content": str(m.get("content") or "")}
-        for m in prior_messages
-        if m.get("role") in ("user", "assistant") and str(m.get("content") or "").strip()
-    ]
-    try:
-        result = answer_question(db, project_id, user_message, history)
-        content = format_answer(result)
-        meta = {
-            "kind": "grounded_answer",
-            "evidence_status": result.status,
-            "citations": result.citations,
-            "standalone_question": result.standalone_question,
-        }
-    except Exception as e:  # embedding service or Qdrant unreachable
-        _LOG.warning("grounded answer failed for project %s: %s", project_id, e)
-        content = "I can't search the project's documents right now. Please try again in a moment."
-        meta = {"kind": "grounded_answer", "evidence_status": "search_unavailable"}
-    db.add(
-        ConversationMessage(
-            conversation_id=conv.id, role="assistant", content=content, metadata_json=json.dumps(meta, default=str)
-        )
-    )
-    db.commit()
-    return {
-        "conversation_id": conv.id,
-        "messages": _serialize_messages(db, conv.id),
-        "open_questions": [],
-        "ready_for_confirmation": False,
-        "plan_hash": None,
-    }
-
-
 def _persist_acknowledgment_response(
     db: Session,
     conv: Conversation,
@@ -2533,13 +2489,6 @@ def _turn_respond(turn: Turn) -> dict | None:
                 prior_plan_meta=prior_plan_meta,
                 user=user,
             )
-
-        if decision.intent == "question" and not template_ids and settings.document_pipeline_enabled:
-            state.state = "exploring"
-            stamp_router(state, intent=decision.intent, confidence=decision.confidence, rationale=rationale)
-            save_state(conv, state)
-            db.flush()
-            return _persist_grounded_answer(db, conv, content, prior_messages, project_id=pid)
 
         if decision.intent in {"smalltalk", "clarify", "greeting", "ack"} and not template_ids:
             state.state = "exploring"

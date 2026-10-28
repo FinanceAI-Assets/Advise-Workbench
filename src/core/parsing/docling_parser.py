@@ -10,16 +10,13 @@ from typing import Any
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling_core.types.doc import DocItemLabel, DoclingDocument
+from docling_core.types.doc import DoclingDocument
 
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 _PLAIN_TEXT_SUFFIXES = {".txt", ".json", ".log", ".text"}
-
-# Tables are chunked separately (source_type="table"), so keep them out of the page text.
-_PAGE_TEXT_LABELS = {label for label in DocItemLabel if label != DocItemLabel.TABLE}
 
 
 def _page_of(item: Any) -> int | None:
@@ -37,13 +34,11 @@ class DoclingParserService:
     @staticmethod
     def to_result(doc: DoclingDocument, filename: str) -> dict[str, Any]:
         page_numbers = sorted(doc.pages.keys())
+        # Tables stay in the page text so the section-aware chunker keeps them with their heading.
         if page_numbers:
-            pages = [
-                {"page_number": n, "text": doc.export_to_markdown(page_no=n, labels=_PAGE_TEXT_LABELS)}
-                for n in page_numbers
-            ]
+            pages = [{"page_number": n, "text": doc.export_to_markdown(page_no=n)} for n in page_numbers]
         else:  # formats without pagination (docx, md, html, ...)
-            pages = [{"page_number": None, "text": doc.export_to_markdown(labels=_PAGE_TEXT_LABELS)}]
+            pages = [{"page_number": None, "text": doc.export_to_markdown()}]
 
         tables = [
             {"page_number": _page_of(t), "table_index": i, "markdown": t.export_to_markdown(doc)}

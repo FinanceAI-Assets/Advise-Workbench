@@ -13,6 +13,7 @@ from qdrant_client.models import (
     FieldCondition,
     Filter,
     FilterSelector,
+    MatchAny,
     MatchValue,
     PayloadSchemaType,
     PointStruct,
@@ -42,7 +43,8 @@ class QdrantVectorStore:
         # qdrant-client appends :6333 to a URL without a port; tunnel/proxy links serve on the scheme's port.
         port = urlparse(url).port or (6333 if urlparse(url).scheme == "http" else None)
         self.client = QdrantClient(
-            url=url, port=port, api_key=api_key or None, timeout=timeout_sec, check_compatibility=False
+            url=url, port=port, api_key=api_key or None, timeout=timeout_sec, check_compatibility=False,
+            verify=settings.tls_verify,
         )
 
     def ensure_collection(self, vector_size: int) -> None:
@@ -86,6 +88,8 @@ class QdrantVectorStore:
         limit: int = 5,
         score_threshold: float | None = None,
     ) -> list[dict[str, Any]]:
+        if not self.client.collection_exists(self.collection_name):
+            return []  # nothing indexed yet (e.g. no wiki pages built)
         res = self.client.query_points(
             collection_name=self.collection_name,
             query=query_embedding,
@@ -98,6 +102,20 @@ class QdrantVectorStore:
             {"chunk_id": p.payload.get("chunk_id"), "score": p.score, "text": p.payload.get("text"), "metadata": p.payload}
             for p in res.points
         ]
+
+    def search_in(
+        self, query_embedding: list[float], *, field: str, values: list[str], limit: int, **fields: str
+    ) -> list[dict[str, Any]]:
+        """Nearest points whose ``field`` is one of ``values`` (and that match ``fields``), best first."""
+        if not values or not self.client.collection_exists(self.collection_name):
+            return []
+        must = [FieldCondition(key=k, match=MatchValue(value=v)) for k, v in fields.items()]
+        must.append(FieldCondition(key=field, match=MatchAny(any=values)))
+        res = self.client.query_points(
+            collection_name=self.collection_name, query=query_embedding, query_filter=Filter(must=must),
+            limit=limit, with_payload=True,
+        )
+        return [{"chunk_id": p.payload.get("chunk_id"), "score": p.score, "metadata": p.payload} for p in res.points]
 
     def count(self, **fields: str) -> int:
         if not self.client.collection_exists(self.collection_name):
@@ -120,6 +138,38 @@ class QdrantVectorStore:
         by_point = {point_id_for(k): k for k in keys}
         points = self.client.retrieve(self.collection_name, ids=list(by_point), with_vectors=True, with_payload=False)
         return {by_point[str(p.id)]: list(p.vector) for p in points if p.vector is not None}
+
+    def add_to_lists(self, keys: list[str], **values: str) -> list[str]:
+        """Append ``values`` to list payload fields (e.g. document_id, job_id) of existing points.
+
+        A shared passage's point carries every document/job it belongs to. Returns the keys that have no point
+        (the caller re-upserts them from the stored embedding)."""
+        if not keys or not self.client.collection_exists(self.collection_name):
+            return list(keys)
+        by_point = {point_id_for(k): k for k in keys}
+        found = self.client.retrieve(self.collection_name, ids=list(by_point), with_payload=True, with_vectors=False)
+        for point in found:
+            payload = {}
+            for field, value in values.items():
+                current = point.payload.get(field)
+                items = current if isinstance(current, list) else ([current] if current else [])
+                payload[field] = items if value in items else items + [value]
+            self.client.set_payload(self.collection_name, payload=payload, points=[point.id], wait=True)
+        present = {str(p.id) for p in found}
+        return [k for pid, k in by_point.items() if pid not in present]
+
+    def remove_from_lists(self, keys: list[str], **values: str) -> None:
+        """Take ``values`` out of list payload fields of the given points (the document no longer uses them)."""
+        if not keys or not self.client.collection_exists(self.collection_name):
+            return
+        ids = [point_id_for(k) for k in keys]
+        for point in self.client.retrieve(self.collection_name, ids=ids, with_payload=True, with_vectors=False):
+            payload = {}
+            for field, value in values.items():
+                current = point.payload.get(field)
+                items = current if isinstance(current, list) else ([current] if current else [])
+                payload[field] = [i for i in items if i != value]
+            self.client.set_payload(self.collection_name, payload=payload, points=[point.id], wait=True)
 
     def delete_keys(self, keys: list[str]) -> None:
         if keys and self.client.collection_exists(self.collection_name):

@@ -18,7 +18,7 @@ class HttpEmbeddingService:
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
-        self._client = httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout_sec)
+        self._client = httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout_sec, verify=settings.tls_verify)
 
     def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
         vectors: list[list[float]] = []

@@ -1,38 +1,26 @@
-"""Pipeline stage 4: embed chunks, keep the vectors in chunk_embeddings and index them in Qdrant.
+"""Pipeline stage: embed the passages of a document and index them in Qdrant.
 
-Chunks whose text is identical to a chunk of a previous version of the same file reuse that vector, so a
-changed file only embeds what changed. Once the new version is indexed, older versions are removed.
+Passages are stored once per unique text (see the chunking stage), so a passage that is already embedded is not
+embedded again: its Qdrant point just gains this document and job in its ``document_id`` / ``job_id`` lists.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Any
 
 from src.core.config import settings
-from src.core.db.models import ChunkArchive, ChunkEmbedding
+from src.core.db.models import ChunkArchive, ChunkEmbedding, DocumentChunkLink
 from src.core.db.session import session_scope
 from src.core.embeddings.embedding_service import get_embedding_service
 from src.core.tz import ist_now
 from src.core.vector_db.qdrant_client import get_qdrant_client, point_id_for
 from src.workers.celery_app import app
-from src.workers.pipeline import (
-    IngestionTask,
-    PermanentIngestionError,
-    complete_job,
-    other_versions,
-    purge_document_file,
-    update_job,
-)
+from src.workers.pipeline import IngestionTask, PermanentIngestionError, complete_job, update_job
 
 logger = logging.getLogger(__name__)
 
 _PAYLOAD_TEXT_CHARS = 1000
-
-
-def _text_key(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 @app.task(base=IngestionTask, stage="embedding")
@@ -40,97 +28,73 @@ def embed_chunks(ctx: dict[str, Any]) -> dict[str, Any]:
     job_id, document_file_id = ctx["job_id"], ctx["document_file_id"]
     with session_scope() as db:
         update_job(db, job_id, status="embedding")
-        chunks = (
-            db.query(ChunkArchive)
-            .filter(ChunkArchive.document_file_id == document_file_id)
-            .order_by(ChunkArchive.chunk_number)
+        links = (
+            db.query(DocumentChunkLink)
+            .filter(DocumentChunkLink.document_file_id == document_file_id)
+            .order_by(DocumentChunkLink.chunk_number)
             .all()
         )
-        if not chunks:
-            raise PermanentIngestionError(f"No chunks stored for document {document_file_id}")
+        if not links:
+            raise PermanentIngestionError(f"No passages stored for document {document_file_id}")
+        passage_ids = list(dict.fromkeys(link.chunk_id for link in links))
+        passages = {c.id: c for c in db.query(ChunkArchive).filter(ChunkArchive.id.in_(passage_ids))}
+        stored = {e.chunk_id: e for e in db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(passage_ids))}
+        todo = [p for p in passage_ids if p not in stored]
 
         embedder = get_embedding_service()
-        previous = other_versions(db, ctx["project_id"], ctx["filename"], document_file_id)
-        reusable: dict[str, list[float]] = {}
-        if previous:
-            rows = (
-                db.query(ChunkArchive.text, ChunkEmbedding.embedding)
-                .join(ChunkEmbedding, ChunkEmbedding.chunk_id == ChunkArchive.id)
-                .filter(
-                    ChunkEmbedding.document_file_id.in_([p.id for p in previous]),
-                    ChunkEmbedding.model_name == embedder.model_name[:50],
-                )
-                .all()
-            )
-            reusable = {_text_key(text): vec for text, vec in rows}
+        vectors = embedder.embed_batch([passages[p].text for p in todo], settings.embedding_batch_size) if todo else []
+        if len(vectors) != len(todo):
+            raise RuntimeError(f"Got {len(vectors)} embeddings for {len(todo)} passages")
 
-        keys = [_text_key(c.text) for c in chunks]
-        todo = [i for i, k in enumerate(keys) if k not in reusable]
-        fresh = embedder.embed_batch([chunks[i].text for i in todo], settings.embedding_batch_size) if todo else []
-        if len(fresh) != len(todo):
-            raise RuntimeError(f"Got {len(fresh)} embeddings for {len(todo)} chunks")
-        computed = dict(zip(todo, fresh))
-        vectors = [computed[i] if i in computed else reusable[keys[i]] for i in range(len(chunks))]
+        def record(passage_id: str, vector: list[float]) -> dict[str, Any]:
+            p = passages[passage_id]
+            return {
+                "chunk_id": passage_id,
+                "embedding": vector,
+                "metadata": {
+                    "chunk_id": passage_id,
+                    "document_id": [document_file_id],
+                    "job_id": [job_id],
+                    "project_id": p.project_id,
+                    "page_number": p.page_number,
+                    "source_type": p.source_type,
+                    "text": p.text[:_PAYLOAD_TEXT_CHARS],
+                },
+            }
 
         store = get_qdrant_client()
-        store.delete_where(document_id=document_file_id)
-        stored = store.store_embeddings_batch(
-            [
-                {
-                    "chunk_id": c.id,
-                    "embedding": v,
-                    "metadata": {
-                        "chunk_id": c.id,
-                        "document_id": document_file_id,
-                        "job_id": job_id,
-                        "project_id": c.project_id,
-                        "filename": ctx["filename"],
-                        "chunk_number": c.chunk_number,
-                        "page_number": c.page_number,
-                        "source_type": c.source_type,
-                        "text": c.text[:_PAYLOAD_TEXT_CHARS],
-                    },
-                }
-                for c, v in zip(chunks, vectors)
-            ]
-        )
+        reused = [p for p in passage_ids if p in stored]
+        missing_points = store.add_to_lists(reused, document_id=document_file_id, job_id=job_id)
+        # Points lost from Qdrant (e.g. a reset collection) are restored from the stored embedding, not re-embedded.
+        restore = [record(p, stored[p].embedding) for p in missing_points]
+        new = [record(p, v) for p, v in zip(todo, vectors)]
+        indexed = store.store_embeddings_batch(new + restore)
 
-        db.query(ChunkEmbedding).filter(ChunkEmbedding.document_file_id == document_file_id).delete()
         now = ist_now()
-        for c, v in zip(chunks, vectors):
+        for passage_id, vector in zip(todo, vectors):
             db.add(
                 ChunkEmbedding(
-                    id=f"emb_{c.id}"[:64],
-                    chunk_id=c.id,
-                    document_file_id=document_file_id,
-                    project_id=c.project_id,
-                    embedding=v,
-                    embedding_dimension=len(v),
+                    id=f"emb_{passage_id}"[:64],
+                    chunk_id=passage_id,
+                    document_file_id=passages[passage_id].document_file_id,
+                    project_id=passages[passage_id].project_id,
+                    embedding=vector,
+                    embedding_dimension=len(vector),
                     model_name=embedder.model_name[:50],
-                    qdrant_point_id=point_id_for(c.id),
+                    qdrant_point_id=point_id_for(passage_id),
                     embedding_generated_at=now,
                     created_at=now,
                 )
             )
         db.commit()
-
-        # The new version is searchable now; drop older versions of the same file everywhere.
-        for doc in previous:
-            purge_document_file(db, doc)
-
-        reused = len(chunks) - len(todo)
-        summary = f"{len(chunks)} chunks, {stored} vectors ({reused} reused from the previous version)"
-        if not ctx.get("knowledge"):
+        summary = f"{len(passage_ids)} passages: {len(todo)} embedded, {len(reused)} reused from the library"
+        if not ctx.get("knowledge") and not ctx.get("library"):
             complete_job(db, ctx, summary)
 
-    logger.info(
-        "[EMBED] job=%s indexed %d chunks (%d dims, %d reused) in Qdrant collection %s",
-        job_id, stored, len(vectors[0]), reused, store.collection_name,
-    )
+    logger.info("[EMBED] job=%s %s (%d points written) in %s", job_id, summary, indexed, store.collection_name)
     return {
         **ctx,
-        "embedded": stored,
-        "reused_embeddings": reused,
-        "embedding_dimension": len(vectors[0]),
+        "embedded": len(todo),
+        "reused_embeddings": len(reused),
         "qdrant_collection": store.collection_name,
     }

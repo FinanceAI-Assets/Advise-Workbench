@@ -14,7 +14,6 @@ RouterIntent = Literal[
     "clarify",
     "refine",
     "out_of_scope",
-    "question",  # factual question answered by the query pipeline (cited, evidence-gated)
     # Collaborative story-building intents (Phase 2)
     "storyline_feedback",   # User reacting to a narrative arc proposal (agree / redirect)
     "slide_agree",          # User agrees with the current slide concept
@@ -45,7 +44,7 @@ _VALID_STATES = {
 
 _VALID_INTENTS = {
     "greeting", "ack", "smalltalk", "commit", "discovery_answer",
-    "clarify", "refine", "out_of_scope", "question",
+    "clarify", "refine", "out_of_scope",
     "storyline_feedback", "slide_agree", "slide_modify", "structure_approve",
 }
 
@@ -119,11 +118,8 @@ def route_turn(
         "Return ONLY JSON with keys:\n"
         "intent, confidence, extracted_slots, output_types, representations, content_skill_hint, "
         "next_state, missing_slots, reply_hint, rationale.\n\n"
-        "intent enum: greeting|ack|smalltalk|commit|discovery_answer|clarify|refine|out_of_scope|question"
+        "intent enum: greeting|ack|smalltalk|commit|discovery_answer|clarify|refine|out_of_scope"
         "|storyline_feedback|slide_agree|slide_modify|structure_approve.\n"
-        "  question = the user asks for facts or an explanation that should come from the project's documents "
-        "(e.g. 'who approves invoices?', 'what are the main risks?', 'summarise the workshop notes'); "
-        "NOT a request to create a deliverable and NOT an answer to a discovery question.\n"
         "  storyline_feedback = user reacting to a narrative arc proposal (e.g. 'I prefer SCQA', 'looks good', 'use pyramid').\n"
         "  slide_agree = user agrees with the current proposed slide concept.\n"
         "  slide_modify = user wants to change the current slide concept.\n"

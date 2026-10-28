@@ -62,8 +62,6 @@ class Settings(BaseSettings):
     celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
     celery_result_backend: str = "redis://localhost:6379/0"
     celery_task_max_retries: int = 2
-    # When true, the regular /api/documents/upload also queues the ingestion pipeline.
-    document_pipeline_enabled: bool = False
 
     # SeaweedFS through its S3 gateway (shared service; see docs/06-deployment-operations/SHARED_SERVICES.md)
     s3_endpoint_url: str = ""
@@ -78,10 +76,8 @@ class Settings(BaseSettings):
     document_max_size_bytes: int = 104857600  # 100MB
     document_allowed_formats: str = "pdf,docx,pptx,xlsx,xls,txt,md,csv,json,jpg,jpeg,png,gif,bmp"
 
-    # Docling parsing and chunking
+    # Docling parsing (chunking uses the Library's section-aware chunker, practice_ingest.chunk_blocks)
     docling_ocr_enabled: bool = False  # only needed for scanned PDFs; downloads OCR models on first use
-    chunk_size_characters: int = 1024
-    chunk_overlap_characters: int = 204  # 20% overlap
 
     # OCR settings for images/diagrams
     ocr_enabled: bool = True
@@ -100,6 +96,18 @@ class Settings(BaseSettings):
     qdrant_collection_prefix: str = ""
     qdrant_collection: str = "document_chunks"  # stored as f"{qdrant_collection_prefix}{qdrant_collection}"
     qdrant_wiki_collection: str = "wiki_pages"
+    # CA certificate that signed the shared services' TLS certificates (private links); empty = the system store.
+    ssl_ca_file: str = ""
+
+    @property
+    def tls_verify(self) -> str | bool:
+        """``verify`` for the S3, Qdrant and embedding clients."""
+        if self.ssl_ca_file and not Path(self.ssl_ca_file).is_file():
+            raise RuntimeError(
+                f"SSL_CA_FILE={self.ssl_ca_file} does not exist: save the shared services' CA certificate there "
+                "(from the shared-services owner), or clear SSL_CA_FILE for links with public certificates"
+            )
+        return self.ssl_ca_file or True
 
     # Knowledge building (facts -> wiki drafts -> dedup -> wiki embeddings), through the configured
     # model provider (LLM_PROVIDER=claude_cli uses the signed-in Claude Code CLI; no API key).
@@ -109,13 +117,29 @@ class Settings(BaseSettings):
     knowledge_max_wiki_pages: int = 8  # wiki pages generated per document
     wiki_deduplication_threshold: float = 0.85  # cosine similarity at which two pages are the same topic
 
-    # Query pipeline (POST /api/query): retrieval over the project's chunks + wiki pages, cited answers.
-    query_top_k: int = 6  # sources given to the model
-    query_candidates: int = 24  # vector hits per query before verification and reranking
+    # Query pipeline (POST /api/query): retrieval over the library's chunks + wiki pages, cited answers.
+    query_top_k: int = 10  # sources given to the model
+    query_candidates: int = 50  # vector hits per query variant and collection, before verification
     query_min_score: float = 0.35  # below this cosine similarity a hit is not evidence
-    query_context_max_chars: int = 9000  # ~2,250 tokens of sources in the prompt
+    query_max_variants: int = 3  # query variants embedded and searched
+    query_variant_min_similarity: float = 0.5  # variants less similar to the question are not searched (drift)
+    query_llm_variants: str = "auto"  # off | auto (English variant of a non-English question) | always (+ rewrite, paraphrase)
+    query_min_confidence: float = 0.4  # best match below this vector score -> insufficient evidence (low confidence)
+    query_rerank_pool: int = 20  # best verified hits scored for faithfulness and reranked
+    query_min_verification: float = 0.6  # wiki pages less supported by their source chunks are dropped
+    query_verify_evidence: int = 3  # source chunks a wiki page is checked against (and shown as its evidence)
+    query_evidence_per_wiki: int = 2  # of those, chunks added to the model's context next to the wiki page
+    query_reranker_base_url: str = ""  # hosted cross-encoder: POST {url}/rerank (Text Embeddings Inference API)
+    query_reranker_api_key: str = ""  # defaults to EMBEDDING_API_KEY
+    query_reranker_model: str = ""  # local cross-encoder, e.g. BAAI/bge-reranker-v2-m3; empty = vector score + keywords
+    query_context_max_tokens: int = 3800  # sources in the prompt (~4 characters per token)
     query_max_answer_tokens: int = 700
+    query_min_citation_coverage: float = 0.5  # answers citing a smaller share of their sentences are rejected
     query_history_turns: int = 4  # previous turns used to rewrite a follow-up question
+    query_llm_timeout_sec: float = 90.0  # per answer attempt
+    query_llm_retries: int = 2  # extra attempts after a timeout or API error
+    query_llm_retry_backoff_sec: float = 1.0  # wait before retry n is n x this (doubled when rate limited)
+    query_event_retention_days: int = 90  # question log behind /api/admin/library/query/metrics
 
     anthropic_api_key: str = ""
 
@@ -150,6 +174,13 @@ class Settings(BaseSettings):
     auth_allow_self_signup: bool = False
     # Comma-separated email domains that may sign in. Empty allows any domain.
     auth_allowed_email_domains: str = "deloitte.com"
+    # Microsoft Entra ID (OIDC) sign-in. Disabled until a client ID and secret are configured.
+    microsoft_sso_client_id: str = ""
+    microsoft_sso_client_secret: str = ""
+    microsoft_sso_tenant_id: str = "organizations"
+    microsoft_sso_redirect_uri: str = "http://localhost:8000/api/auth/microsoft/callback"
+    microsoft_sso_frontend_redirect_uri: str = "http://localhost:3000/login"
+    microsoft_sso_scopes: str = "openid profile email"
     # Comma-separated emails permitted to mutate the shared leading_practice wiki.
     # Empty in development = any authenticated user (matches historical behavior);
     # in staging/production, an empty list blocks all LP mutations.

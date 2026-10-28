@@ -45,7 +45,7 @@ def upload_to_seaweedfs(ctx: dict[str, Any]) -> dict[str, Any]:
         if doc_file is None:
             doc_file = DocumentFile(id=f"docfile_{uuid.uuid4().hex[:16]}", project_id=project_id, job_id=job_id)
             db.add(doc_file)
-        doc_file.filename = filename
+        doc_file.filename = ctx.get("doc_key") or filename
         doc_file.file_format = path.suffix.lstrip(".").lower()[:20] or None
         doc_file.file_size_bytes = stored["size"]
         doc_file.sha256_hash = stored["sha256"]

@@ -49,6 +49,7 @@ class SeaweedFSClient:
             aws_secret_access_key=secret_access_key,
             region_name=region,
             config=config,
+            verify=settings.tls_verify,
         )
 
     def upload_file(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> dict[str, Any]:

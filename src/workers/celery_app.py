@@ -1,5 +1,7 @@
 """Celery application for the document ingestion pipeline."""
 
+import ssl
+
 from celery import Celery
 from celery.signals import worker_init
 
@@ -13,6 +15,7 @@ app = Celery(
     backend=settings.celery_result_backend,
     include=[
         "src.workers.pipeline",
+        "src.workers.library_tasks",
         "src.workers.document_intake_tasks",
         "src.workers.document_parsing_tasks",
         "src.workers.document_embedding_tasks",
@@ -34,6 +37,14 @@ app.conf.update(
     result_expires=86400,
     broker_connection_retry_on_startup=True,
 )
+
+# TLS links (amqps:// broker, rediss:// results) to the shared services are verified against SSL_CA_FILE.
+_tls = {"cert_reqs": ssl.CERT_REQUIRED, **({"ca_certs": settings.ssl_ca_file} if settings.ssl_ca_file else {})}
+if settings.celery_broker_url.startswith("amqps://"):
+    app.conf.broker_use_ssl = _tls
+if settings.celery_result_backend.startswith("rediss://"):
+    app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED, **(
+        {"ssl_ca_certs": settings.ssl_ca_file} if settings.ssl_ca_file else {})}
 
 
 @worker_init.connect

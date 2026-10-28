@@ -5,65 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 
-type IngestionJob = {
-  job_id: string;
-  filename: string;
-  status: string;
-  is_terminal: boolean;
-  stages: string[];
-  current_stage_index: number;
-  progress_percent: number;
-  counts: { chunks: number; embeddings: number; facts: number; wiki_pages: number };
-  parse_mode?: string | null;
-  failed_stage?: string | null;
-  error_message?: string | null;
-};
-
-const STAGE_LABELS: Record<string, string> = {
-  pending: "Queued",
-  uploading: "Storing file",
-  parsing: "Reading document",
-  chunking: "Splitting into chunks",
-  embedding: "Indexing for search",
-  extracting_facts: "Extracting facts",
-  generating_wiki: "Writing wiki pages",
-  deduplicating: "Merging wiki pages",
-  indexing_wiki: "Publishing wiki",
-  retrying: "Retrying",
-  completed: "Ready",
-  failed: "Failed",
-};
-
-function IngestionStatus({ job }: { job: IngestionJob }) {
-  const failed = job.status === "failed";
-  const done = job.status === "completed";
-  const stepCount = job.stages.length;
-  const step = Math.min(Math.max(job.current_stage_index + 1, 0), stepCount);
-  const color = failed ? "var(--error)" : done ? "var(--success)" : "var(--info)";
-  return (
-    <div className="mt-1 space-y-0.5 text-[11px]">
-      <p style={{ color }}>
-        {STAGE_LABELS[job.status] ?? job.status}
-        {!done && !failed && stepCount > 0 ? ` (step ${step} of ${stepCount}, ${job.progress_percent}%)` : ""}
-        {done && job.parse_mode === "unchanged" ? " (unchanged, nothing to update)" : ""}
-      </p>
-      <p className="text-[var(--text-muted)]">
-        {job.counts.chunks} chunks · {job.counts.embeddings} embeddings · {job.counts.facts} facts ·{" "}
-        {job.counts.wiki_pages} wiki pages
-      </p>
-      {failed ? (
-        <p className="text-[var(--error)]">
-          {job.failed_stage ? `${STAGE_LABELS[job.failed_stage] ?? job.failed_stage}: ` : ""}
-          {job.error_message ?? "Processing failed"}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 export function DocumentUploader({ projectId, autoload = true }: { projectId: string; autoload?: boolean }) {
   const { api, token, ready } = useAuth();
-  const [jobs, setJobs] = useState<Record<string, IngestionJob>>({});
   const [items, setItems] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -91,30 +34,10 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
     }
   }, [api, projectId, token]);
 
-  const loadJobs = useCallback(async () => {
-    if (!projectId || !token) return;
-    try {
-      const res = await api(`/api/documents/jobs?project_id=${encodeURIComponent(projectId)}`);
-      if (!res.ok) return;
-      const data = (await res.json().catch(() => [])) as IngestionJob[];
-      setJobs(Object.fromEntries((Array.isArray(data) ? data : []).map((j) => [j.filename, j])));
-    } catch {
-      // Status is informational; the document list still works without it.
-    }
-  }, [api, projectId, token]);
-
   useEffect(() => {
     if (!autoload || !projectId || !ready || !token) return;
     void loadDocuments();
-    void loadJobs();
-  }, [projectId, autoload, ready, token, loadDocuments, loadJobs]);
-
-  const processing = Object.values(jobs).some((j) => !j.is_terminal);
-  useEffect(() => {
-    if (!processing) return;
-    const timer = window.setInterval(() => void loadJobs(), 3000);
-    return () => window.clearInterval(timer);
-  }, [processing, loadJobs]);
+  }, [projectId, autoload, ready, token, loadDocuments]);
 
   async function handleUploadOne(file: File): Promise<{ filename: string; ok: boolean; error?: string }> {
     const filename = file.name;
@@ -136,7 +59,6 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
       }
       setMessage(`Uploaded: ${filename}`);
       await loadDocuments();
-      await loadJobs();
 
       // Ingest document into wiki (non-blocking — wiki page auto-syncs on load too)
       try {
@@ -209,7 +131,6 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
       }
       setMessage(`Deleted: ${data.filename ?? filename}`);
       await loadDocuments();
-      await loadJobs();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     } finally {
@@ -262,12 +183,7 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
         ) : (
           items.map((item) => (
             <div key={item} className="flex items-center justify-between gap-2 rounded border border-[var(--surface-border)] bg-[var(--surface-muted)] px-2 py-1">
-              <div className="min-w-0">
-                <p className="truncate">{item.split("/").pop() ?? item}</p>
-                {jobs[item.split(/[\\/]/).pop() ?? item] ? (
-                  <IngestionStatus job={jobs[item.split(/[\\/]/).pop() ?? item]} />
-                ) : null}
-              </div>
+              <p className="truncate">{item.split("/").pop() ?? item}</p>
               <Button
                 type="button"
                 variant="secondary"

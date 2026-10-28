@@ -1,22 +1,23 @@
-"""Document ingestion API: queue the Celery pipeline, follow jobs, inspect what each store holds."""
+"""Library ingestion monitoring API (admin console → Library management).
 
-import asyncio
-import hashlib
+Mounted at /api/admin/library/documents; administrators only. Sources enter through Upload sources
+(POST /api/admin/library/uploads); these routes follow the pipeline jobs and show what each store holds.
+"""
+
 import logging
-import re
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.app.api.documents import _normalize_upload_filename
-from src.core.auth import get_current_user, require_project_role
+from src.core.auth import require_admin
 from src.core.config import settings
 from src.core.db.models import (
     ChunkArchive,
     ChunkEmbedding,
+    DocumentChunkLink,
     DocumentFile,
     DocumentJob,
     ExtractedFact,
@@ -25,26 +26,12 @@ from src.core.db.models import (
     WikiPageFinal,
 )
 from src.core.db.session import get_db
-from src.core.security.upload_validation import validate_document_upload
-from src.core.storage import ensure_workspace, workspace_path
 from src.core.storage.seaweedfs_client import get_seaweedfs_client
 from src.core.vector_db.qdrant_client import get_qdrant_client
-from src.workers.pipeline import KNOWLEDGE_STAGES, SEARCH_STAGES, TERMINAL_STATUSES, queue_document
+from src.workers.pipeline import KNOWLEDGE_STAGES, LIBRARY_SCOPE, SEARCH_STAGES, TERMINAL_STATUSES
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-_SAFE_PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
-class UploadResponse(BaseModel):
-    job_id: str
-    status: str
-    filename: str
-    file_size_bytes: int
-    sha256: str
-    timestamp: datetime
-    message: str
 
 
 class JobCounts(BaseModel):
@@ -58,6 +45,7 @@ class JobStatus(BaseModel):
     job_id: str
     status: str
     is_terminal: bool
+    practice_id: Optional[str] = None  # set for sources uploaded through Library management (Upload sources)
     filename: str
     stages: list[str]
     current_stage_index: int  # -1 before the first stage; len(stages) when completed
@@ -80,9 +68,28 @@ def _stages() -> list[str]:
     return SEARCH_STAGES + (KNOWLEDGE_STAGES if settings.knowledge_building_enabled else [])
 
 
-def _wiki_pages_for(db: Session, project_id: str, document_file_id: str) -> list[WikiPageFinal]:
-    pages = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == project_id).all()
+def _wiki_pages_for(db: Session, document_file_id: str) -> list[WikiPageFinal]:
+    pages = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == LIBRARY_SCOPE).all()
     return [p for p in pages if document_file_id in (p.merge_info or {}).get("source_documents", [])]
+
+
+def practice_document_key(practice_id: str, filename: str) -> str:
+    """Pipeline document key of a practice source: versions of one practice replace each other in search."""
+    return f"{practice_id}/{filename}"
+
+
+def split_document_key(key: str) -> tuple[Optional[str], str]:
+    """``<practice>/<JOB-n>/<file>`` -> (practice, file); a key without a practice is just the file name."""
+    parts = key.split("/")
+    return (parts[0], parts[-1]) if len(parts) > 1 else (None, key)
+
+
+def ingestion_status(db: Session, job_id: str | None) -> dict[str, Any] | None:
+    """JSON-ready pipeline status of one library ingestion job (None when there is no such job)."""
+    if not job_id:
+        return None
+    job = db.query(DocumentJob).filter(DocumentJob.job_id == job_id, DocumentJob.project_id == LIBRARY_SCOPE).first()
+    return _job_status(db, job).model_dump(mode="json") if job else None
 
 
 def _job_status(db: Session, job: DocumentJob) -> JobStatus:
@@ -91,11 +98,12 @@ def _job_status(db: Session, job: DocumentJob) -> JobStatus:
     counts = JobCounts(chunks=job.chunk_count or 0)
     if doc is not None:
         parsed_ids = [p for (p,) in db.query(ParsedDocument.id).filter(ParsedDocument.document_file_id == doc.id)]
-        counts.chunks = db.query(ChunkArchive).filter(ChunkArchive.document_file_id == doc.id).count()
-        counts.embeddings = db.query(ChunkEmbedding).filter(ChunkEmbedding.document_file_id == doc.id).count()
+        links = db.query(DocumentChunkLink).filter(DocumentChunkLink.document_file_id == doc.id)
+        counts.chunks = links.count()
+        counts.embeddings = links.join(ChunkEmbedding, ChunkEmbedding.chunk_id == DocumentChunkLink.chunk_id).count()
         if parsed_ids:
             counts.facts = db.query(ExtractedFact).filter(ExtractedFact.parsed_document_id.in_(parsed_ids)).count()
-        counts.wiki_pages = len(_wiki_pages_for(db, job.project_id, doc.id))
+        counts.wiki_pages = len(_wiki_pages_for(db, doc.id))
     if job.status == "completed":
         index = len(stages)
     elif job.status in stages:
@@ -105,11 +113,13 @@ def _job_status(db: Session, job: DocumentJob) -> JobStatus:
     else:
         index = -1
     progress = 100 if job.status == "completed" else max(0, int(100 * max(index, 0) / max(len(stages), 1)))
+    practice_id, filename = split_document_key(job.filename)
     return JobStatus(
         job_id=job.job_id,
         status=job.status,
         is_terminal=job.status in TERMINAL_STATUSES,
-        filename=job.filename,
+        practice_id=practice_id,
+        filename=filename,
         stages=stages,
         current_stage_index=index,
         progress_percent=progress,
@@ -128,103 +138,44 @@ def _job_status(db: Session, job: DocumentJob) -> JobStatus:
     )
 
 
-@router.post("/upload-async", response_model=UploadResponse)
-async def upload_document_async(
-    project_id: str = Form(...),
-    file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> UploadResponse:
-    """Save the file and queue the ingestion pipeline; returns the job id to poll."""
-    if not project_id or not _SAFE_PROJECT_ID.match(project_id):
-        raise HTTPException(status_code=400, detail="Invalid project_id")
-    require_project_role(project_id, {"Owner", "Editor"}, user, db)
-    safe_name = _normalize_upload_filename(file.filename)
-    ensure_workspace(project_id)
-
-    try:
-        content = await asyncio.wait_for(file.read(), timeout=30.0)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=408, detail="File upload timeout")
-    validate_document_upload(safe_name, content)
-
-    target = workspace_path(project_id) / "source_docs" / safe_name
-    target.write_bytes(content)
-    sha256 = hashlib.sha256(content).hexdigest()
-    job = await asyncio.to_thread(
-        queue_document,
-        db,
-        project_id=project_id,
-        user_id=user.id,
-        filename=safe_name,
-        local_path=target,
-        sha256=sha256,
-        size_bytes=len(content),
+def _job_for(job_id: str, db: Session) -> DocumentJob:
+    job = (
+        db.query(DocumentJob)
+        .filter(DocumentJob.job_id == job_id, DocumentJob.project_id == LIBRARY_SCOPE)
+        .first()
     )
-    if job.status == "failed":
-        message = job.error_message or "Queueing failed"
-    elif job.parse_mode == "unchanged":
-        message = job.error_message or "Content unchanged"
-    else:
-        message = "Document queued for processing"
-    return UploadResponse(
-        job_id=job.job_id,
-        status=job.status,
-        filename=safe_name,
-        file_size_bytes=len(content),
-        sha256=sha256,
-        timestamp=job.created_at,
-        message=message,
-    )
-
-
-def _job_for(job_id: str, user: User, db: Session) -> DocumentJob:
-    job = db.query(DocumentJob).filter(DocumentJob.job_id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    require_project_role(job.project_id, {"Owner", "Editor", "Viewer"}, user, db)
     return job
 
 
 @router.get("/status/{job_id}", response_model=JobStatus)
-def get_job_status(job_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> JobStatus:
+def get_job_status(job_id: str, admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> JobStatus:
     """Poll one ingestion job: stage, progress, counts, failure details."""
-    return _job_status(db, _job_for(job_id, user, db))
+    return _job_status(db, _job_for(job_id, db))
 
 
 @router.get("/jobs", response_model=list[JobStatus])
-def list_jobs(
-    project_id: str,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> list[JobStatus]:
-    """Latest ingestion job of every file in the project (newest first)."""
-    if not _SAFE_PROJECT_ID.match(project_id or ""):
-        raise HTTPException(status_code=400, detail="Invalid project_id")
-    require_project_role(project_id, {"Owner", "Editor", "Viewer"}, user, db)
+def list_jobs(admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> list[JobStatus]:
+    """Latest ingestion job of every library document (newest first)."""
     latest: dict[str, DocumentJob] = {}
     for job in (
-        db.query(DocumentJob).filter(DocumentJob.project_id == project_id).order_by(DocumentJob.created_at.desc())
+        db.query(DocumentJob).filter(DocumentJob.project_id == LIBRARY_SCOPE).order_by(DocumentJob.created_at.desc())
     ):
         latest.setdefault(job.filename, job)
     return [_job_status(db, j) for j in latest.values() if j.status != "deleted"]
 
 
 @router.get("/wiki")
-def list_wiki_pages(
-    project_id: str,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> list[dict[str, Any]]:
-    """Wiki pages the pipeline built for the project (deduplicated across documents)."""
-    require_project_role(project_id, {"Owner", "Editor", "Viewer"}, user, db)
+def list_wiki_pages(admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    """Wiki pages the pipeline built from library documents (deduplicated across documents)."""
     pages = (
         db.query(WikiPageFinal)
-        .filter(WikiPageFinal.project_id == project_id)
+        .filter(WikiPageFinal.project_id == LIBRARY_SCOPE)
         .order_by(WikiPageFinal.updated_at.desc())
         .all()
     )
-    names = {d.id: d.filename for d in db.query(DocumentFile).filter(DocumentFile.project_id == project_id)}
+    names = {d.id: d.filename for d in db.query(DocumentFile).filter(DocumentFile.project_id == LIBRARY_SCOPE)}
     return [
         {
             "id": p.id,
@@ -245,11 +196,11 @@ def list_wiki_pages(
 def get_job_details(
     job_id: str,
     chunk_limit: int = Query(20, ge=0, le=200),
-    user: User = Depends(get_current_user),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """What the pipeline stored for this job in SeaweedFS (S3), Postgres and Qdrant."""
-    job = _job_for(job_id, user, db)
+    job = _job_for(job_id, db)
     status = _job_status(db, job).model_dump()
     doc_file = db.query(DocumentFile).filter(DocumentFile.job_id == job.job_id).first()
     if doc_file is None:
@@ -262,7 +213,11 @@ def get_job_details(
         seaweedfs["error"] = str(e)
 
     parsed = db.query(ParsedDocument).filter(ParsedDocument.document_file_id == doc_file.id).first()
-    chunks_q = db.query(ChunkArchive).filter(ChunkArchive.document_file_id == doc_file.id)
+    chunks_q = (
+        db.query(DocumentChunkLink, ChunkArchive)
+        .join(ChunkArchive, ChunkArchive.id == DocumentChunkLink.chunk_id)
+        .filter(DocumentChunkLink.document_file_id == doc_file.id)
+    )
     postgres = {
         "document_file_id": doc_file.id,
         "parsed_document_id": parsed.id if parsed else None,
@@ -270,16 +225,18 @@ def get_job_details(
         "table_count": parsed.table_count if parsed else None,
         "text_length": len(parsed.full_text or "") if parsed else None,
         "chunk_count": chunks_q.count(),
+        "reused_chunk_count": chunks_q.filter(DocumentChunkLink.reused.is_(True)).count(),
         "chunks": [
             {
                 "id": c.id,
-                "chunk_number": c.chunk_number,
-                "page_number": c.page_number,
+                "chunk_number": link.chunk_number,
+                "page_number": link.page_number,
                 "source_type": c.source_type,
                 "characters": c.character_count,
+                "reused": link.reused,
                 "preview": c.text[:200],
             }
-            for c in chunks_q.order_by(ChunkArchive.chunk_number).limit(chunk_limit).all()
+            for link, c in chunks_q.order_by(DocumentChunkLink.chunk_number).limit(chunk_limit).all()
         ],
     }
 
@@ -293,13 +250,11 @@ def get_job_details(
         }
         wiki_store = get_qdrant_client(settings.qdrant_wiki_collection)
         qdrant["wiki_collection"] = wiki_store.collection_name
-        qdrant["wiki_points_in_project"] = wiki_store.count(project_id=job.project_id)
+        qdrant["wiki_points_in_project"] = wiki_store.count(project_id=LIBRARY_SCOPE)
     except Exception as e:
         qdrant["error"] = str(e)
 
-    facts = (
-        db.query(ExtractedFact).filter(ExtractedFact.parsed_document_id == parsed.id).all() if parsed else []
-    )
+    facts = db.query(ExtractedFact).filter(ExtractedFact.parsed_document_id == parsed.id).all() if parsed else []
     knowledge = {
         "fact_count": len(facts),
         "facts": [
@@ -315,7 +270,7 @@ def get_job_details(
                 "is_published": bool(p.is_published),
                 "content": p.content,
             }
-            for p in _wiki_pages_for(db, job.project_id, doc_file.id)
+            for p in _wiki_pages_for(db, doc_file.id)
         ],
     }
     return {"job": status, "seaweedfs": seaweedfs, "postgres": postgres, "qdrant": qdrant, "knowledge": knowledge}

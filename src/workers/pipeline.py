@@ -27,6 +27,7 @@ from src.core.config import settings
 from src.core.db.models import (
     ChunkArchive,
     ChunkEmbedding,
+    DocumentChunkLink,
     DocumentFile,
     DocumentJob,
     EmbeddingsMetadata,
@@ -44,7 +45,9 @@ from src.workers.celery_app import app
 
 logger = logging.getLogger(__name__)
 
-SEARCH_STAGES = ["uploading", "parsing", "chunking", "embedding"]
+LIBRARY_SCOPE = "library"  # scope id of Leading Practice Library sources (stored in the project_id columns)
+
+SEARCH_STAGES = ["intake", "uploading", "parsing", "chunking", "embedding", "library_validation"]
 KNOWLEDGE_STAGES = ["extracting_facts", "generating_wiki", "deduplicating", "indexing_wiki"]
 TERMINAL_STATUSES = {"completed", "failed", "deleted"}
 
@@ -110,6 +113,10 @@ class IngestionTask(Task):
                 )
                 if job_id:
                     update_job(db, job_id, status="failed", failed_stage=self.stage, error_message=str(exc)[:1000])
+                if ctx.get("library_job_id"):
+                    from src.app.api.admin_library import fail_source
+
+                    fail_source(db, ctx, self.stage, str(exc))
                 if ctx.get("user_id") and ctx.get("project_id"):
                     notify_in_app(
                         db,
@@ -151,13 +158,32 @@ def purge_document_file(db: Session, doc: DocumentFile, *, delete_object: bool =
     from src.core.storage.seaweedfs_client import get_seaweedfs_client
     from src.core.vector_db.qdrant_client import get_qdrant_client
 
-    get_qdrant_client().delete_where(document_id=doc.id)
+    store = get_qdrant_client()
+    # Passages are shared across versions/documents: drop only this document's links; a passage (row, vector and
+    # point) is deleted once nothing links to it any more.
+    passage_ids = {c for (c,) in db.query(DocumentChunkLink.chunk_id).filter(DocumentChunkLink.document_file_id == doc.id)}
+    db.query(DocumentChunkLink).filter(DocumentChunkLink.document_file_id == doc.id).delete(synchronize_session=False)
+    db.flush()
+    still_used = (
+        {c for (c,) in db.query(DocumentChunkLink.chunk_id).filter(DocumentChunkLink.chunk_id.in_(passage_ids)).distinct()}
+        if passage_ids else set()
+    )
+    orphaned = sorted(passage_ids - still_used)
+    store.remove_from_lists(sorted(passage_ids & still_used), document_id=doc.id, job_id=doc.job_id)
+    store.delete_keys(orphaned)
+    store.delete_where(document_id=doc.id)  # points of documents ingested before passages were shared
     if delete_object and doc.seaweedfs_file_id:
         get_seaweedfs_client().delete_file(doc.seaweedfs_file_id)
 
     parsed_ids = [p.id for p in db.query(ParsedDocument.id).filter(ParsedDocument.document_file_id == doc.id)]
-    db.query(ChunkEmbedding).filter(ChunkEmbedding.document_file_id == doc.id).delete(synchronize_session=False)
-    db.query(ChunkArchive).filter(ChunkArchive.document_file_id == doc.id).delete(synchronize_session=False)
+    if orphaned:
+        db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(orphaned)).delete(synchronize_session=False)
+        db.query(ChunkArchive).filter(ChunkArchive.id.in_(orphaned)).delete(synchronize_session=False)
+    # Unshared rows of documents ingested before passages were shared.
+    legacy = [c for (c,) in db.query(ChunkArchive.id).filter(ChunkArchive.document_file_id == doc.id) if c not in still_used]
+    if legacy:
+        db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(legacy)).delete(synchronize_session=False)
+        db.query(ChunkArchive).filter(ChunkArchive.id.in_(legacy)).delete(synchronize_session=False)
     if parsed_ids:
         db.query(ExtractedFact).filter(ExtractedFact.parsed_document_id.in_(parsed_ids)).delete(synchronize_session=False)
         db.query(WikiPageDraft).filter(WikiPageDraft.parsed_document_id.in_(parsed_ids)).delete(synchronize_session=False)
@@ -219,8 +245,16 @@ def start_pipeline(ctx: dict[str, Any]) -> str:
         index_wiki_pages,
     )
     from src.workers.document_parsing_tasks import chunk_parsed_content, parse_document_with_docling
+    from src.workers.library_tasks import library_intake, library_validation
 
-    steps = [upload_to_seaweedfs.s(ctx), parse_document_with_docling.s(), chunk_parsed_content.s(), embed_chunks.s()]
+    steps = [
+        library_intake.s(ctx),
+        upload_to_seaweedfs.s(),
+        parse_document_with_docling.s(),
+        chunk_parsed_content.s(),
+        embed_chunks.s(),
+        library_validation.s(),
+    ]
     if ctx.get("knowledge"):
         steps += [
             extract_facts_from_chunks.s(),
@@ -257,8 +291,14 @@ def queue_document(
     local_path: Path,
     sha256: str,
     size_bytes: int,
+    library: dict[str, Any] | None = None,
 ) -> DocumentJob:
-    """Create the DocumentJob for a file saved under the workspace and queue the pipeline (unless unchanged)."""
+    """Create the DocumentJob for a file saved under the workspace and queue the pipeline (unless unchanged).
+
+    ``library`` carries the Library management upload form (owner, rights, taxonomy, target practice); the
+    ``intake`` stage turns it into the practice and library job. Library uploads are never "unchanged": every
+    upload is a new version that goes through review.
+    """
     now = ist_now()
     job = DocumentJob(
         id=f"doc_{uuid.uuid4().hex[:12]}",
@@ -272,7 +312,7 @@ def queue_document(
         created_at=now,
         updated_at=now,
     )
-    previous = _unchanged_job(db, project_id, filename, sha256)
+    previous = None if library is not None else _unchanged_job(db, project_id, filename, sha256)
     if previous is not None:
         job.status = "completed"
         job.parse_mode = "unchanged"
@@ -294,6 +334,7 @@ def queue_document(
         "local_path": str(local_path.resolve()),
         "sha256": sha256,
         "knowledge": bool(settings.knowledge_building_enabled),
+        "library": library,
     }
     try:
         start_pipeline(ctx)

@@ -177,18 +177,33 @@ For this example the files to look at are:
 
 `data/examples/northwind-p2p/run-scenarios/README.md` has six ready-made requests (scenarios A to F): a full pack, an Excel RACI matrix, the deck above, a process map with a Word SOP, and more. For those, upload all the files in `source-documents/`.
 
-### Document ingestion pipeline (SeaweedFS, Postgres, Qdrant)
+### Library ingestion pipeline (SeaweedFS, Postgres, Qdrant)
 
-An upload can also run through a Celery pipeline: the file goes to SeaweedFS (S3), Docling parses it, the chunks go to Postgres (`chunk_archive`), and their embeddings go to Postgres (`chunk_embeddings`) and Qdrant (collection `<QDRANT_COLLECTION_PREFIX>document_chunks`). Then the Claude CLI (`LLM_PROVIDER=claude_cli`) extracts facts (`extracted_facts`), writes wiki drafts (`wiki_pages_draft`), which are merged with the project's existing pages (`wiki_pages_final`) and indexed in Qdrant (`<QDRANT_COLLECTION_PREFIX>wiki_pages`). The job status moves `pending → uploading → parsing → chunking → embedding → extracting_facts → generating_wiki → deduplicating → indexing_wiki → completed`, or `failed` with `failed_stage` and `error_message` (`retrying` while a stage waits to retry). Uploading identical content again completes at once; a changed file reuses the embeddings of unchanged chunks and replaces the old version; deleting a file removes it from S3, Postgres and Qdrant. The Project documents panel shows the stage and the chunk, embedding, fact and wiki counts of each file; `GET /api/documents/jobs?project_id=` and `GET /api/documents/wiki?project_id=` return the same data.
+Admin console → Library management → **Upload sources** (`POST /api/admin/library/uploads`) is the one entry point. It
+returns at once (202) and a Celery worker runs every file through a single pipeline:
+`intake → uploading → parsing → chunking → embedding → library_validation → extracting_facts → generating_wiki →
+deduplicating → indexing_wiki → completed` (or `failed` with `failed_stage` / `error_message`; `retrying` while a stage
+waits). Intake checks the source, rejects duplicates and creates the practice and job; the file goes to SeaweedFS (S3),
+Docling parses it, the Library's section-aware chunker cuts it into passages (`chunk_archive`), embeddings go to
+Postgres (`chunk_embeddings`) and Qdrant (`<QDRANT_COLLECTION_PREFIX>document_chunks`), and `library_validation` runs the
+library's citation, duplicate and quality-gate checks on those same passages. Facts and wiki pages are built with the
+Claude CLI (`LLM_PROVIDER=claude_cli`). Review, approval and publishing work as before; users only retrieve the published
+version of Approved practices (Leading Practice search/Ask and `POST /api/query`), and publishing removes earlier
+versions from the index.
 
-1. Put the current shared-service links and keys in `.env` (`S3_*`, `QDRANT_*`, `EMBEDDING_*`) and check them: `make shared.check` must pass for qdrant, s3 and embeddings.
-2. Use Postgres (`DATABASE_URL=postgresql+psycopg://...`) and start everything with `./scripts/run_agent.sh`; the last lines list the worker. The first parse downloads Docling's layout models (a few minutes, once).
-3. Upload a PDF either in the app (with `DOCUMENT_PIPELINE_ENABLED=true`, the normal upload queues the pipeline and returns `ingestion.job_id`) or at http://127.0.0.1:8000/docs with **Authorize**, then `POST /api/documents/upload-async` (form fields `project_id`, `file`).
-4. Poll `GET /api/documents/status/{job_id}` until `completed`; `.run/worker.log` shows each stage.
-5. `GET /api/documents/{job_id}/details` shows the S3 object, the parsed document and its chunks, and the Qdrant point count with sample payloads. To look directly:
-   - SeaweedFS: the object key is `document_intake/<project_id>/<job_id>/<file>` in `S3_BUCKET`.
-   - Postgres: `SELECT chunk_number, page_number, source_type, left(text, 80) FROM chunk_archive ORDER BY created_at DESC, chunk_number LIMIT 20;`
-   - Qdrant: `curl -H "api-key: $QDRANT_API_KEY" "$QDRANT_URL/collections/${QDRANT_COLLECTION_PREFIX}document_chunks"` (see `points_count`).
+Versions and duplicates: a file with the same name (case-insensitive) as an existing practice's latest version becomes
+that practice's next version; identical bytes are reported `unchanged` (nothing is queued); the same content under
+another practice is rejected (409). Passages are content-addressed across the whole Library: a passage already stored is
+linked (`document_chunk_links`, `reused=true`), not stored or embedded again, and its Qdrant point lists every
+`document_id` / `job_id` that uses it. Deleting a version removes a passage only when nothing else links to it. Run
+`alembic upgrade head` (migration 030) on an existing database.
+
+1. Put the current shared-service links and keys in `.env` (`S3_*`, `QDRANT_*`, `EMBEDDING_*`) and check them: `make shared.check`.
+2. Use Postgres and start everything with `./scripts/run_agent.sh` (the last lines list the worker). The first parse downloads Docling's layout models (once).
+3. Upload in Library management, or `POST /api/admin/library/uploads` (form: `files`, `owner`, `rights`, optional `category`, `practice_id`). Keep `jobs[i].ingestion.job_id`.
+4. Follow it: `GET /api/admin/library` (each `practiceInventory[].ingestion` and the selected `ingestion` hold the pipeline status; `pendingUploads` lists files not yet attached to a practice) or `GET /api/admin/library/documents/status/{job_id}`.
+5. `GET /api/admin/library/documents/{job_id}/details` shows the S3 object, the passages, the Qdrant points, facts and wiki pages; `GET /api/admin/library/documents/jobs` and `/wiki` list them all.
+6. `DELETE /api/admin/library/{practice_id}` removes the practice and its data from S3, Postgres and Qdrant.
 
 Scanned PDFs need `DOCLING_OCR_ENABLED=true`. Without the worker running, jobs stay `pending`.
 

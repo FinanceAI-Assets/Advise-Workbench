@@ -22,6 +22,7 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     job_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_admin: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="user", server_default="user")
 
 
 class RefreshToken(Base):
@@ -614,7 +615,7 @@ class DocumentJob(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -643,7 +644,7 @@ class DocumentFile(Base):
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     job_id: Mapped[str] = mapped_column(String(255), ForeignKey("document_jobs.job_id"), nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -668,7 +669,7 @@ class ParsedDocument(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     document_file_id: Mapped[str] = mapped_column(String(64), ForeignKey("document_files.id"), nullable=False)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     full_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -698,7 +699,7 @@ class ChunkArchive(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     document_file_id: Mapped[str] = mapped_column(String(64), ForeignKey("document_files.id"), nullable=False)
     parsed_document_id: Mapped[str] = mapped_column(String(64), ForeignKey("parsed_documents.id"), nullable=False)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     chunk_number: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     character_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -710,6 +711,24 @@ class ChunkArchive(Base):
     bbox: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class DocumentChunkLink(Base):
+    """Which passages make up a document version, in order. A passage (chunk_archive row) is stored and embedded
+    once per unique text and can be linked from many versions/documents."""
+
+    __tablename__ = "document_chunk_links"
+    __table_args__ = (
+        Index("ix_document_chunk_links_chunk", "chunk_id"),
+        Index("ix_document_chunk_links_document", "document_file_id"),
+    )
+
+    document_file_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chunk_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("chunk_archive.id"), nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # passage existed before this version
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
@@ -726,7 +745,7 @@ class ChunkEmbedding(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("chunk_archive.id"), nullable=False)
     document_file_id: Mapped[str] = mapped_column(String(64), ForeignKey("document_files.id"), nullable=False)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     embedding: Mapped[list] = mapped_column(JSON, nullable=False)
     embedding_dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -746,7 +765,7 @@ class ExtractedFact(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     parsed_document_id: Mapped[str] = mapped_column(String(64), ForeignKey("parsed_documents.id"), nullable=False)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     fact_type: Mapped[str] = mapped_column(String(50), nullable=False)
     fact_name: Mapped[str] = mapped_column(String(255), nullable=False)
     fact_value: Mapped[dict | str | None] = mapped_column(JSON, nullable=True)
@@ -765,7 +784,7 @@ class WikiPageDraft(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     parsed_document_id: Mapped[str] = mapped_column(String(64), ForeignKey("parsed_documents.id"), nullable=False)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     entity_name: Mapped[str] = mapped_column(String(255), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -784,7 +803,7 @@ class WikiPageFinal(Base):
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     entity_name: Mapped[str] = mapped_column(String(255), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -805,7 +824,7 @@ class EmbeddingsMetadata(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     wiki_id: Mapped[str] = mapped_column(String(64), ForeignKey("wiki_pages_final.id"), nullable=False)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     embedding_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
     embedding_dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
     qdrant_collection: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -851,7 +870,7 @@ class InAppNotification(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False)
     document_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)  # ingestion scope ("library")
     notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)

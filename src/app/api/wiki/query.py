@@ -3,7 +3,6 @@
 Moved verbatim from the former single-module app/api/wiki.py.
 """
 
-import asyncio
 from typing import Any
 
 from fastapi import Depends, HTTPException, Query
@@ -12,7 +11,6 @@ from sqlalchemy.orm import Session
 from src.app.api.wiki._common import logger, _wiki_require_access
 from src.app.api.wiki._router import router
 from src.core.auth import get_current_user
-from src.core.config import settings
 from src.core.db.models import User
 from src.core.db.session import get_db
 from src.memory.knowledge.wiki_integrations import WikiCoordinatorIntegration
@@ -52,27 +50,6 @@ async def query_wiki(
         }
     """
     _wiki_require_access(wiki_type, project_id, user, db, mutating=False)
-    if wiki_type == "project" and project_id and settings.document_pipeline_enabled:
-        # Project questions take the one query path: verified sources, citations, evidence gate.
-        from src.query.pipeline import answer_question, format_answer
-
-        try:
-            qr = await asyncio.to_thread(answer_question, db, project_id, question, [])
-        except Exception as e:
-            return {"status": "error", "error": f"Search is unavailable: {e}"}
-        return {
-            "status": "success",
-            "answer": format_answer(qr),
-            "evidence_status": qr.status,
-            "citations": [
-                (f"Wiki: {c['title']}" if c["type"] == "wiki" else c["filename"])
-                + (f", page {c['page_number']}" if c.get("page_number") else "")
-                for c in qr.citations
-            ],
-            "citation_details": qr.citations,
-            "source_pages": [s["label"] for s in qr.sources],
-            "qa_result": None,
-        }
     try:
         result, error = wiki_query_with_retry(
             question=question,
