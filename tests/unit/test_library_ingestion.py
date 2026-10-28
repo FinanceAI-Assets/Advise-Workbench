@@ -116,9 +116,10 @@ def test_deleting_a_practice_removes_its_search_data(env):
 def test_same_file_name_is_a_new_version_and_known_passages_are_not_stored_again(env):
     client, headers = env["client"], _login(env["client"], admin=True)
     topic, name = f"Sourcing {uuid.uuid4().hex[:6]}", f"sourcing-{uuid.uuid4().hex[:6]}.docx"
-    first = _upload(client, headers, name=name, content=_long_source(topic, 4)).json()["jobs"][0]
+    original = _long_source(topic, 4)  # one build: a .docx records its save time
+    first = _upload(client, headers, name=name, content=original).json()["jobs"][0]
 
-    same = _upload(client, headers, name=name.upper(), content=_long_source(topic, 4))
+    same = _upload(client, headers, name=name.upper(), content=original)
     assert same.status_code == 202
     unchanged = same.json()["jobs"][0]
     assert unchanged["outcome"] == "Unchanged" and unchanged["id"] == first["id"]

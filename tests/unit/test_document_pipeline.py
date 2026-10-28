@@ -14,6 +14,7 @@ from src.core.config import settings
 from src.core.db.models import (
     ChunkArchive,
     ChunkEmbedding,
+    DocumentChunkLink,
     DocumentFile,
     DocumentJob,
     ExtractedFact,
@@ -114,22 +115,23 @@ def test_upload_runs_every_stage(env):
     with session_scope() as db:
         job, doc = _job(db, job_id), _doc(db, job_id)
         practice_id, library_job_id, payload = _library_job(db, job)
-        chunks = db.query(ChunkArchive).filter(ChunkArchive.document_file_id == doc.id).order_by(ChunkArchive.chunk_number).all()
+        links = db.query(DocumentChunkLink).filter(DocumentChunkLink.document_file_id == doc.id).order_by(DocumentChunkLink.chunk_number).all()
         assert job.status == "completed" and job.completed_at is not None
         # intake: practice + library job; the S3 object is the stored source
         assert db.query(LpPractice).filter(LpPractice.id == practice_id).one().status == "Quality review"
         assert payload["stage"] == "Quality review" and payload["readable"] and payload["ingestionJobId"] == job_id
         assert doc.seaweedfs_file_id in env["s3"].objects
         # one chunker: section-aware passages with pages, numbered, mirrored in library_chunks
-        assert [c.chunk_number for c in chunks] == list(range(1, len(chunks) + 1))
-        assert all(c.source_type == "section" for c in chunks) and {c.page_number for c in chunks} <= {1, 2}
+        assert [link.chunk_number for link in links] == list(range(1, len(links) + 1))
+        chunks = {c.id: c for c in db.query(ChunkArchive).filter(ChunkArchive.id.in_([link.chunk_id for link in links]))}
+        assert all(c.source_type == "section" for c in chunks.values()) and {link.page_number for link in links} <= {1, 2}
         stored = json.loads(db.query(WorkbenchRecord).filter(WorkbenchRecord.collection == "library_chunks",
                                                              WorkbenchRecord.record_id == library_job_id).one().payload_json)
-        assert [c["chunkId"] for c in stored["chunks"]] == [c.id for c in chunks]
+        assert [c["chunkId"] for c in stored["chunks"]] == [link.chunk_id for link in links]
         assert all(c["section"] and c["quality"] for c in stored["chunks"])
-        assert payload["citations"]["references"] == [1] and payload["validation"]["total"] == len(chunks)
+        assert payload["citations"]["references"] == [1] and payload["validation"]["total"] == len(links)
         # embeddings in Postgres and Qdrant, then knowledge building
-        assert db.query(ChunkEmbedding).filter(ChunkEmbedding.document_file_id == doc.id).count() == len(chunks)
+        assert db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(list(chunks))).count() == len(chunks)
         assert env["get_store"]().count(document_id=doc.id) == len(chunks)
         assert {f.fact_name for f in db.query(ExtractedFact).filter(ExtractedFact.project_id == LIBRARY_SCOPE)} >= {"Buyer"}
         assert env["get_store"]("wiki_pages").count(project_id=LIBRARY_SCOPE) >= 2

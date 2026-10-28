@@ -37,6 +37,7 @@ from src.app.api.documents_async import ingestion_status, practice_document_key
 from src.core.auth import require_admin
 from src.core.db.models import (
     DocumentFile,
+    DocumentJob,
     LpPractice,
     Review,
     ReviewComment,
@@ -101,13 +102,21 @@ def _chunks(db: Session, job_id: str) -> dict[str, Any]:
     return _payload(_row(db, CHUNKS, job_id)) or {"blocks": [], "chunks": []}
 
 
+def _used_keys(db: Session) -> list[tuple[str, str]]:
+    """(practice, job) of every pipeline document ever stored, deleted ones included: numbers are never reused,
+    so a new upload cannot share a document key with an earlier, deleted one."""
+    names = db.scalars(select(DocumentFile.filename).where(DocumentFile.project_id == LIBRARY_SCOPE)).all()
+    return [tuple(n.split("/", 2)[:2]) for n in names if n.count("/") >= 2]
+
+
 def _next_job_id(db: Session) -> str:
     ids = db.scalars(select(WorkbenchRecord.record_id).where(WorkbenchRecord.collection == JOBS)).all()
+    ids = [*ids, *(job for _, job in _used_keys(db))]
     return f"JOB-{max([_number(i) for i in ids] + [200]) + 1}"
 
 
 def _next_practice_id(db: Session) -> str:
-    ids = db.scalars(select(LpPractice.id)).all()
+    ids = [*db.scalars(select(LpPractice.id)).all(), *(practice for practice, _ in _used_keys(db))]
     return f"lp-{max([_number(i) for i in ids] + [0]) + 1:03d}"
 
 
@@ -209,10 +218,19 @@ def _unchanged_entry(unchanged: Unchanged, filename: str, content: bytes) -> dic
     }
 
 
-def _upload_entry(db: Session, job: Any, filename: str, content: bytes, target: str) -> dict[str, Any]:
-    """One file of the upload response. Practice and library job fields are filled in once intake has run
-    (always the case with an eager/fast worker; otherwise poll the ingestion job)."""
-    db.refresh(job)
+# The upload waits this long for the (fast) intake stage, so the response can name the practice and job; parsing,
+# chunking and embedding always continue in the worker.
+INTAKE_WAIT_SEC = 3.0
+
+
+async def _upload_entry(db: Session, job: Any, filename: str, content: bytes, target: str) -> dict[str, Any]:
+    """One file of the upload response. Practice and library job fields are filled in once intake has run;
+    if it has not run yet they are empty strings (never null) and the ingestion job can be polled."""
+    for _ in range(int(INTAKE_WAIT_SEC / 0.25)):
+        db.refresh(job)
+        if "/" in job.filename or job.status == "failed":
+            break
+        await asyncio.sleep(0.25)
     library_job = None
     if "/" in job.filename:
         _, library_job_id, _ = job.filename.split("/", 2)
@@ -223,8 +241,8 @@ def _upload_entry(db: Session, job: Any, filename: str, content: bytes, target: 
                 "ingestion": _queued_view(job, filename, content)}
     failed = job.status == "failed"
     return {
-        "id": None,
-        "practiceId": target or None,
+        "id": "",
+        "practiceId": target,
         "stage": "Failed" if failed else "Queued",
         "outcome": (job.error_message or "Failed") if failed else "Queued for extraction",
         "readable": None,
@@ -303,7 +321,7 @@ async def upload_library_sources(
             queue_document, db, project_id=LIBRARY_SCOPE, user_id=admin.id, filename=name, local_path=staged,
             sha256=hashlib.sha256(content).hexdigest(), size_bytes=len(content), library={**form, "practice_id": practice},
         )
-        jobs.append(_upload_entry(db, job, name, content, practice))
+        jobs.append(await _upload_entry(db, job, name, content, practice))
     return {"jobs": jobs}
 
 
@@ -536,7 +554,9 @@ def delete_practice(practice_id: str, admin: User = Depends(require_admin), db: 
     search_docs = [
         name
         for (name,) in db.query(DocumentFile.filename)
-        .filter(DocumentFile.project_id == LIBRARY_SCOPE, DocumentFile.filename.like(practice_document_key(pid, "%")))
+        .join(DocumentJob, DocumentJob.job_id == DocumentFile.job_id)
+        .filter(DocumentFile.project_id == LIBRARY_SCOPE, DocumentFile.filename.like(practice_document_key(pid, "%")),
+                DocumentJob.status != "deleted")
         .distinct()
     ]
     _admin_event(db, admin, f"{pid.upper()} deleted", f"{len(jobs)} source(s) removed")
@@ -562,6 +582,9 @@ def latest_job(db: Session, practice_id: str) -> dict[str, Any] | None:
 
 
 def gates_for(job: dict[str, Any]) -> list[dict[str, Any]]:
+    if job.get("processing"):
+        return [{"id": "qg-0", "label": "Readable source", "result": "Pending", "tone": "warn", "passed": False,
+                 "detail": "Extraction in progress"}]
     if not job.get("readable"):
         return [{"id": "qg-0", "label": "Readable source", "result": "Failed", "tone": "warn", "passed": False,
                  "detail": job.get("reason") or "No readable text"}]
@@ -866,6 +889,9 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
             "provenance": _notice("Provenance preserved",
                                   "Page and section locators are attached to each chunk. No classification or owner metadata is dropped."),
             "error": None if readable else _notice(
+                "Extraction in progress",
+                "The ingestion pipeline is still parsing, chunking and indexing this source. Refresh to see its passages.",
+            ) if job.get("processing") else _notice(
                 "No readable text", f"{job.get('reason') or 'The source could not be read'}. Upload a text-readable PDF or DOCX; this source is excluded from retrieval."),
         },
         "indexValidation": {
@@ -985,8 +1011,6 @@ def inventory_rows(db: Session) -> list[dict[str, Any]]:
 
 def pending_uploads(db: Session) -> list[dict[str, Any]]:
     """Uploads that have no practice yet: queued or in intake, or rejected at intake (duplicate, unsafe file)."""
-    from src.core.db.models import DocumentJob
-
     jobs = (
         db.query(DocumentJob)
         .filter(DocumentJob.project_id == LIBRARY_SCOPE, ~DocumentJob.filename.contains("/"))

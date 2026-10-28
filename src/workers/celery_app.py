@@ -36,6 +36,9 @@ app.conf.update(
     worker_prefetch_multiplier=1,
     result_expires=86400,
     broker_connection_retry_on_startup=True,
+    # Wait for the broker to confirm every publish (each stage queues the next): a send over a dropped connection
+    # then raises and is retried, instead of being lost and leaving the job stuck at its last stage.
+    broker_transport_options={"confirm_publish": True, "confirm_timeout": 30},
 )
 
 # TLS links (amqps:// broker, rediss:// results) to the shared services are verified against SSL_CA_FILE.

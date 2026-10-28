@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     document_allowed_formats: str = "pdf,docx,pptx,xlsx,xls,txt,md,csv,json,jpg,jpeg,png,gif,bmp"
 
     # Docling parsing (chunking uses the Library's section-aware chunker, practice_ingest.chunk_blocks)
-    docling_ocr_enabled: bool = False  # only needed for scanned PDFs; downloads OCR models on first use
+    docling_ocr_enabled: bool = True  # RapidOCR for PDF bitmap areas and scanned pages (models ship with rapidocr)
 
     # OCR settings for images/diagrams
     ocr_enabled: bool = True

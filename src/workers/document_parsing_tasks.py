@@ -65,7 +65,8 @@ def _page_markdown(content: dict[str, Any], full_text: str) -> str:
     """Docling's per-page Markdown joined with ``[Page N]`` markers, so passages keep their page numbers."""
     pages = content.get("pages") or [{"page_number": None, "text": full_text}]
     return "\n\n".join(
-        (f"[Page {p['page_number']}]\n" if p.get("page_number") else "") + (p.get("text") or "") for p in pages
+        (f"[Page {p['page_number']}]\n" if p.get("page_number") else "") + (p.get("text") or "").replace("<!-- image -->", "")
+        for p in pages
     )
 
 

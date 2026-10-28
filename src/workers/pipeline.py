@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from celery import Task, chain
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
@@ -180,7 +181,9 @@ def purge_document_file(db: Session, doc: DocumentFile, *, delete_object: bool =
         db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(orphaned)).delete(synchronize_session=False)
         db.query(ChunkArchive).filter(ChunkArchive.id.in_(orphaned)).delete(synchronize_session=False)
     # Unshared rows of documents ingested before passages were shared.
-    legacy = [c for (c,) in db.query(ChunkArchive.id).filter(ChunkArchive.document_file_id == doc.id) if c not in still_used]
+    # A passage this document stored first can be linked only from other documents now, so check every link.
+    linked = select(DocumentChunkLink.chunk_id).where(DocumentChunkLink.chunk_id == ChunkArchive.id).exists()
+    legacy = [c for (c,) in db.query(ChunkArchive.id).filter(ChunkArchive.document_file_id == doc.id, ~linked)]
     if legacy:
         db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(legacy)).delete(synchronize_session=False)
         db.query(ChunkArchive).filter(ChunkArchive.id.in_(legacy)).delete(synchronize_session=False)

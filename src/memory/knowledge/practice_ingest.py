@@ -189,7 +189,8 @@ def _text_blocks(text: str) -> tuple[list[dict[str, Any]], int]:
 def blocks_from_markdown(markdown: str) -> dict[str, Any]:
     """Blocks from parser Markdown (the ingestion pipeline's Docling output, ``[Page N]`` markers allowed)."""
     blocks, pages = _text_blocks(markdown)
-    readable = any(b["kind"] == "para" for b in blocks)
+    # Headings count: slide-like pages and text read from pictures often have no plain paragraphs.
+    readable = any(b["kind"] in ("para", "heading") and any(c.isalnum() for c in b["text"]) for b in blocks)
     return {
         "blocks": blocks,
         "pages": pages,
@@ -284,16 +285,36 @@ def chunk_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         parts.clear()
         pages.clear()
 
+    # Headings with no text under them (labels, slide titles, text read from pictures) would otherwise be lost:
+    # their text goes into the next passage, or into a passage of its own at the end.
+    heading: dict[str, Any] | None = None
+    has_body = False
+    orphans: list[dict[str, Any]] = []
     for block, label in zip(blocks, labels, strict=True):
         if block["kind"] in ("heading", "title"):
+            if heading is not None and not has_body:
+                orphans.append(heading)
             emit(keep_overlap=False)
             section = label
+            heading, has_body = (block if block["kind"] == "heading" else None), False
             continue
+        for orphan in orphans:
+            if orphan["page"] is not None:
+                pages.append(orphan["page"])
+            parts.append(orphan["text"])
+        orphans.clear()
+        has_body = True
         if block["page"] is not None:
             pages.append(block["page"])
         parts.append(block["text"])
         if sum(len(p) for p in parts) >= target_chars:
             emit(keep_overlap=True)
+    if heading is not None and not has_body:
+        orphans.append(heading)
+    for orphan in orphans:
+        if orphan["page"] is not None:
+            pages.append(orphan["page"])
+        parts.append(orphan["text"])
     emit(keep_overlap=False)
 
     for index, chunk in enumerate(chunks, start=1):
