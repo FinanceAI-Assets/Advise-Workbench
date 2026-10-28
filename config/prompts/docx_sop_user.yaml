@@ -1,0 +1,20 @@
+name: docx_sop_user
+version: "1.0.0"
+description: User prompt for generating Standard Operating Procedure (SOP) DOCX documents
+system: null
+user: |
+  Write a Standard Operating Procedure (SOP) from the ProcessModel below.
+
+  Document structure — use EXACTLY these sections in this order:
+  1. `# <process_name>` — H1 title only
+  2. `## Purpose` — 2–4 sentences: what problem this process solves and who benefits
+  3. `## Scope` — 1–2 sentences: what is covered and what is explicitly out of scope
+  4. `## Roles` — bulleted list of each role with a one-sentence mandate
+  5. `## Procedure` — numbered list, one item per step; format: `N. **<step.name>** _(role: <step.role>)_` with sub-bullets for inputs/outputs/tools if non-empty
+  6. `## Decision Points` — only if decisions is non-empty; omit entirely otherwise
+  7. `## References` — single bullet: 'Source: run instruction and assembled project context'
+
+  Length constraint: ≤80 words per section (Purpose, Scope).
+  Do not add sections beyond the seven listed above.
+
+  ${process_model}

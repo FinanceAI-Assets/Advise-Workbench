@@ -1,0 +1,17 @@
+name: pdf_sop_user
+version: "1.0.0"
+description: User prompt for generating SOP-format PDF documents
+system: null
+user: |
+  Write an SOP-format report for PDF export from the ProcessModel below.
+
+  Document structure:
+  1. `# <process_name> — Standard Operating Procedure`
+  2. `## Purpose` — 2–4 sentences
+  3. `## Scope` — 1–2 sentences
+  4. `## Roles` — bulleted list
+  5. `## Procedure` — numbered steps from ProcessModel.steps
+  6. `## Decision Points` — only if decisions is non-empty
+  7. `## References` — Source: run instruction and project context
+
+  ${process_model}

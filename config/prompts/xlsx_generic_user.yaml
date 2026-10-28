@@ -1,0 +1,21 @@
+name: xlsx_generic_user
+version: "1.0.0"
+description: User prompt for generating generic process data XLSX tables
+system: null
+user: |
+  Build a worksheet table from the ProcessModel below. Each row represents one step from ProcessModel.steps, in the order they appear.
+
+  Column definitions (in this exact order):
+    Activity  — step.name
+    Owner     — step.role; use ProcessModel.roles[0] if step.role is absent
+    Inputs    — step.inputs joined by ', '; '—' if empty
+    Outputs   — step.outputs joined by ', '; '—' if empty
+    Tools     — step.tools joined by ', '; '—' if empty
+    Duration  — step.duration_estimate; '—' if absent
+    Notes     — step.notes; '—' if absent
+
+  Header row format: | Activity | Owner | Inputs | Outputs | Tools | Duration | Notes |
+  Separator row format: |---|---|---|---|---|---|---|
+  One data row per step. No title, no summary row.
+
+  ${process_model}

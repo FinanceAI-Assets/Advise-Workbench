@@ -1,0 +1,18 @@
+name: storyline_arc_recommender_user
+version: "1.0.0"
+description: User prompt for recommending narrative story arcs based on discovery
+system: null
+user: |
+  Client: ${client_name}${client_industry_suffix}
+  Primary outcome: ${primary_outcome}
+  Win themes: ${win_themes}
+  Audience: ${audience}
+
+  Available arc options:
+  ${arc_descriptions}
+
+  Project context (LP / wiki):
+  ${project_context}
+
+  Recent conversation:
+  ${conversation_history}

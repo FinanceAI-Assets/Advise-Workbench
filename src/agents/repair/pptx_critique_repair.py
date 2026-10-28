@@ -17,19 +17,11 @@ from src.agents.tool_agent import _record_message_usage, _extract_final_text_fro
 
 _LOG = logging.getLogger(__name__)
 
-_SLIDE_REPAIR_SYSTEM = (
-    "You repair individual slides of a consulting deck. You receive flagged slides as "
-    "JSON plus per-slide fix instructions. Return ONLY JSON {\"slides\": [...]} with the "
-    "repaired slides in the same order as given — same count, same slide_id and "
-    "slide_index, same slide_type unless an instruction names a different one. Preserve "
-    "every field you were not asked to change. No prose, no markdown fences."
-)
+from src.prompts.registry import get_prompt as get_repair_prompt
 
-_EVIDENCE_SOFT_BLOCK_DIRECTIVE = (
-    "EVIDENCE FIX: for each flagged number either (a) add an explicit caveat such as "
-    "'directional estimate' or 'illustrative', or (b) remove the number and state the "
-    "point qualitatively. Never invent sources or new figures."
-)
+_repair_prompts_obj = get_repair_prompt("pptx_slide_repair")
+_SLIDE_REPAIR_SYSTEM = _repair_prompts_obj.render_system()
+_EVIDENCE_SOFT_BLOCK_DIRECTIVE = _repair_prompts_obj.render_user()
 
 
 def pptx_visual_feedback_indices(feedback: list[Any]) -> set[int]:
@@ -189,11 +181,9 @@ def critique_slides(
                 if isinstance(s, dict)
                 and str(s.get("slide_type") or "").lower() not in ("title", "section_divider")
             ]
-            user = (
-                "Review this deck's slide titles for consulting quality. Return ONLY JSON "
-                '{"hints": [{"slide_index": <1-based int>, "instruction": "<fix>"}]} '
-                "with at most 4 prescriptive fixes. Titles:\n"
-                + json.dumps(titles[:12], ensure_ascii=False)
+            title_prompt = get_repair_prompt("pptx_slide_title_review")
+            user = title_prompt.render_user(
+                titles_json=json.dumps(titles[:12], ensure_ascii=False)
             )
             # [DEPRECATED: Old claude_generate_json call]
             # obj = claude_generate_json(...)

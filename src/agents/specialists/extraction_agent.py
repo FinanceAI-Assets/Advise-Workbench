@@ -59,63 +59,20 @@ def run_process_extraction(state: AdviseWorkbenchState) -> AdviseWorkbenchState:
             )
 
     if _shared.is_claude_enabled():
-        system = (
-            "You are a process extraction engine. "
-            "Your sole output is a single JSON object — no preamble, no explanation, no markdown fences. "
-            "If any field has no data, use an empty array [] or empty string \"\", never null or omit the key. "
-            "Step IDs must follow the pattern 's1', 's2', ..., 'sN' in order of appearance. "
-            "Decision IDs must follow the pattern 'd1', 'd2', ..., 'dN'. "
-            "Every step referenced in decisions.true_path or decisions.false_path must exist in steps[*].id. "
-            "Every step referenced in swimlanes[role] must exist in steps[*].id."
-        )
-        user = (
-            "Extract a structured process model from the instruction and context below.\n\n"
-            "Return a JSON object with EXACTLY these top-level keys (no others):\n\n"
-            "  process_name   string — the process title; infer from heading, first sentence, or topic if not explicit\n"
-            "  roles          string[] — every distinct human role that performs a step; omit system names and tools\n"
-            "  steps          ProcessStep[] — one entry per discrete action in execution order\n"
-            "  decisions      DecisionBranch[] — one entry per conditional fork; empty [] if none\n"
-            "  swimlanes      { [role: string]: string[] } — maps each role to its step IDs in order\n"
-            "  metrics        MetricFact[] — every quantified fact in the text (time, count, %, currency, volume); "
-            "empty [] if no numeric data present\n"
-            "  metadata       { [key: string]: string } — any named attributes (e.g. 'frequency', 'owner', 'SLA') "
-            "found in the text; empty {} if none\n\n"
-            "ProcessStep schema:\n"
-            "  id               string — 's1', 's2', ..., 'sN'\n"
-            "  name             string — imperative verb phrase, ≤10 words (e.g. 'Collect KYC documents')\n"
-            "  role             string — role from roles[]; 'TBD' if not specified\n"
-            "  inputs           string[] — named artifacts or data consumed by this step; [] if none\n"
-            "  outputs          string[] — named artifacts or data produced by this step; [] if none\n"
-            "  tools            string[] — systems, apps, or tools used in this step; [] if none\n"
-            "  duration_estimate string — e.g. '2 hours', '1 day'; \"\" if not specified\n"
-            "  notes            string — any caveats, exceptions, or extra detail; \"\" if none\n\n"
-            "DecisionBranch schema:\n"
-            "  id         string — 'd1', 'd2', ...\n"
-            "  condition  string — the yes/no question at the fork (e.g. 'Documents complete?')\n"
-            "  true_path  string[] — step IDs taken when condition is true\n"
-            "  false_path string[] — step IDs taken when condition is false\n\n"
-            "MetricFact schema:\n"
-            "  stat    string — the value/number (e.g. '12 days', '94%', 'INR 50,000', '3')\n"
-            "  label   string — what it measures in 2–5 words (e.g. 'Invoice Cycle Time', 'Error Rate')\n"
-            "  source  string — one of: 'client-provided data' | 'benchmark assumptions' | 'inferred from context'\n\n"
-            "Edge-case rules:\n"
-            "  - If no numbered or bulleted steps exist, infer steps from verbs in the text (minimum 1 step).\n"
-            "  - If no roles are named, use ['Process Owner'] as the sole role and assign all steps to it.\n"
-            "  - Do not invent steps that are not implied by the source text.\n\n"
-        )
+        from src.prompts.registry import get_prompt
+
+        system_prompt = get_prompt("extraction_system")
+        system = system_prompt.render_system()
+
+        prompt = get_prompt("extraction_process_user")
+        user = prompt.render_user()
+
         if archetype == "advisory_pov":
-            user += (
-                "ADVISORY POV RULES:\n"
-                "Extract the SUBJECT-DOMAIN business process (e.g. Record-to-Report: journals, "
-                "intercompany, reconciliation, close, consolidation, reporting).\n"
-                "Do NOT model the workflow of writing, designing, or producing this POV note/deck.\n"
-                "Never include steps like 'develop POV document', 'create presentation', or tools "
-                "such as PowerPoint/Word as process steps.\n"
-                "If the source lacks operational detail, derive a standard industry-reference model "
-                "and set metadata.grounding='illustrative'.\n\n"
-            )
+            advisory_prompt = get_prompt("extraction_advisory_pov_rules")
+            user += "\n\n" + advisory_prompt.render_user()
+
         user += (
-            f"Instruction:\n{wrap_untrusted('user_instruction', str(raw))}\n\n"
+            f"\nInstruction:\n{wrap_untrusted('user_instruction', str(raw))}\n\n"
             f"Context:\n{wrap_untrusted('assembled_context', str(ctx))}\n"
         )
         try:

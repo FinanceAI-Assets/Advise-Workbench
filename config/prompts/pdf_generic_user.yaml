@@ -1,0 +1,16 @@
+name: pdf_generic_user
+version: "1.0.0"
+description: User prompt for generating generic consulting report PDF documents
+system: null
+user: |
+  Write a consulting report for PDF export from the ProcessModel and context below.
+
+  Document structure — use EXACTLY these sections in this order:
+  1. `# <process_name> — Process Report` — H1 title
+  2. `## Executive Summary` — 3–5 sentences: process purpose, owner, step count, outcome
+  3. `## Workflow Overview` — numbered list, one item per step; format: `N. **<step.name>** _(owner: <step.role>)_`
+  4. `## Operational Considerations` — 3–5 bullets from ProcessModel or context only; if none evident: 'No explicit risks or constraints were identified.'
+  5. `## Next Actions` — exactly 3 numbered items, ≤25 words each
+
+  ${process_model}
+  ${context}

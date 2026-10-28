@@ -1,0 +1,50 @@
+name: pptx_narrative_arcs
+version: "1.0.0"
+description: Narrative arc templates (SCQA, Pyramid, Case-Led) for proposal presentations
+system: null
+user: |
+  ${arc_type_instructions}
+
+  SCQA Arc (Situation-Complication-Question-Answer):
+  1. slide_type="title" — tagline = one-sentence deck thesis; badges = 3 quantified stakes (e.g., FTE count, annual spend, cycle time)
+  2. slide_type="big_number" or "stat_cards" — Situation/Complication: MUST quantify the cost of status quo in economic or competitive terms (e.g., '40% of capacity wasted on manual work', 'peers automate at 1/10th your cost per transaction'); NO generic current-state description
+  3. slide_type="column_cards" or "bullets" — Key Question: frame as the board decision the audience must make; name the consequences of each path (transform now vs. defer); use 2–3 columns or bullets
+  4. slide_type="stack_layers" (3–5 layers) — Answer/Hypothesis: show the transformation architecture at three levels — (a) strategy/outcome, (b) platform/operating model, (c) interface/experience — NOT a flat feature list; each layer title must be an assertion
+  5. slide_type="stat_cards" or "chart" — Evidence & Value: 3 proof metrics with named source citation (e.g., 'Gartner 2024', 'Peer benchmark — F500 manufacturer'); benchmarks must be source-named, not generic
+  6. slide_type="process_flow" or "stack_layers" — Delivery Approach: show 3 deployment phases/paths with named milestones, timeline, and a named owner role at each gate
+  7. slide_type="table" or "column_cards" — Risks & Failure Modes: MUST name 3–5 specific failure modes with concrete consequence (time lost, money at risk, or control gap), then the mitigation for each; NO generic risk language like 'change management risk' — name the actual failure
+  8. slide_type="big_number" or "stat_cards" — Proof Trace: show a worked example, case outcome, or reference implementation with specific numbers (e.g., '$4.8M identified, 23 minutes, 85% confidence'); this is the concrete proof the approach works — not theoretical
+  9. slide_type="chart" or "table" — Commercial View: show investment vs. return trajectory with payback period; include Phase 1 cost estimate
+  10. slide_type="bullets" — Next Actions: exactly 3 numbered actions, each with a named owner role (not a person name), tied to a specific date or decision gate, ≤15 words each
+
+  Pyramid Arc (Governing Thought):
+  1. slide_type="title" — Governing thought as tagline: state the headline conclusion, not the process name
+  2. slide_type="big_number" or "stat_cards" — Supporting argument 1: the economic cost of the problem; quantify with a named metric (e.g., '$X wasted annually', 'Y% capacity absorbed by manual work')
+  3. slide_type="column_cards" — Supporting argument 2: the three structural causes of the problem; each column names a root cause, not a symptom
+  4. slide_type="stack_layers" — Supporting argument 3: the solution architecture at strategy → platform → operating model levels; each layer is an assertion
+  5. slide_type="stat_cards" — Evidence: 3 proof metrics from named external sources
+  6. slide_type="chart" or "table" — Proof: show trajectory or comparative data that validates the approach
+  7. slide_type="process_flow" or "stack_layers" — Implementation roadmap: phases with milestones, owners, dates
+  8. slide_type="table" — Risks & Failure Modes: 3–5 named failure modes with consequences and mitigations
+  9. slide_type="chart" — Commercial View: investment vs. return; payback timeline
+  10. slide_type="bullets" — Decision ask and next actions: 3 numbered items with owner roles and dates
+
+  Case-Led Arc (Client Context First):
+  1. slide_type="title" — Client context as tagline: name the client, the industry, and the headline challenge
+  2. slide_type="big_number" or "stat_cards" — Case for change: quantify the competitive or economic consequence of the status quo; reframe from 'we have a problem' to 'here is what it costs you annually'
+  3. slide_type="column_cards" — Target outcomes: 3 measurable outcomes the engagement will deliver (not activities — outcomes with numbers: '60% cycle time reduction', '$50M cost removal')
+  4. slide_type="stack_layers" — Proposed approach (part 1): transformation architecture at 3 levels — strategy, platform, operating model
+  5. slide_type="process_flow" or "table" — Proposed approach (part 2): phased delivery plan with milestones, owners, and timelines
+  6. slide_type="stat_cards" or "chart" — Proof points: 3 metrics from comparable engagements or industry benchmarks with source citations
+  7. slide_type="table" or "column_cards" — Risks & Failure Modes: 3–5 named failure modes with concrete consequences and mitigations
+  8. slide_type="big_number" or "stat_cards" — Proof Trace: concrete case outcome or worked example with specific numbers; shows the approach is proven
+  9. slide_type="chart" or "table" — Commercial view: investment vs. return; payback period
+  10. slide_type="bullets" — Next actions: 3 items with named owner roles and specific dates
+
+  Compare Arc (Comparative Analysis):
+  1. Decision context
+  2. Option criteria
+  3-5. Option comparison
+  6. Recommended option
+  7. Delivery implications
+  8. Next actions

@@ -20,13 +20,10 @@ from src.core.observability.otel_tracing import start_span
 
 _LOG = logging.getLogger(__name__)
  
-_SECTION_REPAIR_SYSTEM = (
-    "You revise specific sections of a Markdown business document. You receive flagged "
-    "H2 sections plus per-section fix instructions. Return ONLY JSON "
-    "{\"sections\": [{\"index\": <n>, \"markdown\": \"## ...\"}]} with one entry per "
-    "flagged section, each a complete section starting with its `## ` heading. Keep "
-    "content you were not asked to change. No prose outside the JSON."
-)
+from src.prompts.registry import get_prompt as get_repair_prompt
+
+_section_repair_prompt = get_repair_prompt("docx_section_repair")
+_SECTION_REPAIR_SYSTEM = _section_repair_prompt.render_system()
 
 
 def section_hint_indices(hints: list[Any], n_sections: int) -> list[int]:

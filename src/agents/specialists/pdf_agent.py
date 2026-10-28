@@ -37,31 +37,14 @@ def run_pdf_agent(ctx: AgentContext) -> AgentOutput:
             fallback_system=fallback_system,
         )
         if deliverable == "narrative":
-            user = (
-                "Write an executive briefing note for PDF export from the ProcessModel and context below.\n\n"
-                "Document structure — use EXACTLY these sections in this order:\n"
-                "1. `# <process_name> — Executive Briefing` — H1 title\n"
-                "2. `## What This Process Does` — 2–4 sentences: business outcome, initiator, beneficiaries\n"
-                "3. `## Key Activities` — ≤6 bulleted items naming activity and owner role in ≤12 words each\n"
-                "4. `## Roles and Accountability` — one bullet per role in ≤15 words\n"
-                "5. `## Recommended Next Actions` — exactly 2–4 numbered items, ≤20 words each\n\n"
-                "Constraints: no hedging language; no 'Context Used' section; no repeated information.\n\n"
-                f"{process_model_json_block(pm)}\n"
-                f"{context_excerpt_block(_grounded_context_excerpt(ctx, 3500), 3500)}"
+            prompt = get_prompt("pdf_narrative_user")
+            user = prompt.render_user(
+                process_model=process_model_json_block(pm),
+                context=context_excerpt_block(_grounded_context_excerpt(ctx, 3500), 3500)
             )
         elif deliverable == "sop":
-            user = (
-                "Write an SOP-format report for PDF export from the ProcessModel below.\n\n"
-                "Document structure:\n"
-                "1. `# <process_name> — Standard Operating Procedure`\n"
-                "2. `## Purpose` — 2–4 sentences\n"
-                "3. `## Scope` — 1–2 sentences\n"
-                "4. `## Roles` — bulleted list\n"
-                "5. `## Procedure` — numbered steps from ProcessModel.steps\n"
-                "6. `## Decision Points` — only if decisions is non-empty\n"
-                "7. `## References` — Source: run instruction and project context\n\n"
-                f"{process_model_json_block(pm)}"
-            )
+            prompt = get_prompt("pdf_sop_user")
+            user = prompt.render_user(process_model=process_model_json_block(pm))
         elif deliverable == "proposal":
             p_skill = _primary_skill(ctx)
             _sid = str((p_skill or {}).get("id") or "").strip() or PROPOSAL_SKILL_ID
@@ -70,32 +53,18 @@ def run_pdf_agent(ctx: AgentContext) -> AgentOutput:
             )
             sections = "\n".join(f"- {s}" for s in contract.get("sections", []))
             constraints = "\n".join(f"- {c}" for c in contract.get("constraints", []))
-            user = (
-                "Write a finance transformation proposal for PDF export.\n\n"
-                "Use this section contract in the same order:\n"
-                f"{sections}\n\n"
-                "Proposal constraints:\n"
-                f"{constraints}\n\n"
-                "Formatting requirements:\n"
-                "- Return only markdown with `#` title and `##` sections.\n"
-                "- Include a concise value-case table (lever, impact, confidence, owner).\n"
-                "- Include a 90-day workplan with milestones and governance cadence.\n\n"
-                f"{process_model_json_block(pm)}\n"
-                f"{context_excerpt_block(_grounded_context_excerpt(ctx, 3500), 3500)}"
+            prompt = get_prompt("pdf_proposal_user")
+            user = prompt.render_user(
+                sections=sections,
+                constraints=constraints,
+                process_model=process_model_json_block(pm),
+                context=context_excerpt_block(_grounded_context_excerpt(ctx, 3500), 3500)
             )
         else:
-            user = (
-                "Write a consulting report for PDF export from the ProcessModel and context below.\n\n"
-                "Document structure — use EXACTLY these sections in this order:\n"
-                "1. `# <process_name> — Process Report` — H1 title\n"
-                "2. `## Executive Summary` — 3–5 sentences: process purpose, owner, step count, outcome\n"
-                "3. `## Workflow Overview` — numbered list, one item per step; "
-                "format: `N. **<step.name>** _(owner: <step.role>)_`\n"
-                "4. `## Operational Considerations` — 3–5 bullets from ProcessModel or context only; "
-                "if none evident: 'No explicit risks or constraints were identified.'\n"
-                "5. `## Next Actions` — exactly 3 numbered items, ≤25 words each\n\n"
-                f"{process_model_json_block(pm)}\n"
-                f"{context_excerpt_block(_grounded_context_excerpt(ctx, 3500), 3500)}"
+            prompt = get_prompt("pdf_generic_user")
+            user = prompt.render_user(
+                process_model=process_model_json_block(pm),
+                context=context_excerpt_block(_grounded_context_excerpt(ctx, 3500), 3500)
             )
 
         _pdf_feedback = ctx.plan_payload.get("pdf_visual_feedback") or []

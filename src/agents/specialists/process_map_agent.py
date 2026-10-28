@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 from src.agents.base_agent import AgentContext, AgentOutput
 from src.prompts.prompt_hygiene import process_model_json_block
+from src.prompts.registry import get_prompt
 from src.deliverables.process_map.drawio_builder import process_model_to_drawio_xml
 from src.agents.specialists import _shared
 from src.llm import gateway
@@ -72,11 +73,7 @@ def run_drawio_agent(ctx: AgentContext) -> AgentOutput:
         sb = _build_system_from_skill(
             ctx, "process_map",
             fallback_system=(
-                "You are a diagrams.net (draw.io) mxGraph XML generator. "
-                "Return ONLY valid mxGraphModel XML — no prose, no markdown fences, no XML declaration. "
-                "The output must be parseable as-is by an XML parser. "
-                "Every cell that is a vertex or edge must have parent='1'. "
-                "The two scaffolding cells (id='0' root, id='1' layer) must always be present."
+                get_prompt("process_map_drawio").render_system()
             ),
         )
         user = (

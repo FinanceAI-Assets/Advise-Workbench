@@ -88,21 +88,10 @@ def run_raci_agent(ctx: AgentContext) -> AgentOutput:
             ctx, "raci",
             fallback_system=fallback_system,
         )
-        user = (
-            "Build a RACI matrix from the ProcessModel below.\n\n"
-            "Assignment rules:\n"
-            "1. Responsible (R): use step.role. If step.role is absent or 'TBD', assign R to the first role in ProcessModel.roles.\n"
-            "2. Accountable (A): assign to the first role in ProcessModel.roles unless a more senior role is evident from the name "
-            "(e.g. 'Manager', 'Director', 'Lead', 'Owner'). Exactly one A per row — never blank, never multiple.\n"
-            "3. Consulted (C): assign remaining roles whose work depends on or feeds into this step. "
-            "If no such roles exist, use '—'.\n"
-            "4. Informed (I): assign roles that receive the output of this step but do not participate. "
-            "If none, use '—'.\n\n"
-            f"Output format: {preferred} (markdown table with header row if markdown, full HTML table if html).\n"
-            "Column order: Activity | Responsible | Accountable | Consulted | Informed\n"
-            "One row per ProcessModel.steps entry. Do not add rows for roles — only for activities.\n"
-            "Do not include a title row, caption, or explanatory text — table only.\n\n"
-            f"{process_model_json_block(pm)}"
+        prompt = get_prompt("raci_user")
+        user = prompt.render_user(
+            format=preferred,
+            process_model=process_model_json_block(pm)
         )
         loop_out = _shared._run_subagent_tool_loop_text(ctx, agent_id="raci", system=sb.system, user=user, temperature=sb.temperature, max_rounds=sb.max_rounds)
         model_out = loop_out

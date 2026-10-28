@@ -28,25 +28,8 @@ def run_sop_agent(ctx: AgentContext) -> AgentOutput:
             ctx, "sop",
             fallback_system=fallback_system,
         )
-        user = (
-            "Write a Standard Operating Procedure (SOP) from the ProcessModel below.\n\n"
-            "Document structure — use EXACTLY these sections in this order:\n"
-            "1. `# <process_name>` — H1 title only, no subtitle\n"
-            "2. `## Purpose` — 1–3 sentences: what problem this process solves and who benefits\n"
-            "3. `## Scope` — 1–2 sentences: what is covered and what is explicitly out of scope\n"
-            "4. `## Roles` — bulleted list of each role in ProcessModel.roles with a one-sentence description "
-            "of their mandate in this process\n"
-            "5. `## Procedure` — numbered list where each item corresponds to exactly one ProcessModel step; "
-            "format: `N. **<step.name>** _(role: <step.role>)_` followed by a sub-list of inputs/outputs/tools "
-            "if any are present in the step; do not add steps not in the ProcessModel\n"
-            "6. `## Decision Points` — include only if ProcessModel.decisions is non-empty; "
-            "for each decision: `**<condition>** → Yes: <true_path step names>, No: <false_path step names>`; "
-            "omit this section entirely if decisions is []\n"
-            "7. `## References` — single bullet: 'Source: run instruction and assembled project context'\n\n"
-            "Length constraint: ≤80 words per section (Purpose, Scope). Procedure steps: ≤20 words per step name line.\n"
-            "Do not add sections beyond the seven listed above.\n\n"
-            f"{process_model_json_block(pm)}"
-        )
+        prompt = get_prompt("sop_user")
+        user = prompt.render_user(process_model=process_model_json_block(pm))
         md = _shared._run_subagent_tool_loop_text(ctx, agent_id="sop", system=sb.system, user=user, temperature=sb.temperature, max_rounds=sb.max_rounds)
         if not md:
             try:

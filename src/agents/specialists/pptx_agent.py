@@ -587,18 +587,7 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
         sb = _SkillBuild(
             system=sb.system + (
                 "\n\n" + _visual_guide_block() +
-                "\n\nCONSISTENCY & ALTITUDE RULES:\n"
-                "1. OWNERSHIP IS SINGLE-SOURCED. Take each step's owner verbatim from the process "
-                "model's step.role. State an activity's owner identically on every slide it appears "
-                "on — never reassign or paraphrase ownership differently across slides.\n"
-                "2. OUTCOME METRICS, NOT PROCESS DESCRIPTORS. stat_cards and big_number must show "
-                "business outcomes (time saved, cycle time, cost per unit, accuracy %, throughput, "
-                "$ impact). Do NOT headline raw process counts (number of steps/roles) as if they "
-                "were efficiency metrics; if only a count is available, pair it with the outcome it "
-                "drives.\n"
-                "3. NO RAW ACCOUNTING CODES. Do not surface GL codes, cost-center codes, or GST/tax "
-                "treatment codes on executive slides unless the user explicitly asked for them; "
-                "express governance and compliance in business terms.\n"
+                "\n\n" + get_prompt("pptx_consistency_rules").render_user()
             ),
             temperature=sb.temperature,
             max_rounds=sb.max_rounds,
@@ -718,45 +707,9 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
         except Exception as exc:
             _LOG.warning("%s: suppressed error: %s", 'run_pptx_agent', exc)
 
-        _slide_schema = (
-            "Each slide object schema (omit fields that are null):\n"
-            "  title         string — ≤10 words (required)\n"
-            "  slide_type    string — one of: title | bullets | stat_cards | column_cards |\n"
-            "                         stack_layers | table | chart | section_divider |\n"
-            "                         big_number | process_flow"
-            + (" | split_panel | lanes | workstream_cards | tower_cards |\n"
-               "                         roadmap_matrix | swimlane_timeline | flagship_cards" if _editorial_theme else "")
-            + " (required)\n"
-            "  subtitle      string | null — eyebrow/section label (ALL-CAPS, ≤5 words)\n"
-            "  kicker        string | null — italic sub-headline below title (≤20 words)\n"
-            "  section_number string | null — 2-digit section index (e.g. \"02\")\n"
-            "  emphasis      string | null — substring of title to render in primary color\n"
-            "  status_legend bool | null — show status legend (workstream_cards / tower_cards)\n"
-            "  synthesis_band {label: string, text: string, right_label?: string, right_text?: string} | null\n"
-            "                — full-width dark takeaway band; use ≤1 per 3 slides\n"
-            "  bullets       string[] | null — each ≤15 words; for slide_type=\"bullets\"\n"
-            "  badges        string[] | null — short phrases for title slide pills (slide_type=\"title\" only)\n"
-            "  stat_cards    [{stat: string, label: string, description: string, fill: \"dark\"|\"mid_dark\"|\"gray\"}] | null\n"
-            "                — stat: short metric (e.g. \"3–5\"); label: 2–4 word title;\n"
-            "                  description: 1 sentence of context (≤25 words, tells the reader *why* it matters)\n"
-            "  column_cards  [{heading: string, accent: \"green\"|\"dark\"|\"gray\"|\"mid_dark\"|\"mid\"|\"dark_green\", body: string}] | null\n"
-            "                — 2–4 cards (3 is the typical framework width); body ≤40 words;\n"
-            "                  heading must directly name the pillar described in body — never use a\n"
-            "                  heading that labels a different theme than what body actually says\n"
-            "  stack_layers  [{label: string, description: string, fill: \"green\"|\"dark\"|\"mid_dark\"|\"gray\"|\"mid\"|\"dark_green\"}] | null\n"
-            "                — 3–6 rows; label ≤3 words; description ≤20 words\n"
-            "  footer_note   string | null — single-line summary band at slide bottom (use sparingly)\n"
-            "  table         {headers: string[], rows: string[][], x: 0.28, y: 1.0, w: 9.44, h: 4.3} | null\n"
-            "  chart         {type: \"bar\"|\"line\"|\"pie\"|\"column\"|\"area\"|\"doughnut\"|\"column_stacked\"|\"percent_stacked\"|\"bar_stacked\",\n"
-            "                 categories: string[] (3-8), series: [{name: string, values: number[]}],\n"
-            "                 subtitle: string (cite source ≤15 words)} | null\n"
-            "                — use when trend shape, ranking, or composition is the story\n"
-            "  big_number    {stat: string, label: string, context?: string, fill: \"dark\"|\"green\"|\"mid_dark\"} | null\n"
-            "                — renders stat at 80pt; use for ONE dominant KPI; at most once per deck\n"
-            "  process_flow  {steps: [{label: string ≤4 words, description: string ≤12 words,\n"
-            "                          fill: \"green\"|\"dark\"|\"mid_dark\"|\"dark_green\"|\"mid\", icon?: string}]} | null\n"
-            "                — horizontal arrow chain for ordered steps; 2–5 steps required\n"
-            + (
+        # Build editorial-conditional slide schema from YAML template
+        editorial_types = " | split_panel | lanes | workstream_cards | tower_cards | roadmap_matrix | swimlane_timeline | flagship_cards" if _editorial_theme else ""
+        editorial_fields = (
             "  split_panel   items: [{label: string, body: string}] — 2–5 numbered items;\n"
             "                dark left panel shows the key assertion, right shows numbered detail\n"
             "  lanes         lanes: [{label: string, items: [string]}] — 2–4 parallel swim lanes;\n"
@@ -774,18 +727,18 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
             "                     — Gantt; start/end are 0-based period indices\n"
             "  flagship_cards  flagship_cards: [{heading: string, body: string,\n"
             "                  kpis?: [{label: string, value: string}], client?: string}] — 2–3 cards\n"
-            if _editorial_theme else ""
-            )
-            + "\nRules:\n"
-            "  - title and slide_type are required on every slide.\n"
-            "  - stat_cards: include only cards where a real quantifiable value exists; omit cards with no data rather than using placeholder text. Aim for 3 but 1 or 2 is acceptable.\n"
-            "  - column_cards must have 2–4 items.\n"
-            "  - Do not mix bullets + table on the same slide.\n"
-            + ("  - emphasis: use to highlight 1–3 key words in the title — must be a verbatim substring.\n"
-               "  - status discipline: live=currently active; in_build=in development; planned=on roadmap; partner=third-party led.\n"
-               "  - synthesis_band: 1 band per major section break maximum; short assertions only.\n"
-               if _editorial_theme else "")
-            + "  - Return ONLY valid JSON: {\"slides\": [...]}\n\n"
+        ) if _editorial_theme else ""
+        editorial_rules = (
+            "  - emphasis: use to highlight 1–3 key words in the title — must be a verbatim substring.\n"
+            "  - status discipline: live=currently active; in_build=in development; planned=on roadmap; partner=third-party led.\n"
+            "  - synthesis_band: 1 band per major section break maximum; short assertions only.\n"
+        ) if _editorial_theme else ""
+
+        schema_prompt = get_prompt("pptx_slide_schema")
+        _slide_schema = schema_prompt.render_user(
+            editorial_slide_types=editorial_types,
+            editorial_fields=editorial_fields,
+            editorial_rules=editorial_rules
         )
 
         skill_slide_sequence = primary.get("slide_sequence") if primary else None

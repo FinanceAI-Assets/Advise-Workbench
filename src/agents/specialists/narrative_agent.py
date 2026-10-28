@@ -33,26 +33,10 @@ def run_narrative_agent(ctx: AgentContext) -> AgentOutput:
             ctx, "narrative",
             fallback_system=fallback_system,
         )
-        user = (
-            "Write an executive briefing note from the ProcessModel and context excerpt below.\n\n"
-            "Document structure — use EXACTLY these sections in this order:\n"
-            "1. `# <process_name> — Executive Briefing` — H1 title\n"
-            "2. `## What This Process Does` — 2–4 sentences: the business outcome delivered by this process, "
-            "who initiates it, and who benefits; do not describe individual steps\n"
-            "3. `## Key Activities` — bulleted list of ≤6 items; each item names the activity and its owner role "
-            "in ≤12 words; derived from ProcessModel.steps; omit low-signal steps if there are more than 6\n"
-            "4. `## Roles and Accountability` — one bullet per role in ProcessModel.roles; "
-            "state what that role is accountable for in this process in ≤15 words\n"
-            "5. `## Recommended Next Actions` — exactly 2–4 numbered items; "
-            "each action must be specific to this process (not generic advice); "
-            "each item ≤20 words; no action should duplicate another\n\n"
-            "Constraints:\n"
-            "  - Do not quote or paraphrase the context excerpt verbatim.\n"
-            "  - Do not add a 'Context Used' or 'References' section.\n"
-            "  - Do not repeat information across sections.\n"
-            "  - Do not use the phrase 'in conclusion' or 'in summary'.\n\n"
-            f"{process_model_json_block(pm)}\n"
-            f"{context_excerpt_block(_grounded_context_excerpt(ctx, 4000), 4000)}"
+        prompt = get_prompt("narrative_agent_user")
+        user = prompt.render_user(
+            process_model=process_model_json_block(pm),
+            context=context_excerpt_block(_grounded_context_excerpt(ctx, 4000), 4000)
         )
         user = _append_conversation_digest_block(user, ctx)
         md: str | None = None

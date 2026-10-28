@@ -30,19 +30,10 @@ from src.llm.claude import (
 
 _LOG = logging.getLogger(__name__)
 
-# Worker preamble fragment for subagent system prompts (guide best practice).
-SWARM_WORKER_PREAMBLE = (
-    "You are a WORKER teammate in a swarm: pick up assigned tasks, use tools, report completion. "
-    "Do not spawn sub-agents or delegate to other orchestrators. If blocked, report a clear blocker."
-)
-
-# Lead preamble — coordination-focused, can create/modify tasks and broadcast to workers.
-SWARM_LEAD_PREAMBLE = (
-    "You are the LEAD teammate in a swarm. Decompose the run goal into tasks "
-    "(swarm_create_task), assign them to workers via swarm_broadcast, monitor status "
-    "(swarm_list_tasks), escalate blockers, and synthesize final output. "
-    "Delegate hands-on generation — do not perform it yourself."
-)
+# Worker and Lead preambles — loaded from externalized YAML
+_swarm_prompts = get_prompt("swarm_preambles")
+SWARM_WORKER_PREAMBLE = _swarm_prompts.render_system()
+SWARM_LEAD_PREAMBLE = _swarm_prompts.render_user()
 
 
 def get_teammate_role(*, run_id: str, teammate_id: str) -> str:

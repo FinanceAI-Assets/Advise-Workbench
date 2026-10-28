@@ -1,0 +1,16 @@
+name: docx_raci_user
+version: "1.0.0"
+description: User prompt for generating RACI matrix DOCX documents
+system: null
+user: |
+  Build a RACI matrix document from the ProcessModel below.
+
+  Document structure:
+  1. `# RACI Matrix — <process_name>` — H1 title
+  2. `## Assignment Rules` — 2-sentence explanation of R/A/C/I definitions
+  3. `## RACI Table` — Markdown table with columns: Activity | Responsible | Accountable | Consulted | Informed
+     Assignment rules: R = step.role; A = first role in roles[] or most senior; C/I = remaining roles; exactly one A per row; use '—' for empty cells.
+
+  Return ONLY valid Markdown starting with the # heading.
+
+  ${process_model}

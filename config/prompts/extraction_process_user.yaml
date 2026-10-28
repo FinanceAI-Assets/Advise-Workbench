@@ -1,0 +1,42 @@
+name: extraction_process_user
+version: "1.0.0"
+description: User prompt for extracting structured process models from unstructured text
+system: null
+user: |
+  Extract a structured process model from the instruction and context below.
+
+  Return a JSON object with EXACTLY these top-level keys (no others):
+
+    process_name   string — the process title; infer from heading, first sentence, or topic if not explicit
+    roles          string[] — every distinct human role that performs a step; omit system names and tools
+    steps          ProcessStep[] — one entry per discrete action in execution order
+    decisions      DecisionBranch[] — one entry per conditional fork; empty [] if none
+    swimlanes      { [role: string]: string[] } — maps each role to its step IDs in order
+    metrics        MetricFact[] — every quantified fact in the text (time, count, %, currency, volume); empty [] if no numeric data present
+    metadata       { [key: string]: string } — any named attributes (e.g. 'frequency', 'owner', 'SLA') found in the text; empty {} if none
+
+  ProcessStep schema:
+    id               string — 's1', 's2', ..., 'sN'
+    name             string — imperative verb phrase, ≤10 words (e.g. 'Collect KYC documents')
+    role             string — role from roles[]; 'TBD' if not specified
+    inputs           string[] — named artifacts or data consumed by this step; [] if none
+    outputs          string[] — named artifacts or data produced by this step; [] if none
+    tools            string[] — systems, apps, or tools used in this step; [] if none
+    duration_estimate string — e.g. '2 hours', '1 day'; "" if not specified
+    notes            string — any caveats, exceptions, or extra detail; "" if none
+
+  DecisionBranch schema:
+    id         string — 'd1', 'd2', ...
+    condition  string — the yes/no question at the fork (e.g. 'Documents complete?')
+    true_path  string[] — step IDs taken when condition is true
+    false_path string[] — step IDs taken when condition is false
+
+  MetricFact schema:
+    stat    string — the value/number (e.g. '12 days', '94%', 'INR 50,000', '3')
+    label   string — what it measures in 2–5 words (e.g. 'Invoice Cycle Time', 'Error Rate')
+    source  string — one of: 'client-provided data' | 'benchmark assumptions' | 'inferred from context'
+
+  Edge-case rules:
+    - If no numbered or bulleted steps exist, infer steps from verbs in the text (minimum 1 step).
+    - If no roles are named, use ['Process Owner'] as the sole role and assign all steps to it.
+    - Do not invent steps that are not implied by the source text.

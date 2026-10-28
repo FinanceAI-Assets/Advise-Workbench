@@ -1,0 +1,10 @@
+name: extraction_archetype_advisory_pov
+version: "1.0.0"
+description: Special extraction rules for advisory_pov archetype
+system: null
+user: |
+  ADVISORY POV RULES:
+  Extract the SUBJECT-DOMAIN business process (e.g. Record-to-Report: journals, intercompany, reconciliation, close, consolidation, reporting).
+  Do NOT model the workflow of writing, designing, or producing this POV note/deck.
+  Never include steps like 'develop POV document', 'create presentation', or tools such as PowerPoint/Word as process steps.
+  If the source lacks operational detail, derive a standard industry-reference model and set metadata.grounding='illustrative'.

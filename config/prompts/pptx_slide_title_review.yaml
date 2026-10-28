@@ -1,0 +1,7 @@
+name: pptx_slide_title_review
+version: "1.0.0"
+description: User prompt for reviewing and improving slide titles
+system: null
+user: |
+  Review this deck's slide titles for consulting quality. Return ONLY JSON {"hints": [{"slide_index": <1-based int>, "instruction": "<fix>"}]} with at most 4 prescriptive fixes. Titles:
+  ${titles_json}

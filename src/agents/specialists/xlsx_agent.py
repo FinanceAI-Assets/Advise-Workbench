@@ -116,38 +116,14 @@ def run_xlsx_agent(ctx: AgentContext) -> AgentOutput:
         )
         if is_raci:
             accountable = roles[0] if roles else "Process Owner"
-            user = (
-                "Build a RACI matrix Markdown table from the ProcessModel below.\n\n"
-                "Column definitions (in this exact order):\n"
-                "  Activity     — step.name\n"
-                "  Responsible  — step.role; use roles[0] if step.role is absent\n"
-                "  Accountable  — the role that owns the outcome (exactly one per row); "
-                f"default to '{accountable}' unless a more senior role is evident\n"
-                "  Consulted    — roles whose input is required; '—' if none\n"
-                "  Informed     — roles notified after completion; '—' if none\n\n"
-                "Header row: | Activity | Responsible | Accountable | Consulted | Informed |\n"
-                "Separator:  |---|---|---|---|---|\n"
-                "One data row per step. No title, no caption — table only.\n"
-                "Exactly one Accountable per row — never blank, never multiple.\n\n"
-                f"{process_model_json_block(pm)}"
+            prompt = get_prompt("xlsx_raci_user")
+            user = prompt.render_user(
+                accountable=accountable,
+                process_model=process_model_json_block(pm)
             )
         else:
-            user = (
-                "Build a worksheet table from the ProcessModel below. "
-                "Each row represents one step from ProcessModel.steps, in the order they appear.\n\n"
-                "Column definitions (in this exact order):\n"
-                "  Activity  — step.name\n"
-                "  Owner     — step.role; use ProcessModel.roles[0] if step.role is absent\n"
-                "  Inputs    — step.inputs joined by ', '; '—' if empty\n"
-                "  Outputs   — step.outputs joined by ', '; '—' if empty\n"
-                "  Tools     — step.tools joined by ', '; '—' if empty\n"
-                "  Duration  — step.duration_estimate; '—' if absent\n"
-                "  Notes     — step.notes; '—' if absent\n\n"
-                "Header row format: | Activity | Owner | Inputs | Outputs | Tools | Duration | Notes |\n"
-                "Separator row format: |---|---|---|---|---|---|---|\n"
-                "One data row per step. No title, no summary row.\n\n"
-                f"{process_model_json_block(pm)}"
-            )
+            prompt = get_prompt("xlsx_generic_user")
+            user = prompt.render_user(process_model=process_model_json_block(pm))
         _xlsx_feedback = ctx.plan_payload.get("xlsx_visual_feedback") or []
         if _xlsx_feedback and isinstance(_xlsx_feedback, list):
             _xlsx_hints = "\n".join(

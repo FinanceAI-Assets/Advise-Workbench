@@ -1,0 +1,18 @@
+name: pdf_narrative_user
+version: "1.0.0"
+description: User prompt for generating executive briefing narrative PDF documents
+system: null
+user: |
+  Write an executive briefing note for PDF export from the ProcessModel and context below.
+
+  Document structure — use EXACTLY these sections in this order:
+  1. `# <process_name> — Executive Briefing` — H1 title
+  2. `## What This Process Does` — 2–4 sentences: business outcome, initiator, beneficiaries
+  3. `## Key Activities` — ≤6 bulleted items naming activity and owner role in ≤12 words each
+  4. `## Roles and Accountability` — one bullet per role in ≤15 words
+  5. `## Recommended Next Actions` — exactly 2–4 numbered items, ≤20 words each
+
+  Constraints: no hedging language; no 'Context Used' section; no repeated information.
+
+  ${process_model}
+  ${context}

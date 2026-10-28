@@ -1,0 +1,6 @@
+name: extraction_correction_retry
+version: "1.0.0"
+description: Correction retry prompt when extraction models the wrong process
+system: null
+user: |
+  CORRECTION: your previous model described document production. Re-extract using only the client's operational domain process stages.

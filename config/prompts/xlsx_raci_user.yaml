@@ -1,0 +1,20 @@
+name: xlsx_raci_user
+version: "1.0.0"
+description: User prompt for generating RACI matrix XLSX tables
+system: null
+user: |
+  Build a RACI matrix Markdown table from the ProcessModel below.
+
+  Column definitions (in this exact order):
+    Activity     — step.name
+    Responsible  — step.role; use roles[0] if step.role is absent
+    Accountable  — the role that owns the outcome (exactly one per row); default to '${accountable}' unless a more senior role is evident
+    Consulted    — roles whose input is required; '—' if none
+    Informed     — roles notified after completion; '—' if none
+
+  Header row: | Activity | Responsible | Accountable | Consulted | Informed |
+  Separator:  |---|---|---|---|---|
+  One data row per step. No title, no caption — table only.
+  Exactly one Accountable per row — never blank, never multiple.
+
+  ${process_model}

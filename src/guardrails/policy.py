@@ -9,6 +9,7 @@ from src.llm.claude import (
     # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
     # is_claude_enabled,
 )
+from src.prompts.registry import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -249,19 +250,10 @@ def generate_deck_outline_preview(
     target_slides = int(length_budget.get("pptx")) if str(length_budget.get("pptx") or "").isdigit() else 10
     target_slides = max(6, min(target_slides, 20))
 
-    system = (
-        "You are a presentation strategist. Given a user instruction, required sections, "
-        "and any project context (wiki excerpts, memory), produce a slide outline "
-        "for a PowerPoint deck. Return JSON with keys:\n"
-        "  slides: [{title: string, slide_type: string, purpose: string}]\n"
-        "  rationale: string (1 sentence explaining the deck structure)\n"
-        f"slide_type must be one of: {_outline_types()}. Prefer the visual that shows the slide's logic "
-        "(two_by_two to prioritise, harvey_balls to compare options, waterfall for a business case, gantt for a plan, "
-        "benchmark_bars against peers, heat_map for where effort sits); use bullets at most once.\n"
-        "purpose: 1 sentence (≤20 words) describing what the slide communicates.\n"
-        "Titles must be specific and reference the client or their context when available — "
-        "avoid generic headers like 'Introduction' or 'Our Approach'.\n"
-        f"Produce exactly {target_slides} slides. Always start with a title slide and end with a next-steps slide."
+    deck_prompt = get_prompt("deck_outline_preview")
+    system = deck_prompt.render_system(
+        outline_types=", ".join(_outline_types()),
+        target_slides=target_slides
     )
     ctx_block = ""
     if project_context:
@@ -345,22 +337,8 @@ def generate_document_outline_preview(
     target_pages = int(length_budget.get("docx_pages")) if str(length_budget.get("docx_pages") or "").isdigit() else 8
     target_pages = max(4, min(target_pages, 20))
 
-    system = (
-        "You are a consulting-grade document strategist. Given a user instruction, the required "
-        "section scaffold, and any project context (wiki + memory excerpts), produce a DOCX "
-        "storyline outline. Return JSON with keys:\n"
-        "  sections: [{heading: string, purpose: string, key_points: [string], evidence_pointer: string}]\n"
-        "  rationale: string (1 sentence explaining how the arc lands the decision)\n"
-        "  target_pages: number (integer, your recommended page count)\n"
-        "Guidelines:\n"
-        "- Headings must be specific to the client and their context — no generic 'Introduction'.\n"
-        "- purpose: 1 sentence describing what this section persuades or informs.\n"
-        "- key_points: 2–4 short phrases (≤12 words each) capturing the concrete substance.\n"
-        "- evidence_pointer: short reference to what grounds this section "
-        "(e.g. 'Wiki: Finance Ops Baseline', 'Client interview notes', 'Benchmark data').\n"
-        "- Start with an executive summary section and end with recommended next steps.\n"
-        f"- Aim for roughly {target_pages} pages overall, with 5–9 sections."
-    )
+    doc_prompt = get_prompt("document_outline_strategy")
+    system = doc_prompt.render_system(target_pages=target_pages)
     ctx_block = ""
     if project_context:
         ctx_block = f"\n\nProject context (wiki + memory):\n{project_context[:4000]}\n"

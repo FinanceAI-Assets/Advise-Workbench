@@ -60,47 +60,17 @@ def run_docx_agent(ctx: AgentContext) -> AgentOutput:
 
         # Select the user prompt based on the active deliverable type
         if deliverable == "sop":
-            user = (
-                "Write a Standard Operating Procedure (SOP) from the ProcessModel below.\n\n"
-                "Document structure — use EXACTLY these sections in this order:\n"
-                "1. `# <process_name>` — H1 title only\n"
-                "2. `## Purpose` — 2–4 sentences: what problem this process solves and who benefits\n"
-                "3. `## Scope` — 1–2 sentences: what is covered and what is explicitly out of scope\n"
-                "4. `## Roles` — bulleted list of each role with a one-sentence mandate\n"
-                "5. `## Procedure` — numbered list, one item per step; "
-                "format: `N. **<step.name>** _(role: <step.role>)_` with sub-bullets for inputs/outputs/tools if non-empty\n"
-                "6. `## Decision Points` — only if decisions is non-empty; omit entirely otherwise\n"
-                "7. `## References` — single bullet: 'Source: run instruction and assembled project context'\n\n"
-                "Length constraint: ≤80 words per section (Purpose, Scope). "
-                "Do not add sections beyond the seven listed above.\n\n"
-                f"{process_model_json_block(pm)}"
-            )
+            prompt = get_prompt("docx_sop_user")
+            user = prompt.render_user(process_model=process_model_json_block(pm))
         elif deliverable == "narrative":
-            user = (
-                "Write an executive briefing note from the ProcessModel and context excerpt below.\n\n"
-                "Document structure — use EXACTLY these sections in this order:\n"
-                "1. `# <process_name> — Executive Briefing` — H1 title\n"
-                "2. `## What This Process Does` — 2–4 sentences: business outcome, who initiates it, who benefits\n"
-                "3. `## Key Activities` — ≤6 bulleted items naming activity and owner role in ≤12 words each\n"
-                "4. `## Roles and Accountability` — one bullet per role in ≤15 words\n"
-                "5. `## Recommended Next Actions` — exactly 2–4 numbered items, ≤20 words each, specific to this process\n\n"
-                "Constraints: no hedging language; no 'Context Used' section; no section repetition.\n\n"
-                f"{process_model_json_block(pm)}\n"
-                f"{context_excerpt_block(_grounded_context_excerpt(ctx, 4000), 4000)}"
+            prompt = get_prompt("docx_narrative_user")
+            user = prompt.render_user(
+                process_model=process_model_json_block(pm),
+                context=context_excerpt_block(_grounded_context_excerpt(ctx, 4000), 4000)
             )
         elif deliverable == "raci":
-            user = (
-                "Build a RACI matrix document from the ProcessModel below.\n\n"
-                "Document structure:\n"
-                "1. `# RACI Matrix — <process_name>` — H1 title\n"
-                "2. `## Assignment Rules` — 2-sentence explanation of R/A/C/I definitions\n"
-                "3. `## RACI Table` — Markdown table with columns: "
-                "Activity | Responsible | Accountable | Consulted | Informed\n"
-                "   Assignment rules: R = step.role; A = first role in roles[] or most senior; "
-                "C/I = remaining roles; exactly one A per row; use '—' for empty cells.\n\n"
-                "Return ONLY valid Markdown starting with the # heading.\n\n"
-                f"{process_model_json_block(pm)}"
-            )
+            prompt = get_prompt("docx_raci_user")
+            user = prompt.render_user(process_model=process_model_json_block(pm))
         elif deliverable == "proposal":
             p_skill = _primary_skill(ctx)
             _sid = str((p_skill or {}).get("id") or "").strip() or PROPOSAL_SKILL_ID
@@ -122,51 +92,24 @@ def run_docx_agent(ctx: AgentContext) -> AgentOutput:
             )
             sections = "\n".join(f"- {s}" for s in contract.get("sections", []))
             constraints = "\n".join(f"- {c}" for c in contract.get("constraints", []))
-            user = (
-                "Write a finance transformation proposal document suitable for DOCX export.\n\n"
-                "Use this section contract in the same order:\n"
-                f"{sections}\n\n"
-                "Proposal constraints:\n"
-                f"{constraints}\n\n"
-                "Document requirements:\n"
-                "- Use `#` for the document title and `##` for each contract section.\n"
-                "- Add a quantified value case with assumptions and confidence levels.\n"
-                "- Include implementation workstreams, sequencing, and ownership by role.\n"
-                "- Include risks, mitigations, and measurable success criteria.\n\n"
-                + discovery_block
-                + f"{process_model_json_block(pm)}\n"
-                + f"{context_excerpt_block(_grounded_context_excerpt(ctx, 4000), 4000)}"
+            prompt = get_prompt("docx_proposal_user")
+            user = prompt.render_user(
+                sections=sections,
+                constraints=constraints,
+                discovery=discovery_block,
+                process_model=process_model_json_block(pm),
+                context=context_excerpt_block(_grounded_context_excerpt(ctx, 4000), 4000)
             )
         elif deliverable == "brd":
-            user = (
-                "Write a Business Requirements Document (BRD) from the ProcessModel and context below.\n\n"
-                "Document structure — use these sections:\n"
-                "1. `# Business Requirements Document — <process_name>`\n"
-                "2. `## Executive Summary` — 3–5 sentences on business need and objectives\n"
-                "3. `## Current State` — describe the process as extracted from the ProcessModel\n"
-                "4. `## Business Requirements` — numbered list of ≥5 specific, measurable requirements\n"
-                "5. `## Roles and Stakeholders` — one bullet per role with responsibility\n"
-                "6. `## Success Criteria` — 3–5 measurable criteria\n"
-                "7. `## References` — Source: run instruction and project context\n\n"
-                f"{process_model_json_block(pm)}\n"
-                f"{context_excerpt_block(_grounded_context_excerpt(ctx, 3000), 3000)}"
+            prompt = get_prompt("docx_brd_user")
+            user = prompt.render_user(
+                process_model=process_model_json_block(pm),
+                context=context_excerpt_block(_grounded_context_excerpt(ctx, 3000), 3000)
             )
         else:
             # Generic DOCX — procedure document
-            user = (
-                "Write a procedure document for DOCX export from the ProcessModel below.\n\n"
-                "Document structure — use EXACTLY these sections in this order:\n"
-                "1. `# <process_name>` — H1 title only\n"
-                "2. `## Purpose` — 2–4 sentences: the business reason this process exists\n"
-                "3. `## Scope` — 2–3 sentences: activities and systems covered\n"
-                "4. `## Roles and Responsibilities` — one bullet per role with mandate\n"
-                "5. `## Procedure` — numbered steps matching ProcessModel.steps exactly\n"
-                "6. `## Governance and Controls` — include only if ProcessModel.decisions is non-empty\n"
-                "7. `## References` — single bullet: 'Source: run instruction and assembled project context'\n\n"
-                "Constraints: Purpose and Scope ≤80 words each. "
-                "Do not invent controls not present in the ProcessModel.\n\n"
-                f"{process_model_json_block(pm)}"
-            )
+            prompt = get_prompt("docx_generic_user")
+            user = prompt.render_user(process_model=process_model_json_block(pm))
 
         # ── Storyline spine (shared with PPTX): same contract, document-mode render ──
         # Only argument-led documents follow the arc; SOP/RACI/generic keep their

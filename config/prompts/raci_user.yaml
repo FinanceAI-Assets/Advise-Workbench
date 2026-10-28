@@ -1,0 +1,19 @@
+name: raci_user
+version: "1.0.0"
+description: User prompt for generating RACI matrices (legacy agent)
+system: null
+user: |
+  Build a RACI matrix from the ProcessModel below.
+
+  Assignment rules:
+  1. Responsible (R): use step.role. If step.role is absent or 'TBD', assign R to the first role in ProcessModel.roles.
+  2. Accountable (A): assign to the first role in ProcessModel.roles unless a more senior role is evident from the name (e.g. 'Manager', 'Director', 'Lead', 'Owner'). Exactly one A per row — never blank, never multiple.
+  3. Consulted (C): assign remaining roles whose work depends on or feeds into this step. If no such roles exist, use '—'.
+  4. Informed (I): assign roles that receive the output of this step but do not participate. If none, use '—'.
+
+  Output format: ${format} (markdown table with header row if markdown, full HTML table if html).
+  Column order: Activity | Responsible | Accountable | Consulted | Informed
+  One row per ProcessModel.steps entry. Do not add rows for roles — only for activities.
+  Do not include a title row, caption, or explanatory text — table only.
+
+  ${process_model}

@@ -1,0 +1,20 @@
+name: pdf_proposal_user
+version: "1.0.0"
+description: User prompt for generating finance transformation proposal PDF documents
+system: null
+user: |
+  Write a finance transformation proposal for PDF export.
+
+  Use this section contract in the same order:
+  ${sections}
+
+  Proposal constraints:
+  ${constraints}
+
+  Formatting requirements:
+  - Return only markdown with `#` title and `##` sections.
+  - Include a concise value-case table (lever, impact, confidence, owner).
+  - Include a 90-day workplan with milestones and governance cadence.
+
+  ${process_model}
+  ${context}

@@ -12,6 +12,7 @@ from typing import Any
 from src.llm import gateway
 from src.llm.claude import _extract_first_json_object
 # is_claude_enabled
+from src.prompts.registry import get_prompt
 from src.prompts.skill_loader import load_builtin_skills
 
 import logging
@@ -48,24 +49,8 @@ def generate_strategy_options(*, instruction: str) -> dict[str, Any] | None:
     if not gateway.is_enabled():
         return None
     catalog = _trim_skill_catalog()
-    system = (
-        "You are a helpful digital teammate and consulting expert for Advise Workbench—clear, "
-        "collaborative, and grounded in the user's goal—planning how the run should execute. "
-        "The runtime has the listed skills (tools are implemented inside those skills). "
-        "Return ONLY a JSON object (no markdown) with keys:\n"
-        '- "problem_summary" (short string)\n'
-        '- "assumptions" (array of short strings, max 6)\n'
-        '- "options" (array of 2-4 objects, each with: '
-        '"title" (string), "summary" (string), "steps" (string array, max 8), '
-        '"tools_suggested" (string array of skill ids from available_skills only, max 8), '
-        '"pros" (string array, max 4), "cons" (string array, max 4), "risks" (string array, max 3))\n'
-        '- "comparison" (one short paragraph comparing the options)\n'
-        '- "model_recommendation" (string: slug id of the recommended option — must match an option id you assign)\n'
-        "Rules:\n"
-        "- options must be meaningfully different.\n"
-        "- Every tools_suggested value must appear in available_skills[].id; omit unknown tools.\n"
-        "- Add stable string field \"id\" to each option (slug, lowercase, a-z0-9_ only).\n"
-    )
+    planner_prompt = get_prompt("strategy_planner_system")
+    system = planner_prompt.render_system()
     user = json.dumps(
         {
             "user_instruction": instruction[:8000],

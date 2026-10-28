@@ -211,28 +211,11 @@ def _evaluate_pptx(path: Path, project_id: str, run_id: str) -> dict[str, Any]:
                     if not page_images:
                         degraded_reason = "PDF rendered no pages (pypdfium2 unavailable or empty deck)"
                     if page_images:
-                        pixel_system = (
-                            "You are a slide design QA reviewer for executive presentations. "
-                            "You receive rendered slide images and evaluate layout quality against the design standard below. "
-                            "Return strict JSON with keys: status (pass|warn|fail), summary (one sentence), "
-                            "per_slide_findings (array of {index, issue, severity: low|medium|high}), "
-                            "remediation_hints (array of {slide_index, instruction})."
-                        )
-                        pixel_user = (
-                            f"Project: {project_id} | Run: {run_id}\n\n"
-                            "Design rubric (evaluate each slide image against these criteria):\n"
-                            "- Alignment: text and shapes should align to an implicit grid; no floating orphan elements.\n"
-                            "- Overlap/clipping: no text clipped by shape borders or slide edge; no two text blocks overlapping.\n"
-                            "- Hierarchy: title clearly dominant; supporting text visibly smaller.\n"
-                            "- Status-color consistency: same status should use the same color throughout the deck.\n"
-                            "- Footer cadence: footer text and page number should appear consistently on every non-title slide.\n"
-                            "- Content density: slides should be neither blank nor overloaded.\n"
-                            "- Whitespace balance: each slide should have breathing room; flag cramped slides where elements touch edges or each other.\n"
-                            "- Readability/contrast: text on filled shapes must have sufficient contrast; flag low-contrast or hard-to-read text.\n"
-                            "- One idea per slide: each slide should carry a single clear message; flag slides juggling multiple unrelated points.\n"
-                            "- Visual variety: across the deck, flag monotony (e.g. every slide is a bullet list) — vary layouts to sustain attention.\n"
-                            "Flag real layout problems — not stylistic preferences. "
-                            "If a slide looks clean, do not manufacture findings."
+                        vqa_prompt = get_prompt("visual_qa_slide_design")
+                        pixel_system = vqa_prompt.render_system()
+                        pixel_user = vqa_prompt.render_user(
+                            project_id=project_id,
+                            run_id=run_id
                         )
                         # [NEW: Gateway-based provider-agnostic JSON call with vision capability check]
                         # Check if provider supports vision for image critique

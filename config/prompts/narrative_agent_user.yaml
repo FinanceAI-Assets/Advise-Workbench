@@ -1,0 +1,22 @@
+name: narrative_agent_user
+version: "1.0.0"
+description: User prompt for narrative executive briefing generation (legacy agent)
+system: null
+user: |
+  Write an executive briefing note from the ProcessModel and context excerpt below.
+
+  Document structure — use EXACTLY these sections in this order:
+  1. `# <process_name> — Executive Briefing` — H1 title
+  2. `## What This Process Does` — 2–4 sentences: the business outcome delivered by this process, who initiates it, and who benefits; do not describe individual steps
+  3. `## Key Activities` — bulleted list of ≤6 items; each item names the activity and its owner role in ≤12 words; derived from ProcessModel.steps; omit low-signal steps if there are more than 6
+  4. `## Roles and Accountability` — one bullet per role in ProcessModel.roles; state what that role is accountable for in this process in ≤15 words
+  5. `## Recommended Next Actions` — exactly 2–4 numbered items; each action must be specific to this process (not generic advice); each item ≤20 words; no action should duplicate another
+
+  Constraints:
+    - Do not quote or paraphrase the context excerpt verbatim.
+    - Do not add a 'Context Used' or 'References' section.
+    - Do not repeat information across sections.
+    - Do not use the phrase 'in conclusion' or 'in summary'.
+
+  ${process_model}
+  ${context}

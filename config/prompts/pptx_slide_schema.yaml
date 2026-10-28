@@ -1,0 +1,33 @@
+name: pptx_slide_schema
+version: "1.0.0"
+description: Slide type schema definitions for PPTX generation
+system: null
+user: |
+  Each slide object schema (omit fields that are null):
+    title         string — ≤10 words (required)
+    slide_type    string — one of: title | bullets | stat_cards | column_cards | stack_layers | table | chart | section_divider | big_number | process_flow${editorial_slide_types}(required)
+    subtitle      string | null — eyebrow/section label (ALL-CAPS, ≤5 words)
+    kicker        string | null — italic sub-headline below title (≤20 words)
+    section_number string | null — 2-digit section index (e.g. "02")
+    emphasis      string | null — substring of title to render in primary color
+    status_legend bool | null — show status legend (workstream_cards / tower_cards)
+    synthesis_band {label: string, text: string, right_label?: string, right_text?: string} | null — full-width dark takeaway band; use ≤1 per 3 slides
+    bullets       string[] | null — each ≤15 words; for slide_type="bullets"
+    badges        string[] | null — short phrases for title slide pills (slide_type="title" only)
+    stat_cards    [{stat: string, label: string, description: string, fill: "dark"|"mid_dark"|"gray"}] | null — stat: short metric (e.g. "3–5"); label: 2–4 word title; description: 1 sentence of context (≤25 words, tells the reader *why* it matters)
+    column_cards  [{heading: string, accent: "green"|"dark"|"gray"|"mid_dark"|"mid"|"dark_green", body: string}] | null — 2–4 cards (3 is the typical framework width); body ≤40 words; heading must directly name the pillar described in body — never use a heading that labels a different theme than what body actually says
+    stack_layers  [{label: string, description: string, fill: "green"|"dark"|"mid_dark"|"gray"|"mid"|"dark_green"}] | null — 3–6 rows; label ≤3 words; description ≤20 words
+    footer_note   string | null — single-line summary band at slide bottom (use sparingly)
+    table         {headers: string[], rows: string[][], x: 0.28, y: 1.0, w: 9.44, h: 4.3} | null
+    chart         {type: "bar"|"line"|"pie"|"column"|"area"|"doughnut"|"column_stacked"|"percent_stacked"|"bar_stacked", categories: string[] (3-8), series: [{name: string, values: number[]}], subtitle: string (cite source ≤15 words)} | null — use when trend shape, ranking, or composition is the story
+    big_number    {stat: string, label: string, context?: string, fill: "dark"|"green"|"mid_dark"} | null — renders stat at 80pt; use for ONE dominant KPI; at most once per deck
+    process_flow  {steps: [{label: string ≤4 words, description: string ≤12 words, fill: "green"|"dark"|"mid_dark"|"dark_green"|"mid", icon?: string}]} | null — horizontal arrow chain for ordered steps; 2–5 steps required
+    ${editorial_fields}
+
+  Rules:
+    - title and slide_type are required on every slide.
+    - stat_cards: include only cards where a real quantifiable value exists; omit cards with no data rather than using placeholder text. Aim for 3 but 1 or 2 is acceptable.
+    - column_cards must have 2–4 items.
+    - Do not mix bullets + table on the same slide.
+    ${editorial_rules}
+    - Return ONLY valid JSON: {"slides": [...]}

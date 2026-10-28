@@ -179,14 +179,17 @@ def propose_arcs(
 
     # [EXTERNALIZED to config/prompts/storyline_arc_recommender.yaml]
     system = get_prompt("storyline_arc_recommender").render_system()
-    user = (
-        f"Client: {client_name}" + (f" ({client_industry})" if client_industry else "") + "\n"
-        f"Primary outcome: {primary_outcome}\n"
-        f"Win themes: {', '.join(str(t) for t in win_themes)}\n"
-        f"Audience: {audience or 'not yet specified'}\n\n"
-        f"Available arc options:\n{arc_descriptions}\n\n"
-        f"Project context (LP / wiki):\n{project_context[:3000]}\n\n"
-        f"Recent conversation:\n{conversation_history[-1500:]}"
+    client_industry_suffix = f" ({client_industry})" if client_industry else ""
+    user_prompt = get_prompt("storyline_arc_recommender_user")
+    user = user_prompt.render_user(
+        client_name=client_name,
+        client_industry_suffix=client_industry_suffix,
+        primary_outcome=primary_outcome,
+        win_themes=", ".join(str(t) for t in win_themes),
+        audience=audience or "not yet specified",
+        arc_descriptions=arc_descriptions,
+        project_context=project_context[:3000],
+        conversation_history=conversation_history[-1500:]
     )
 
     try:
@@ -380,14 +383,17 @@ def build_storyline_contract(
         visual_vocab=", ".join(STORYLINE_VISUAL_VOCAB),
         numeric_visuals=", ".join(sorted(NUMERIC_VISUALS))
     )
-    user = (
-        f"Client: {client_name}" + (f" ({client_industry})" if client_industry else "") + "\n"
-        f"Primary outcome: {primary_outcome}\n"
-        f"Audience: {audience or 'executive sponsors'}\n"
-        f"Win themes: {', '.join(str(t) for t in win_themes) or 'n/a'}\n"
-        f"Target slide count: ~{target_slides} content slides (title/divider slides extra).\n\n"
-        f"Process summary:\n{process_summary[:3500]}\n\n"
-        f"Enrichment / metrics:\n{enrich_str}"
+    client_industry_suffix = f" ({client_industry})" if client_industry else ""
+    user_prompt = get_prompt("storyline_spine_builder_user")
+    user = user_prompt.render_user(
+        client_name=client_name,
+        client_industry_suffix=client_industry_suffix,
+        primary_outcome=primary_outcome,
+        audience=audience or "executive sponsors",
+        win_themes=", ".join(str(t) for t in win_themes) or "n/a",
+        target_slides=target_slides,
+        process_summary=process_summary[:3500],
+        enrichment=enrich_str
     )
 
     try:

@@ -17,6 +17,7 @@ from src.tools.code_executor.bash_rate_limit import check_rate_limit
 # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
 # from src.llm.claude import is_claude_enabled
 from src.llm import gateway
+from src.prompts.registry import get_prompt
 from src.agents.tool_agent import run_claude_tools_loop
 
 router = APIRouter()
@@ -66,12 +67,8 @@ def bash_capable_turn(
         raise HTTPException(status_code=429, detail=reason)
 
     correlation_id = str(uuid.uuid4())
-    default_system = (
-        "You are a careful assistant for Advise Workbench. "
-        "When tools are available, use them only when necessary and stay within project workspace boundaries. "
-        "Do not request credentials or exfiltrate secrets. "
-        "Text editor writes are only allowed when the caller sets allow_write=true."
-    )
+    bash_prompt = get_prompt("agent_bash_system")
+    default_system = bash_prompt.render_system()
     system = (body.system or default_system).strip()
 
     prior = body.messages or []

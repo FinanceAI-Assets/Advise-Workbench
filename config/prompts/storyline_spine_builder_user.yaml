@@ -1,0 +1,16 @@
+name: storyline_spine_builder_user
+version: "1.0.0"
+description: User prompt for building narrative spine and slide structure
+system: null
+user: |
+  Client: ${client_name}${client_industry_suffix}
+  Primary outcome: ${primary_outcome}
+  Audience: ${audience}
+  Win themes: ${win_themes}
+  Target slide count: ~${target_slides} content slides (title/divider slides extra).
+
+  Process summary:
+  ${process_summary}
+
+  Enrichment / metrics:
+  ${enrichment}

@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.core.db.models import MemoryItem
+from src.prompts.registry import get_prompt
 # [DEPRECATED: Hardcoded claude_generate_json] Now using gateway for provider-agnostic calls
 # from src.llm.claude import claude_generate_json
 from src.llm import gateway
@@ -119,14 +120,9 @@ def propose_slide(
     prior_titles = [str(d.get("title") or "") for d in prior_slide_decisions if d.get("title")]
     prior_summary = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(prior_titles)) if prior_titles else "(none yet)"
 
-    system = (
-        "You are a strategic consulting copilot designing a deck slide-by-slide.\n"
-        "Propose EXACTLY one slide that fits the purpose hint and is grounded in the client context.\n"
-        "Be specific — name the client, reference win themes, suggest concrete content.\n"
-        "If user_feedback is non-empty, incorporate it into the proposal.\n"
-        "Return JSON: {\"title\": \"...\", \"slide_type\": \"...\", \"key_message\": \"...\", "
-        "\"evidence_source\": \"...\", \"sheldon_view\": \"...\"}\n"
-        f"slide_type must be one of: {', '.join(SLIDE_TYPE_LABELS.keys())}"
+    neg_prompt = get_prompt("slide_negotiator_system")
+    system = neg_prompt.render_system(
+        slide_types=", ".join(SLIDE_TYPE_LABELS.keys())
     )
     user = (
         f"Client: {client_name}" + (f" ({client.get('industry', '')})" if client.get("industry") else "") + "\n"

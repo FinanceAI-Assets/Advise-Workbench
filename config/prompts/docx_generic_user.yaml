@@ -1,0 +1,19 @@
+name: docx_generic_user
+version: "1.0.0"
+description: User prompt for generating generic procedure DOCX documents
+system: null
+user: |
+  Write a procedure document for DOCX export from the ProcessModel below.
+
+  Document structure — use EXACTLY these sections in this order:
+  1. `# <process_name>` — H1 title only
+  2. `## Purpose` — 2–4 sentences: the business reason this process exists
+  3. `## Scope` — 2–3 sentences: activities and systems covered
+  4. `## Roles and Responsibilities` — one bullet per role with mandate
+  5. `## Procedure` — numbered steps matching ProcessModel.steps exactly
+  6. `## Governance and Controls` — include only if ProcessModel.decisions is non-empty
+  7. `## References` — single bullet: 'Source: run instruction and assembled project context'
+
+  Constraints: Purpose and Scope ≤80 words each. Do not invent controls not present in the ProcessModel.
+
+  ${process_model}

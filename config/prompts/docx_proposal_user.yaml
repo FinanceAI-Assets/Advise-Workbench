@@ -1,0 +1,23 @@
+name: docx_proposal_user
+version: "1.0.0"
+description: User prompt for generating finance transformation proposal DOCX documents
+system: null
+user: |
+  Write a finance transformation proposal document suitable for DOCX export.
+
+  Use this section contract in the same order:
+  ${sections}
+
+  Proposal constraints:
+  ${constraints}
+
+  Document requirements:
+  - Use `#` for the document title and `##` for each contract section.
+  - Add a quantified value case with assumptions and confidence levels.
+  - Include implementation workstreams, sequencing, and ownership by role.
+  - Include risks, mitigations, and measurable success criteria.
+
+  ${discovery}
+
+  ${process_model}
+  ${context}

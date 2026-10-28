@@ -1,0 +1,9 @@
+name: pptx_consistency_rules
+version: "1.0.0"
+description: System prompt additions for PPTX consistency and altitude rules
+system: null
+user: |
+  CONSISTENCY & ALTITUDE RULES:
+  1. OWNERSHIP IS SINGLE-SOURCED. Take each step's owner verbatim from the process model's step.role. State an activity's owner identically on every slide it appears on — never reassign or paraphrase ownership differently across slides.
+  2. OUTCOME METRICS, NOT PROCESS DESCRIPTORS. stat_cards and big_number must show business outcomes (time saved, cycle time, cost per unit, accuracy %, throughput, $ impact). Do NOT headline raw process counts (number of steps/roles) as if they were efficiency metrics; if only a count is available, pair it with the outcome it drives.
+  3. NO RAW ACCOUNTING CODES. Do not surface GL codes, cost-center codes, or GST/tax treatment codes on executive slides unless the user explicitly asked for them; express governance and compliance in business terms.
