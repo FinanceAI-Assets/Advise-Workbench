@@ -24,6 +24,7 @@ load_dotenv(_repo_root / ".env", override=True)
 # for this file only (see [tool.ruff.lint.per-file-ignores] in pyproject.toml).
 from src.app.api.routes import router
 from src.app.api.wiki import router as wiki_router
+from src.app.api.quality_evaluation import router as quality_evaluation_router
 from src.core.config import log_memory_config_warnings, log_run_queue_startup_config, log_wiki_config_warnings, settings
 from src.deliverables.deliverable import DeliverableRegistry
 from src.deliverables.docx.deliverable_docx import DOCXDeliverable
@@ -38,6 +39,7 @@ from src.core.db.session import engine, init_db
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
 from src.core.observability.metrics import snapshot as observability_snapshot
+from src.core.observability.advanced_metrics import get_all_advanced_metrics
 from src.core.observability.otel_tracing import flush_telemetry, init_otel_if_enabled
 from src.workflows.orchestrator import (
     admission_status,
@@ -166,6 +168,8 @@ app.include_router(router, prefix="/api")
 
 app.include_router(wiki_router)
 
+app.include_router(quality_evaluation_router)
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -258,14 +262,24 @@ def _visual_qa_health_payload() -> dict:
 
 
 @app.get("/metrics")
-def metrics() -> dict:
+def metrics(project_id: str | None = None) -> dict:
+    """Get all observability metrics. Optionally scoped to a project.
+
+    Args:
+        project_id: Optional project ID to get per-project aggregated metrics
+
+    Returns:
+        Metrics dict with observability, advanced_metrics, run_queue, etc.
+    """
     return {
         "service": "advise-workbench-backend",
         "observability": observability_snapshot(),
+        "advanced_metrics": get_all_advanced_metrics(project_id),
         "run_queue": queue_runtime_stats(),
         "visual_qa": _visual_qa_health_payload(),
         "bash_tool": bash_tool_health(),
         "text_editor_tool": text_editor_tool_health(),
+        "scope": {"project_id": project_id} if project_id else {"scope": "global"},
     }
 
 

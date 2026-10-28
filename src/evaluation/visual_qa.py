@@ -776,24 +776,45 @@ def _render_text_to_png_images(run_dir: Path) -> tuple[list[bytes], list[str], l
 def run_visual_quality_check(project_id: str, run_id: str, run_dir: Path) -> dict[str, Any]:
     # ── Per-artifact PPTX evaluation (structural metadata, separate Claude call) ──
     pptx_path = run_dir / "output.pptx"
+    print(f"[VQA] 1. Starting PPTX evaluation...")
+    import sys
+    sys.stdout.flush()
     pptx_assessment: dict[str, Any] = _evaluate_pptx(pptx_path, project_id, run_id)
+    print(f"[VQA] 1a. PPTX evaluation completed")
+    sys.stdout.flush()
 
     # ── Structural metadata for DOCX / XLSX / PDF ──────────────────────────────
+    print(f"[VQA] 2. Extracting document metadata...")
+    sys.stdout.flush()
     docx_meta = _extract_docx_metadata(run_dir / "output.docx") if (run_dir / "output.docx").exists() else None
     xlsx_path = run_dir / "output.xlsx" if (run_dir / "output.xlsx").exists() else (
         run_dir / "raci.xlsx" if (run_dir / "raci.xlsx").exists() else None
     )
     xlsx_meta = _extract_xlsx_metadata(xlsx_path) if xlsx_path else None
     pdf_meta = _extract_pdf_metadata(run_dir / "output.pdf") if (run_dir / "output.pdf").exists() else None
+    print(f"[VQA] 2a. Document metadata extracted")
+    sys.stdout.flush()
 
     # Combined document evaluation (one Claude call for DOCX + XLSX + PDF)
+    print(f"[VQA] 3. Starting document evaluation (DOCX/XLSX/PDF)...")
+    sys.stdout.flush()
     doc_assessments = _evaluate_document_outputs(docx_meta, xlsx_meta, pdf_meta, project_id, run_id)
+    print(f"[VQA] 3a. Document evaluation completed")
+    sys.stdout.flush()
 
     # ── Process map evaluation (dedicated Claude call, graph metadata) ──────────
+    print(f"[VQA] 4. Starting process map evaluation...")
+    sys.stdout.flush()
     process_map_assessment = _evaluate_process_map(run_dir, project_id, run_id)
+    print(f"[VQA] 4a. Process map evaluation completed")
+    sys.stdout.flush()
 
     # ── Generic image-based evaluation for text deliverables ───────────────────
+    print(f"[VQA] 5. Rendering text to images...")
+    sys.stdout.flush()
     image_blobs, missing_targets, diagnostics, render_stats = _render_text_to_png_images(run_dir)
+    print(f"[VQA] 5a. Text rendering completed")
+    sys.stdout.flush()
 
     # Determine whether any meaningful evaluation ran
     active_assessments = [

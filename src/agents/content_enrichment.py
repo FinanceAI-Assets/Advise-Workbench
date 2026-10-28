@@ -42,7 +42,7 @@ class ContentEnrichmentEngine:
         audience = self._infer_audience(user_instruction)
         analytics = ProcessAnalytics(
             steps_count=len(process_model.get("steps", [])) if isinstance(process_model, dict) else 0,
-            roles_count=len(set(s.get("role") for s in process_model.get("steps", []) if isinstance(s, dict))) if isinstance(process_model, dict) else 0,
+            roles_count=len(set(str(s.get("role", "")) for s in process_model.get("steps", []) if isinstance(s, dict) and s.get("role"))) if isinstance(process_model, dict) else 0,
             decision_points=len(process_model.get("decisions", [])) if isinstance(process_model, dict) else 0,
         )
         risks = process_model.get("risks", []) if isinstance(process_model, dict) and isinstance(process_model.get("risks"), list) else []

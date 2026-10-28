@@ -329,16 +329,36 @@ if [ ! -x "$VPY" ]; then
     else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
   else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
 fi
+
 if [ -x "$VPY" ]; then
   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
+# if [ ! -x "$VPY" ]; then
+#   if [ "$FIX" = 1 ] && [ -n "$PY" ]; then
+#     echo "        creating virtual environment and installing packages (several minutes)..."
+#     if "$PY" -m venv "$VENV" && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then
+#       fixed "created .venv and installed packages"
+#     else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+#   else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+# fi
+# if [ -x "$VPY" ]; then
+#   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
 import importlib
 names = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "anthropic", "pptx", "docx", "openpyxl", "reportlab", "sentence_transformers", "faiss"]
 print(" ".join(n for n in names if importlib.util.find_spec(n) is None))
 PYEOF
 )"
   if [ -z "$MISSING" ]; then pass "key Python packages are installed"
-  elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
-  else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
+  else
+    echo "        installing missing packages: $MISSING..."
+    if "$VPY" -m pip install -r "$ROOT/requirements-dev.txt"; then
+      fixed "installed packages"
+    else
+      fail "package installation failed" "$VENV_BIN/pip install -r requirements-dev.txt"
+    fi
+  fi
+  # if [ -z "$MISSING" ]; then pass "key Python packages are installed"
+  # elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
+  # else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
 
   ANTHROPIC_V="$("$VPY" -c 'from importlib.metadata import version; print(version("anthropic"))' 2>/dev/null)"
   case "$ANTHROPIC_V" in
@@ -510,7 +530,8 @@ if [ "$BRIDGE_MODE" = 1 ] && [ "$BRIDGE_UP" = 0 ]; then
   start_service bridge "$ROOT" "$PY" "$BRIDGE" --port "$BRIDGE_PORT" --claude "$(command -v claude)"
   wait_http bridge "http://127.0.0.1:$BRIDGE_PORT/" 20 "$PID_bridge" || cleanup 1
 fi
-if [ "$OO_ENABLED" = "true" ] && [ "$OO_UP" = 0 ]; then
+if [ "$OO_START_LOCAL" = 1 ]; then
+  # Start local OpenObserve only if configured for local and port is free
   start_service openobserve "$ROOT" "$ROOT/scripts/openobserve.sh" start
   wait_http openobserve "$OO_URL/healthz" 60 "$PID_openobserve" || cleanup 1
 fi

@@ -384,6 +384,23 @@ class Settings(BaseSettings):
     # When True, deck.pdf is produced by converting the rendered PPTX with LibreOffice
     # (pixel-faithful); the ReportLab outline renderer remains the fail-open fallback.
     deck_pdf_via_soffice_enabled: bool = True
+
+    # Content Quality Evaluation: automatic LLM-based content scoring on run completion.
+    quality_evaluation_enabled: bool = Field(
+        default=True,
+        description="Enable automatic content quality evaluation",
+        validation_alias="QUALITY_EVALUATION_ENABLED"
+    )
+    quality_evaluation_async: bool = Field(
+        default=True,
+        description="Run evaluation asynchronously (don't block run completion)",
+        validation_alias="QUALITY_EVALUATION_ASYNC"
+    )
+    quality_evaluation_model: str = Field(
+        default="claude-opus-5-5",
+        description="Claude model to use for quality evaluation",
+        validation_alias="QUALITY_EVALUATION_MODEL"
+    )
     soffice_convert_timeout_sec: float = 120.0
     # Optional explicit path to the LibreOffice ``soffice`` binary. When unset,
     # discovery falls back to PATH then common install locations. Set this when
