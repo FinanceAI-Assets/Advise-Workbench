@@ -5,23 +5,27 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import {
   ApprovePublishTab,
+  DeletePracticeButton,
   ExtractChunkTab,
   IndexValidateTab,
   IngestionJobPanel,
   LibraryApprovalControls,
+  LibraryUploadsPanel,
   PipelineStepper,
   PracticeInventoryPanel,
   PublishControl,
   QualityGatesTab,
   QualityReviewPanel,
   RequestCorrectionModal,
+  StoredDataPanel,
+  UploadProgressPanel,
   UploadSourcesModal,
 } from "@/components/admin-console";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ReasonAction } from "@/components/workbench/AdminControls";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
-import { type AdminLibrary, useAdminLibraryQuery } from "@/hooks/useAdminConsole";
+import { type AdminLibrary, type LibraryUploadJob, queuedJobIds, useAdminLibraryQuery } from "@/hooks/useAdminConsole";
 
 // One view per ingestion pipeline step; the keys match the pipeline step ids, so the stepper navigates.
 const TABS = [
@@ -42,6 +46,12 @@ function MissingStep() {
   return <ErrorNote error={new Error("This pipeline step has no data. Upload a source to run the pipeline.")} />;
 }
 
+/** "JOB-12 · LP-041: Queued for extraction"; before intake has run the file name stands in for the job. */
+function uploadSummary(job: LibraryUploadJob) {
+  const label = job.id ? `${job.id} · ${job.practiceId.toUpperCase()}` : (job.ingestion?.filename ?? "Source");
+  return `${label}: ${job.outcome}`;
+}
+
 /** Keep the open step and the selected practice in the URL so the view can be linked and reloaded. */
 function writeUrl(tab: LibraryTab, practice: string) {
   const url = new URL(window.location.href);
@@ -58,6 +68,8 @@ export default function AdminConsoleLibraryPage() {
   const [tab, setTab] = useState<LibraryTab>("source-upload");
   const [upload, setUpload] = useState<{ correction: boolean } | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  // Ingestion jobs of the latest upload, followed live until each one finishes.
+  const [uploadJobIds, setUploadJobIds] = useState<string[]>([]);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionSent, setCorrectionSent] = useState<string | null>(null);
 
@@ -149,10 +161,12 @@ export default function AdminConsoleLibraryPage() {
             const first = jobs[0];
             setUploadMessage(
               jobs.length === 1
-                ? `${first.id} · ${first.practiceId.toUpperCase()}: ${first.outcome}.`
-                : `${jobs.length} sources uploaded: ${jobs.map((job) => `${job.id} (${job.outcome})`).join(", ")}.`,
+                ? `${uploadSummary(first)}.`
+                : `${jobs.length} sources uploaded: ${jobs.map(uploadSummary).join("; ")}.`,
             );
-            if (first) {
+            setUploadJobIds(queuedJobIds(jobs));
+            // Intake may still be running; the progress panel links to the practice once it exists.
+            if (first?.practiceId) {
               setPractice(first.practiceId);
               setTab("extract-chunk");
               writeUrl("extract-chunk", first.practiceId);
@@ -168,11 +182,29 @@ export default function AdminConsoleLibraryPage() {
       Upload sources
     </Button>
   );
-  const message = uploadMessage ? (
-    <p role="status" className="text-sm text-[var(--accent-green-dark)]">
-      {uploadMessage}
-    </p>
-  ) : null;
+  const message = (
+    <>
+      {uploadMessage ? (
+        <p role="status" className="text-sm text-[var(--accent-green-dark)]">
+          {uploadMessage}
+        </p>
+      ) : null}
+      <UploadProgressPanel
+        jobIds={uploadJobIds}
+        onOpenPractice={(id) => {
+          setPractice(id);
+          setTab("extract-chunk");
+          writeUrl("extract-chunk", id);
+        }}
+        onDismiss={() => {
+          setUploadJobIds([]);
+          setUploadMessage(null);
+        }}
+      />
+    </>
+  );
+  // The selected practice's latest upload, for the stored-data view.
+  const ingestionJobId = uploaded ? data.ingestion?.job_id : undefined;
 
   switch (tab) {
     case "extract-chunk":
@@ -182,6 +214,7 @@ export default function AdminConsoleLibraryPage() {
         <>
           {message}
           {data.extraction ? <ExtractChunkTab extraction={data.extraction} onContinue={() => openTab("index-validate")} /> : <MissingStep />}
+          {ingestionJobId ? <StoredDataPanel jobId={ingestionJobId} /> : null}
         </>,
       );
 
@@ -262,6 +295,10 @@ export default function AdminConsoleLibraryPage() {
             onSelect={selectPractice}
             onRequestCorrection={quality ? () => setCorrectionOpen(true) : undefined}
             onOpenQualityReview={uploaded ? () => openTab("quality-review") : undefined}
+            onDeleted={(deletedMessage) => {
+              setUploadMessage(deletedMessage);
+              selectPractice("");
+            }}
           />
           {modals}
         </>,
@@ -277,6 +314,7 @@ function SourceUploadTab({
   onSelect,
   onRequestCorrection,
   onOpenQualityReview,
+  onDeleted,
 }: {
   data: AdminLibrary;
   selectedId: string;
@@ -284,16 +322,22 @@ function SourceUploadTab({
   onRequestCorrection?: () => void;
   /** Uploaded practices are approved and published from the Quality review step. */
   onOpenQualityReview?: () => void;
+  onDeleted: (message: string) => void;
 }) {
   const reviewed = data.qualityReview;
   const selectedRow = data.practiceInventory.find((row) => row.id === selectedId);
   const compact = "px-4 py-2 text-xs font-semibold";
+  // Only practices in the inventory exist on the server; the sample walkthrough has nothing to delete.
+  const deleteButton = selectedRow ? (
+    <DeletePracticeButton key={selectedRow.id} practiceId={selectedRow.id} className={compact} onDeleted={onDeleted} />
+  ) : null;
 
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_440px]">
       <div className="space-y-5">
         <PracticeInventoryPanel rows={data.practiceInventory} activeId={selectedId} onSelect={onSelect} />
         <IngestionJobPanel job={data.latestIngestionJob} />
+        <LibraryUploadsPanel activeId={selectedId} onSelect={onSelect} />
       </div>
 
       {selectedId === reviewed.id ? (
@@ -325,6 +369,7 @@ function SourceUploadTab({
                   build={(reason) => ({ path: `/library/${reviewed.id}/publish`, body: { reason } })}
                 />
               )}
+              {deleteButton}
             </div>
           }
         />
@@ -347,6 +392,7 @@ function SourceUploadTab({
               build={(reason) => ({ path: `/library/${selectedRow.id}/publish`, body: { reason } })}
             />
           ) : null}
+          {deleteButton}
         </Card>
       )}
     </div>

@@ -18,6 +18,12 @@ export { RoleAccessTable } from "@/components/admin-console/RoleAccessTable";
 export { AuditTrailPanel } from "@/components/admin-console/AuditTrailPanel";
 export { UploadSourcesModal } from "@/components/admin-console/UploadSourcesModal";
 export {
+  DeletePracticeButton,
+  LibraryUploadsPanel,
+  StoredDataPanel,
+  UploadProgressPanel,
+} from "@/components/admin-console/LibraryIngestion";
+export {
   ApprovePublishTab,
   ExtractChunkTab,
   IndexValidateTab,
