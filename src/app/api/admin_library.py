@@ -1,6 +1,6 @@
 """Admin console: the Leading Practice library, from source upload to published practice.
 
-Upload sources is asynchronous: the endpoint stages each file and queues the ingestion pipeline
+Upload sources is asynchronous: the endpoint stores each file in SeaweedFS (S3) and queues the ingestion pipeline
 (``src/workers``), which is the single path for extraction, chunking and embedding. Its ``intake`` stage creates
 (or adds a version to) a practice and its ingestion job; ``library_validation`` runs the library's quality checks
 (``src.memory.knowledge.practice_ingest``) on the pipeline's own passages. The job record, in the
@@ -20,7 +20,6 @@ import json
 import logging
 import re
 import shutil
-import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -145,11 +144,6 @@ def _admin_event(db: Session, admin: User, title: str, detail: str) -> None:
 
 
 # --- upload ---------------------------------------------------------------------------------------------------------
-
-
-def staging_dir() -> Path:
-    """Uploaded bytes wait here until the worker's intake stage files them under ``uploads/<job>``."""
-    return ingest.library_root() / "staging"
 
 
 class Unchanged(Exception):
@@ -314,11 +308,8 @@ async def upload_library_sources(
         "version": version.strip(),
     }
     for name, content, practice in accepted:
-        staged = staging_dir() / uuid.uuid4().hex / name
-        staged.parent.mkdir(parents=True, exist_ok=True)
-        staged.write_bytes(content)
         job = await asyncio.to_thread(
-            queue_document, db, project_id=LIBRARY_SCOPE, user_id=admin.id, filename=name, local_path=staged,
+            queue_document, db, project_id=LIBRARY_SCOPE, user_id=admin.id, filename=name, content=content,
             sha256=hashlib.sha256(content).hexdigest(), size_bytes=len(content), library={**form, "practice_id": practice},
         )
         jobs.append(await _upload_entry(db, job, name, content, practice))
@@ -335,14 +326,15 @@ def _lock_library_ids(db: Session) -> None:
 
 
 def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
-    """Stage ``intake``: check the staged source, reject duplicates, create the practice or a new version of it.
+    """Stage ``intake``: check the source stored in S3, reject duplicates, create the practice or a new version of it.
 
-    Returns ``library_job_id``, ``practice_id``, ``local_path`` (stored source) and ``doc_key`` for later stages.
+    Returns ``library_job_id``, ``practice_id`` and ``doc_key`` for later stages.
     """
+    from src.core.storage.seaweedfs_client import get_seaweedfs_client
+
     form = ctx["library"]
     filename = ctx["filename"]
-    staged = Path(ctx["local_path"])
-    content = staged.read_bytes()
+    content = get_seaweedfs_client().get_file(ctx["s3_key"])
     try:
         ingest.check_source(filename, content)
     except ingest.SourceRejected as exc:
@@ -392,7 +384,6 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
         maturity = maturity or (previous[0].get("maturity") if previous else "") or practice.maturity
 
     job_id = _next_job_id(db)
-    stored = ingest.store_upload(job_id, filename, content)
     now = datetime.now()
     open_correction = next((j["correction"] for j in previous if (j.get("correction") or {}).get("status") == "Open"), None)
     if open_correction is not None:
@@ -444,11 +435,9 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
     db.add(WorkbenchRecord(collection=CHUNKS, record_id=job_id, payload_json=json.dumps({"blocks": [], "chunks": []})))
     _admin_event(db, admin, f"{job_id} uploaded: {filename}", f"{practice_id.upper()} {candidate_version} · processing")
     db.commit()
-    shutil.rmtree(staged.parent, ignore_errors=True)
     return {
         "library_job_id": job_id,
         "practice_id": practice_id,
-        "local_path": str(stored),
         "doc_key": practice_document_key(practice_id, f"{job_id}/{filename}"),
     }
 

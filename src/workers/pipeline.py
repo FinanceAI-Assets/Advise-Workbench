@@ -16,8 +16,8 @@ previous version everywhere. Deleting a file removes it from S3, Postgres and Qd
 from __future__ import annotations
 
 import logging
+import mimetypes
 import uuid
-from pathlib import Path
 from typing import Any
 
 from celery import Task, chain
@@ -55,6 +55,10 @@ TERMINAL_STATUSES = {"completed", "failed", "deleted"}
 
 class PermanentIngestionError(ValueError):
     """A failure that retrying cannot fix (bad file, nothing to index, file replaced)."""
+
+
+def s3_key_for(project_id: str, job_id: str, filename: str) -> str:
+    return f"{settings.s3_intake_prefix.strip('/')}/{project_id}/{job_id}/{filename}"
 
 
 def update_job(db: Session, job_id: str, **fields: Any) -> DocumentJob:
@@ -291,17 +295,20 @@ def queue_document(
     project_id: str,
     user_id: str,
     filename: str,
-    local_path: Path,
+    content: bytes,
     sha256: str,
     size_bytes: int,
     library: dict[str, Any] | None = None,
 ) -> DocumentJob:
-    """Create the DocumentJob for a file saved under the workspace and queue the pipeline (unless unchanged).
+    """Create the DocumentJob, store the file in SeaweedFS (S3) and queue the pipeline (unless unchanged).
 
+    Workers read the file from S3 only, so any worker on the shared queue can process any API's upload.
     ``library`` carries the Library management upload form (owner, rights, taxonomy, target practice); the
     ``intake`` stage turns it into the practice and library job. Library uploads are never "unchanged": every
     upload is a new version that goes through review.
     """
+    from src.core.storage.seaweedfs_client import get_seaweedfs_client
+
     now = ist_now()
     job = DocumentJob(
         id=f"doc_{uuid.uuid4().hex[:12]}",
@@ -329,12 +336,32 @@ def queue_document(
 
     db.add(job)
     db.commit()
+    key = s3_key_for(project_id, job.job_id, filename)
+
+    def fail(message: str) -> bool:
+        """Mark the job failed at ``queue`` if no stage ran; returns whether it did."""
+        logger.error("[PIPELINE] Queueing job %s failed: %s", job.job_id, message)
+        db.refresh(job)
+        if job.status != "pending":
+            return False
+        job.status = "failed"
+        job.failed_stage = "queue"
+        job.error_message = message[:1000]
+        job.updated_at = ist_now()
+        db.commit()
+        return True
+
+    try:
+        get_seaweedfs_client().upload_file(key, content, mimetypes.guess_type(filename)[0] or "application/octet-stream")
+    except Exception as e:
+        fail(f"Could not store the upload in S3 (SeaweedFS): {e}")
+        return job
     ctx = {
         "job_id": job.job_id,
         "project_id": project_id,
         "user_id": user_id,
         "filename": filename,
-        "local_path": str(local_path.resolve()),
+        "s3_key": key,
         "sha256": sha256,
         "knowledge": bool(settings.knowledge_building_enabled),
         "library": library,
@@ -342,14 +369,11 @@ def queue_document(
     try:
         start_pipeline(ctx)
     except Exception as e:
-        db.refresh(job)
-        if job.status == "pending":  # no stage ran, so the message never reached the broker
-            job.status = "failed"
-            job.failed_stage = "queue"
-            job.error_message = f"Could not queue the ingestion pipeline (is RabbitMQ running?): {e}"[:1000]
-            job.updated_at = ist_now()
-            db.commit()
-        logger.error("[PIPELINE] Queueing job %s failed: %s", job.job_id, e)
+        if fail(f"Could not queue the ingestion pipeline (is RabbitMQ running?): {e}"):
+            try:  # the message never reached the broker, so no worker will read the stored file
+                get_seaweedfs_client().delete_file(key)
+            except Exception:
+                logger.warning("[PIPELINE] Could not remove s3 object %s of unqueued job %s", key, job.job_id)
     else:
         logger.info("[PIPELINE] Queued job %s for %s", job.job_id, filename)
     return job
