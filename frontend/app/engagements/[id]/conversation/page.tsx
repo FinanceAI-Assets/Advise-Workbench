@@ -3,7 +3,7 @@
 import { ArrowUpRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   ActiveSkillPanel,
@@ -23,6 +23,7 @@ import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageF
 import { useConversationQuery, useSendMessageMutation } from "@/hooks/useEngagementConversation";
 import { useEngagementDetailQuery } from "@/hooks/useEngagements";
 import {
+  handoffDraftKey,
   useActivateConversationMutation,
   useConversationContextQuery,
   useSelectSkillMutation,
@@ -47,6 +48,15 @@ export default function EngagementConversationPage() {
   const selectSkill = useSelectSkillMutation();
   const [newTitle, setNewTitle] = useState<string | null>(null);
   const [draft, setDraft] = useState({ id: 0, text: "" });
+
+  // A brief handed off from the library's "Use in engagement" waits in the composer for review; it is not sent.
+  useEffect(() => {
+    if (!id) return;
+    const brief = window.sessionStorage.getItem(handoffDraftKey(id));
+    if (!brief) return;
+    window.sessionStorage.removeItem(handoffDraftKey(id));
+    setDraft((prev) => ({ id: prev.id + 1, text: brief }));
+  }, [id]);
 
   if (conversation.isPending || engagement.isPending || context.isPending) return <PageSkeleton />;
 

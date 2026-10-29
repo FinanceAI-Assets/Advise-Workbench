@@ -46,6 +46,7 @@ class LPState(TypedDict, total=False):
     query: str
     max_results: int
     want_answer: bool
+    practice_ids: list[str]
     search_text: str
     passages: int
     keyword_hits: list[tuple[int, float]]
@@ -67,15 +68,20 @@ def _prepare_query(state: LPState) -> LPState:
     return {"search_text": query}
 
 
+def _candidates(state: LPState) -> int:
+    # A practice filter drops most hits in select, so look deeper to still find passages of those practices.
+    return CANDIDATES * 10 if state.get("practice_ids") else CANDIDATES
+
+
 def _keyword(state: LPState) -> LPState:
-    return {"keyword_hits": lp_index.keyword_search(lp_index.load_index(), state["search_text"], CANDIDATES)}
+    return {"keyword_hits": lp_index.keyword_search(lp_index.load_index(), state["search_text"], _candidates(state))}
 
 
 def _semantic(state: LPState) -> LPState:
     if not settings.lp_rag_semantic_enabled:
         return {"semantic_hits": []}
     try:
-        return {"semantic_hits": lp_index.semantic_search(lp_index.load_index(), state["search_text"], CANDIDATES)}
+        return {"semantic_hits": lp_index.semantic_search(lp_index.load_index(), state["search_text"], _candidates(state))}
     except Exception as exc:  # noqa: BLE001 — the embedding model may be missing; keyword search still answers
         _LOG.warning("leading practice library: semantic search unavailable: %s", exc)
         return {"semantic_hits": []}
@@ -94,10 +100,13 @@ def _fuse(state: LPState) -> LPState:
 
 def _select(state: LPState) -> LPState:
     chunks = lp_index.load_index().chunks
+    only = set(state.get("practice_ids") or [])
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for position, score in state["fused"]:
         chunk = chunks[position]
+        if only and chunk.get("practice_id") not in only:
+            continue
         key = " ".join(chunk["text"].split())[:200]
         if key in seen:
             continue
@@ -157,9 +166,16 @@ def build_lp_rag_graph() -> Any:
     return graph.compile()
 
 
-def run_lp_rag(query: str, *, max_results: int = 5, want_answer: bool = False) -> LPState:
-    """Search the library; with ``want_answer`` also write an answer that cites the passages found."""
+def run_lp_rag(
+    query: str, *, max_results: int = 5, want_answer: bool = False, practice_ids: list[str] | None = None
+) -> LPState:
+    """Search the library; with ``want_answer`` also write an answer that cites the passages found.
+
+    ``practice_ids`` keeps only passages of those published practices (the "selected sources only" scope).
+    """
     with start_span("rag.lp", attributes={"rag.query_chars": len(query), "rag.want_answer": want_answer}) as span:
-        final = build_lp_rag_graph().invoke({"query": query, "max_results": max_results, "want_answer": want_answer})
+        final = build_lp_rag_graph().invoke(
+            {"query": query, "max_results": max_results, "want_answer": want_answer, "practice_ids": practice_ids or []}
+        )
         span.set_attribute("rag.results", len(final.get("results") or []))
         return final

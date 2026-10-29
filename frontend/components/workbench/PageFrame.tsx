@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { Skeleton } from "@/components/ui/Skeleton";
 
-/** Standard workbench page layout: breadcrumb, title row with actions, content, and the sample-content footer. */
+/** Standard workbench page layout: breadcrumb, title row with actions, and content. The shell adds the footer. */
 export function PageFrame({
   breadcrumb,
   title,
@@ -29,10 +29,6 @@ export function PageFrame({
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </header>
       {children}
-      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--surface-border)] pt-4 text-xs text-[var(--text-muted)]">
-        <span>Illustrative content only · No real client or confidential information</span>
-        <span>Advise Workbench · Secure advisory environment</span>
-      </footer>
     </main>
   );
 }

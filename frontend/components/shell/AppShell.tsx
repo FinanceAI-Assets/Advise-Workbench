@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { AppFooter } from "@/components/shell/AppFooter";
 import { ShellSidebar } from "@/components/shell/ShellSidebar";
 import { ShellTopbar } from "@/components/shell/ShellTopbar";
 import { useAuth } from "@/lib/auth-context";
@@ -76,10 +77,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         desktopCollapsed={desktopNavCollapsed}
         onDesktopToggle={() => setDesktopNavCollapsed((prev) => !prev)}
       />
-      <div className="app-shell-body relative z-[1] min-w-0 flex-1">
+      <div className="app-shell-body relative z-[1] flex min-h-screen min-w-0 flex-1 flex-col">
         <ShellTopbar onMenuClick={() => setMobileNavOpen(true)} />
-        <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-[1400px] p-4 md:p-6 outline-none">
-          {children}
+        {/* The main area fills the window height so the footer stays at the bottom on short pages. */}
+        <main id="main-content" tabIndex={-1} className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col p-4 md:p-6 outline-none">
+          <div className="flex-1">{children}</div>
+          <AppFooter />
         </main>
       </div>
     </div>

@@ -45,9 +45,12 @@ class LeadingPracticeLibraryService:
         cache_service.set(cache_key, {"results": results}, ttl_seconds=300)
         return results
 
-    def answer(self, question: str, *, max_results: int = 5) -> dict[str, Any]:
-        """An answer written from the library, with the passages it cites (numbered from 1)."""
-        final = run_lp_rag(question.strip(), max_results=max_results, want_answer=True)
+    def answer(self, question: str, *, max_results: int = 5, practice_ids: list[str] | None = None) -> dict[str, Any]:
+        """An answer written from the library, with the passages it cites (numbered from 1).
+
+        ``practice_ids`` limits the passages to those published practices.
+        """
+        final = run_lp_rag(question.strip(), max_results=max_results, want_answer=True, practice_ids=practice_ids)
         increment("lp_rag_answers_total")
         return {"answer": final.get("answer") or "The Leading Practice library is empty.", "sources": final.get("results") or []}
 

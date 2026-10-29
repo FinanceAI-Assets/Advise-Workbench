@@ -99,6 +99,25 @@ def test_a_whole_document_as_the_query_is_shortened(library) -> None:
     assert final["results"][0]["heading"] == "Three-way match"
 
 
+def test_practice_filter_keeps_only_passages_of_those_practices(library, monkeypatch: pytest.MonkeyPatch) -> None:
+    def released() -> list[dict]:
+        return [
+            {"id": f"rel-{pid}", "path": f"published/{pid}", "heading": heading, "text": text, "source": "published",
+             "practice_id": pid, "job_id": f"job-{pid}"}
+            for pid, heading, text in (
+                ("lp-001", "Invoice controls", "Match every invoice to its purchase order before payment."),
+                ("lp-002", "Invoice approvals", "Route each invoice to a named approver before payment."),
+            )
+        ]
+
+    monkeypatch.setattr(lp_index, "_released_passages", released)
+    lp_index._index = None
+    everything = lp_rag.run_lp_rag("invoice before payment", max_results=8)["results"]
+    assert {r.get("practice_id") for r in everything} >= {"lp-001", "lp-002", None}
+    only = lp_rag.run_lp_rag("invoice before payment", max_results=8, practice_ids=["lp-002"])["results"]
+    assert [r["practice_id"] for r in only] == ["lp-002"]
+
+
 def test_index_is_rebuilt_when_a_file_changes(library) -> None:
     assert service.search("cash forecasting") == []
     (library / "treasury.md").write_text("# Treasury\n\nRolling thirteen-week cash forecasting.\n", encoding="utf-8")
