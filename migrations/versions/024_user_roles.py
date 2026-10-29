@@ -18,7 +18,7 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("users") as batch_op:
         batch_op.add_column(sa.Column("role", sa.String(32), nullable=True, server_default="member"))
-    op.execute("UPDATE users SET role = 'admin' WHERE is_admin = 1")
+    op.execute("UPDATE users SET role = 'admin' WHERE is_admin IS TRUE")
     op.execute("UPDATE users SET role = 'member' WHERE role IS NULL OR role = ''")
 
 
