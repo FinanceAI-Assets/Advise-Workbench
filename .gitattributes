@@ -1,6 +1,0 @@
-# Shell scripts run under bash (Git Bash on Windows, macOS, Linux). With core.autocrlf=true a Windows
-# checkout would give them CRLF endings, which bash reads as part of every command ("$'\r': command not found").
-*.sh text eol=lf
-Dockerfile text eol=lf
-*.cmd text eol=crlf
-*.bat text eol=crlf
