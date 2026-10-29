@@ -51,6 +51,8 @@ def _auth_allow_self_signup_for_integration_tests(monkeypatch: pytest.MonkeyPatc
     # Integration tests predate the collaborative storyline flow and only need a confirmed plan
     # to exercise downstream behaviour; the legacy discovery→plan path reaches ready_for_confirmation.
     monkeypatch.setattr(settings, "collaborative_building_enabled", False)
+    # Unit tests use in-process stand-ins for the shared services; a developer's CA file is irrelevant.
+    monkeypatch.setattr(settings, "ssl_ca_file", "")
 
 
 @pytest.fixture(autouse=True)

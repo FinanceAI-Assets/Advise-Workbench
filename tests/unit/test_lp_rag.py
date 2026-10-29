@@ -34,6 +34,12 @@ Publish a close calendar with owners and deadlines. Leading teams close the book
 _CONCEPTS = ["invoice", "close", "supplier"]
 
 
+@pytest.fixture(autouse=True)
+def _only_file_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests cover the file sources; released practices (from the shared test database) are left out."""
+    monkeypatch.setattr(lp_index, "_released_passages", lambda: [])
+
+
 def _fake_embed(texts: list[str]) -> np.ndarray:
     """One dimension per concept, so 'meaning' is predictable without loading the real model."""
     synonyms = {"invoice": ["invoice", "bill", "payment"], "close": ["close", "month-end", "books"], "supplier": ["supplier", "vendor"]}
