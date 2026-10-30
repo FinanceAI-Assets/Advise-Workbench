@@ -65,14 +65,6 @@ def published_dir() -> Path:
     return library_root() / "published"
 
 
-def store_upload(job_id: str, filename: str, content: bytes) -> Path:
-    """Keep the original source for provenance; corrections arrive as new jobs, so nothing is overwritten."""
-    target = library_root() / "uploads" / job_id / Path(filename).name
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
-    return target
-
-
 # --- 1. extract & chunk --------------------------------------------------------------------------------------------
 
 

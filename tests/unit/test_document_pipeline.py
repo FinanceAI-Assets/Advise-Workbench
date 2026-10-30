@@ -82,14 +82,11 @@ def env(monkeypatch, tmp_path):
 
     def upload(content: bytes = None, filename: str = "vendor.md") -> str:
         content = content or f"# source {uuid.uuid4().hex}".encode()
-        staged = tmp_path / uuid.uuid4().hex / filename
-        staged.parent.mkdir(parents=True)
-        staged.write_bytes(content)
         form = {"owner": "Maya Patel", "classification": "Internal", "rights": "Internal reuse permitted",
                 "title": "", "category": "Procurement", "maturity": "", "version": "", "practice_id": ""}
         with session_scope() as db:
             return pipeline.queue_document(db, project_id=LIBRARY_SCOPE, user_id=uid, filename=filename,
-                                           local_path=staged, sha256=hashlib.sha256(content).hexdigest(),
+                                           content=content, sha256=hashlib.sha256(content).hexdigest(),
                                            size_bytes=len(content), library=form).job_id
 
     return {**fakes, "upload": upload, "uid": uid, "parser": parser}
@@ -136,6 +133,30 @@ def test_upload_runs_every_stage(env):
         assert {f.fact_name for f in db.query(ExtractedFact).filter(ExtractedFact.project_id == LIBRARY_SCOPE)} >= {"Buyer"}
         assert env["get_store"]("wiki_pages").count(project_id=LIBRARY_SCOPE) >= 2
         assert db.query(InAppNotification).filter(InAppNotification.user_id == env["uid"]).one().notification_type == "success"
+
+
+def test_worker_reads_the_upload_from_s3_not_the_api_disk(env, monkeypatch, tmp_path):
+    queued, start = [], pipeline.start_pipeline
+    monkeypatch.setattr(pipeline, "start_pipeline", queued.append)
+    content = f"# Vendor onboarding\n\n{BODY}".encode()
+    job_id = env["upload"](content=content)
+    ctx = queued[0]
+    assert "local_path" not in ctx and env["s3"].objects[ctx["s3_key"]] == content  # stored before any stage runs
+    # The worker runs on another machine: a different, empty workspace.
+    monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "worker"))
+    start(ctx)
+    with session_scope() as db:
+        assert _job(db, job_id).status == "completed" and _doc(db, job_id).seaweedfs_file_id == ctx["s3_key"]
+    assert len(env["s3"].objects) == 1  # stored once, not uploaded again
+
+
+def test_rejected_intake_removes_the_stored_upload(env):
+    job_id = env["upload"](content=b"a,b\n1,2\n", filename="table.csv")
+    with session_scope() as db:
+        job = _job(db, job_id)
+        assert job.status == "failed" and job.failed_stage == "intake"
+        job.status = "deleted"  # the library scope is shared across tests; keep it out of pending uploads
+    assert env["s3"].objects == {}
 
 
 def test_status_lists_every_stage_in_order(env):
