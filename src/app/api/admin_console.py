@@ -424,7 +424,7 @@ def library_management(
     screen = {**_library_sample(), **_screen(db, "admin_library")}
     inventory = admin_library.inventory_rows(db)
     sections = admin_library.library_sections(db, practice.strip().lower() or None)
-    return {
+    view = {
         **screen,
         "selectedPracticeId": screen.get("qualityReview", {}).get("id", ""),
         "pipelineSource": "sample",
@@ -433,6 +433,11 @@ def library_management(
         "practiceInventory": inventory,
         "ingestionJobs": admin_library.job_table_rows(db),
     }
+    # Ingestion pipeline: the selected practice's latest upload (same object as each inventory row's
+    # ``ingestion`` and /api/admin/library/documents/status/{job_id}), and uploads not yet attached to a practice.
+    view["ingestion"] = admin_library.ingestion_for_practice(db, view.get("selectedPracticeId") or None)
+    view["pendingUploads"] = admin_library.pending_uploads(db)
+    return view
 
 
 def _practice_review(db: Session, practice_id: str) -> tuple[LpPractice, Review | None]:

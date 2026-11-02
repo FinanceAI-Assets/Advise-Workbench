@@ -291,15 +291,74 @@ export type LibraryAnswer = {
   answer: string;
   practices: Array<{ id: string; title: string; category: string }>;
   documents: Array<{ practiceId: string; practice: string; filename: string }>;
-  sources: Array<{ heading: string; source: string; text: string }>;
+  // practiceId is empty for passages from library files outside the approved catalog.
+  sources: Array<{ heading: string; source: string; text: string; practiceId: string }>;
 };
 
+/** Talk to data: `practiceIds` limits the answer to those approved practices ("Ask selected sources only"). */
+export type LibraryQuestion = { question: string; practiceIds?: string[]; maxResults?: number };
+
 export function useLibraryAskMutation() {
-  return useWorkbenchMutation<string, LibraryAnswer>(
-    (question) => ({ path: "/api/library/ask", body: { question } }),
+  return useWorkbenchMutation<LibraryQuestion, LibraryAnswer>(
+    (body) => ({ path: "/api/library/ask", body }),
     "Could not answer the question",
     []
   );
+}
+
+/** The signed-in user's active engagements, for the "Use in engagement" destination picker. */
+export function useMyEngagementOptionsQuery() {
+  return useWorkbenchQuery<{ items: Array<{ id: string; name: string; code: string }> }>(
+    ["engagements", "options"],
+    "/api/engagements?status=active&mine=true&page=1&page_size=100",
+    "Failed to load engagements"
+  );
+}
+
+export type LibraryHandoff = {
+  projectId: string;
+  practiceIds: string[];
+  // An existing conversation to continue, or the title of a new one.
+  conversation: { id: string } | { title: string };
+  brief: string;
+};
+
+/** Key under which the handoff brief waits for the engagement conversation page to put it in the composer. */
+export const handoffDraftKey = (pid: string) => `aw:library-handoff:${pid}`;
+
+/**
+ * Use in engagement: add each selected practice to the engagement's sources, open the target conversation,
+ * and leave the edited brief as a draft there. Nothing is sent to Sheldon and no artifact is generated.
+ */
+export function useLibraryHandoffMutation() {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ projectId, practiceIds, conversation, brief }: LibraryHandoff) => {
+      for (const id of practiceIds) {
+        await fetchJson(api, `/api/library/${enc(id)}/add-to-engagement`, `Could not add ${id.toUpperCase()}`, {
+          method: "POST",
+          body: JSON.stringify({ projectId }),
+        });
+      }
+      const base = `/api/engagements/${enc(projectId)}/conversations`;
+      if ("title" in conversation) {
+        await fetchJson(api, base, "Could not start the conversation", {
+          method: "POST",
+          body: JSON.stringify({ title: conversation.title }),
+        });
+      } else {
+        await fetchJson(api, `${base}/${enc(conversation.id)}/activate`, "Could not open the conversation", { method: "POST" });
+      }
+      if (brief.trim()) window.sessionStorage.setItem(handoffDraftKey(projectId), brief.trim());
+      return { projectId };
+    },
+    onSettled: (_data, _error, { projectId }) => {
+      for (const key of [["library"], ["practice"], ["engagement", projectId], ["conversation-context", projectId], ["conversation", projectId]]) {
+        void qc.invalidateQueries({ queryKey: key });
+      }
+    },
+  });
 }
 
 export function useSkillsQuery(q: string) {

@@ -213,11 +213,6 @@ export default function EngagementsPage() {
           <RecentActivityPanel items={recentActivity.data ?? []} />
         )}
       </section>
-
-      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--surface-border)] pt-4 text-xs text-[var(--text-muted)]">
-        <span>Illustrative content only · No real client or confidential information</span>
-        <span>Advise Workbench · Secure advisory environment</span>
-      </footer>
     </main>
   );
 }

@@ -134,8 +134,12 @@ export function UploadSourcesModal({
     if (version.trim()) form.append("version", version.trim());
     if (practice) form.append("practice_id", practice.id);
     else if (files.length === 1 && title.trim()) form.append("title", title.trim());
-    const result = await upload.mutateAsync(form);
-    onUploaded(result.jobs);
+    try {
+      const result = await upload.mutateAsync(form);
+      onUploaded(result.jobs);
+    } catch {
+      // upload.error is shown in the dialog (ErrorNote below).
+    }
   }
 
   return (
@@ -186,7 +190,7 @@ export function UploadSourcesModal({
             >
               <label
                 className={cn(
-                  "block cursor-pointer rounded-md border border-dashed p-5 text-center transition focus-within:ring-2 focus-within:ring-[var(--coral-black)]",
+                  "block cursor-pointer rounded-md border border-dashed p-5 text-center transition focus-within:ring-2 focus-within:ring-[var(--accent-green)]",
                   dragging
                     ? "border-[var(--accent-green)] bg-[#EFF6E6]"
                     : "border-[var(--surface-border-strong)] bg-[var(--surface-muted)] hover:border-[var(--accent-green)]"
@@ -308,7 +312,7 @@ export function UploadSourcesModal({
               Cancel
             </Button>
             <Button type="submit" disabled={upload.isPending}>
-              {upload.isPending ? "Extracting and validating…" : "Start extraction"}
+              {upload.isPending ? "Uploading…" : "Start extraction"}
             </Button>
           </div>
         </form>

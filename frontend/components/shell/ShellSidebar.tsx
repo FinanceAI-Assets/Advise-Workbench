@@ -3,12 +3,14 @@
 import {
   Briefcase,
   ClipboardCheck,
+  FileStack,
   HelpCircle,
   Library,
-  LayoutGrid,
   LogOut,
+  MessagesSquare,
   ShieldCheck,
   Settings,
+  Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
   X,
@@ -45,25 +47,25 @@ function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
       active: pathname === "/engagements" || (Boolean(engagementId) && !isConversation && !isDeliverables),
     },
     {
-      href: engagementId ? `/engagements/${engagementId}/conversation` : "/conversation",
-      label: "Conversation",
-      icon: LayoutGrid,
-      active: isConversation,
-    },
-    {
-      href: engagementId ? `/engagements/${engagementId}/deliverables` : "/deliverables",
-      label: "Deliverables",
-      icon: LayoutGrid,
-      active: isDeliverables,
-    },
-    {
       href: "/library",
       label: "Leading Practice Library",
       icon: Library,
       active: pathname.startsWith("/library"),
     },
-    { href: "/skills", label: "Skills", icon: LayoutGrid, active: pathname.startsWith("/skills") },
+    {
+      href: engagementId ? `/engagements/${engagementId}/conversation` : "/conversation",
+      label: "Conversation",
+      icon: MessagesSquare,
+      active: isConversation,
+    },
     { href: "/reviews", label: "Reviews", icon: ClipboardCheck, active: pathname.startsWith("/reviews") },
+    {
+      href: engagementId ? `/engagements/${engagementId}/deliverables` : "/deliverables",
+      label: "Deliverables",
+      icon: FileStack,
+      active: isDeliverables,
+    },
+    { href: "/skills", label: "Skills", icon: Sparkles, active: pathname.startsWith("/skills") },
   ];
 
   return (

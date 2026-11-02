@@ -23,6 +23,10 @@ DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 def _workspace_in_tmp(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path))
     monkeypatch.setattr(settings, "lp_library_local_path", "")
+    # Uploads run through the ingestion pipeline; run it in-process against local stand-ins.
+    from tests.unit import _pipeline_fakes
+
+    _pipeline_fakes.install(monkeypatch)
 
 
 def _login(client: TestClient, prefix: str, *, admin: bool = False) -> tuple[dict[str, str], str]:
@@ -67,10 +71,10 @@ def test_uploaded_practice_reaches_the_library_only_after_approval_and_publicati
     approver, approver_id = _login(client, "approver")
     topic = f"Onboarding {uuid.uuid4().hex[:6]}"
 
-    # 1. Upload: extract, chunk, index and validate run immediately; reference 2 has no attributable source.
+    # 1. Upload: the ingestion pipeline extracts, chunks, indexes and validates; reference 2 has no attributable source.
     source = _source(topic, attributed=False)
     upload = _upload(client, admin, source, "onboarding.docx")
-    assert upload.status_code == 201, upload.text
+    assert upload.status_code == 202, upload.text
     job = upload.json()["jobs"][0]
     practice_id = job["practiceId"]
     assert job["readable"] and job["stage"] == "Quality review"
@@ -100,7 +104,7 @@ def test_uploaded_practice_reaches_the_library_only_after_approval_and_publicati
     assert correction.status_code == 200
     corrected = _upload(client, admin, _source(topic, attributed=True), "onboarding-corrected.docx",
                         practice_id=practice_id, category="", maturity="")  # keeps the candidate's taxonomy
-    assert corrected.status_code == 201, corrected.text
+    assert corrected.status_code == 202, corrected.text
     screen = client.get(f"/api/admin/library?practice={practice_id}", headers=admin).json()
     assert all(g["passed"] for g in screen["qualityGates"]["gates"])
     assert screen["qualityGates"]["canSubmit"] and not screen["release"]["canPublish"]
@@ -149,7 +153,7 @@ def test_a_new_version_keeps_the_live_practice_served_until_it_is_released() -> 
     assert client.post(f"/api/admin/library/{practice_id}/publish", headers=admin, json={"reason": "First release"}).status_code == 200
 
     second = _upload(client, admin, _source(f"{topic} v2", attributed=False), "renewal-v2.docx", practice_id=practice_id)
-    assert second.status_code == 201
+    assert second.status_code == 202
     live = client.get(f"/api/library/{practice_id}", headers=member).json()
     assert live["status"] == "Approved" and live["versionLabel"] == "v1.0"
     client.post(f"/api/admin/library/{practice_id}/request-correction", headers=admin, json={"reason": "Fix reference 2."})

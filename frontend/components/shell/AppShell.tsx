@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { AppFooter } from "@/components/shell/AppFooter";
 import { ShellSidebar } from "@/components/shell/ShellSidebar";
 import { ShellTopbar } from "@/components/shell/ShellTopbar";
 import { useAuth } from "@/lib/auth-context";
@@ -66,7 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen bg-[var(--primary-50)] text-[var(--primary-900)]">
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--primary-900)] focus:shadow-lg focus:outline-2 focus:outline-[var(--accent-blue)]"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--primary-900)] focus:shadow-lg focus:outline-2 focus:outline-[var(--accent-green)]"
       >
         Skip to main content
       </a>
@@ -76,10 +77,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         desktopCollapsed={desktopNavCollapsed}
         onDesktopToggle={() => setDesktopNavCollapsed((prev) => !prev)}
       />
-      <div className="app-shell-body relative z-[1] min-w-0 flex-1">
+      <div className="app-shell-body relative z-[1] flex min-h-screen min-w-0 flex-1 flex-col">
         <ShellTopbar onMenuClick={() => setMobileNavOpen(true)} />
-        <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-[1400px] p-4 md:p-6 outline-none">
-          {children}
+        {/* The main area fills the window height so the footer stays at the bottom on short pages. */}
+        <main id="main-content" tabIndex={-1} className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col p-4 md:p-6 outline-none">
+          <div className="flex-1">{children}</div>
+          <AppFooter />
         </main>
       </div>
     </div>

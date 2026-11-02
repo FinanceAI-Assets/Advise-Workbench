@@ -61,6 +61,7 @@ Working on the code: integration guides and conventions.
 |---|---|
 | [anthropic_skills_reconciliation.md](04-development/anthropic_skills_reconciliation.md) | Anthropic skills reconciliation (mapped built-ins) |
 | [layering.md](04-development/layering.md) | Layering rules |
+| [library-query-api.md](04-development/library-query-api.md) | Library Q&A API (frontend integration) |
 | [model-providers.md](04-development/model-providers.md) | Model providers |
 
 ## 05-testing
@@ -86,6 +87,7 @@ Running it: operations, topology, security, hardening.
 | [PRODUCTION_HARDENING_PLAN_2026-04-21.md](06-deployment-operations/PRODUCTION_HARDENING_PLAN_2026-04-21.md) | Production Hardening Plan (2026-04-21) |
 | [PRODUCTION_TOPOLOGY.md](06-deployment-operations/PRODUCTION_TOPOLOGY.md) | Production topology (500-user scale) |
 | [SECURITY.md](06-deployment-operations/SECURITY.md) | Security operations checklist |
+| [SHARED_SERVICES.md](06-deployment-operations/SHARED_SERVICES.md) | Shared team backend services (Postgres, Redis, RabbitMQ, SeaweedFS, Qdrant, TEI, OpenObserve, Celery/Docling) |
 | [V4_HARDENING_EXECUTION_CHECKLIST.md](06-deployment-operations/V4_HARDENING_EXECUTION_CHECKLIST.md) | v4 Hardening Execution Checklist |
 | [bash_tool_security.md](06-deployment-operations/bash_tool_security.md) | Bash tool (Anthropic-aligned) — security and operations |
 | [observability.md](06-deployment-operations/observability.md) | Monitoring with OpenObserve |
