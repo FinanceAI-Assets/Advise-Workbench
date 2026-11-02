@@ -50,7 +50,10 @@ def _check_broken_links(wiki_type: str, project_id: str | None) -> list:
                 page_id = md_file.stem
                 page_ids.add(page_id)
 
-                content = md_file.read_text(encoding="utf-8")
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id
                 page_titles[page_id] = title
@@ -62,7 +65,10 @@ def _check_broken_links(wiki_type: str, project_id: str | None) -> list:
                 continue
 
             page_id = md_file.stem
-            content = md_file.read_text(encoding="utf-8")
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
 
             # Find [[Page Name]] patterns
             links = re.findall(r"\[\[([^\]]+)\]\]", content)
@@ -170,7 +176,10 @@ def _check_missing_entities(wiki_type: str, project_id: str | None) -> list:
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
 
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id
@@ -288,7 +297,10 @@ def _get_all_wiki_pages(wiki_type: str, project_id: str | None) -> list:
                 continue
 
             page_id = md_file.stem
-            content = md_file.read_text(encoding="utf-8")
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
 
             # Extract metadata from frontmatter
             title = page_id
@@ -774,7 +786,10 @@ def _check_source_freshness(wiki_type: str, project_id: str | None) -> list:
                 continue
 
             page_id = md_file.stem
-            content = md_file.read_text(encoding="utf-8")
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
 
             # Extract metadata
             title = page_id
@@ -889,7 +904,10 @@ def _get_temporal_metrics(wiki_type: str, project_id: str | None) -> dict:
                 continue
 
             metrics["total_pages"] += 1
-            content = md_file.read_text(encoding="utf-8")
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
 
             # Extract last_updated
             last_updated = None

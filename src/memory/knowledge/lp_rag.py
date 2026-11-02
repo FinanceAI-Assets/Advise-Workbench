@@ -27,7 +27,9 @@ from langgraph.graph import END, START, StateGraph
 
 from src.core.config import settings
 from src.core.observability.otel_tracing import start_span
+from src.core.observability.advanced_metrics import record_rag_retrieval
 from src.llm.claude import claude_generate
+import time
 from src.memory.knowledge import lp_index
 from src.memory.retrieval import _tokenize
 from src.prompts.registry import get_prompt

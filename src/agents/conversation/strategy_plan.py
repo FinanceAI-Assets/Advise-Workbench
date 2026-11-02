@@ -6,7 +6,12 @@ import json
 import re
 from typing import Any
 
-from src.llm.claude import _extract_first_json_object, claude_generate_with_thinking, is_claude_enabled
+# [DEPRECATED: Hardcoded thinking-specific imports] Now using provider-agnostic gateway with capability checks
+# [DEPRECATED: Old imports] Use gateway for provider-agnostic LLM access
+# from src.llm.claude import _extract_first_json_object, claude_generate_with_thinking, is_claude_enabled
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+# is_claude_enabled
 from src.prompts.skill_loader import load_builtin_skills
 
 import logging
@@ -36,7 +41,11 @@ def _slug_option_id(title: str, idx: int) -> str:
 
 def generate_strategy_options(*, instruction: str) -> dict[str, Any] | None:
     """Return a validated strategy dossier or None if disabled / unavailable / parse fails."""
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     return None
+    # [NEW: Provider-agnostic gateway check]
+    if not gateway.is_enabled():
         return None
     catalog = _trim_skill_catalog()
     system = (
@@ -66,13 +75,38 @@ def generate_strategy_options(*, instruction: str) -> dict[str, Any] | None:
     )
     try:
         from src.core.config import settings
-
-        result = claude_generate_with_thinking(
-            system=system,
-            user=user,
-            max_tokens=min(4096, int(settings.anthropic_coordinator_plan_max_tokens)),
-            budget_tokens=min(6000, int(settings.anthropic_thinking_budget_tokens)),
-        )
+        # [DEPRECATED: Hardcoded claude_generate_with_thinking] Now using provider-agnostic gateway
+        # result = claude_generate_with_thinking(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with thinking capability check]
+        # gateway imported at module level (line ~14)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        
+        # Check if provider supports extended thinking
+        supports_thinking = gateway.capabilities().extended_thinking
+        
+        if supports_thinking:
+            # Use thinking-enabled call if available
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                max_tokens=min(4096, int(settings.anthropic_coordinator_plan_max_tokens)),
+                temperature=1,  # Required for thinking
+                thinking={"type": "enabled", "budget_tokens": min(6000, int(settings.anthropic_thinking_budget_tokens))},
+            )
+        else:
+            # Fallback to regular call without thinking
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                max_tokens=min(4096, int(settings.anthropic_coordinator_plan_max_tokens)),
+            )
+        
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        result = {"text": text}
     except Exception as exc:
         logger.warning("%s: suppressed error: %s", 'generate_strategy_options', exc)
         return None

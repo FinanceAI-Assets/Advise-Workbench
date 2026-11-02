@@ -52,6 +52,9 @@ from src.guardrails.policy import (
     is_finance_proposal_intent,
 )
 from src.memory.retrieval import TieredContextEngine
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.workflows.orchestrator import append_memory_event, append_run_event, enqueue_run_execution
 from src.extensions.swarm.swarm import persist_instruction_broadcast_swarm_event_payload
 
@@ -489,7 +492,8 @@ def _propose_discovery_questions(
     wiki_prefilled_slots: list[str] | None = None,
     conv_slots: dict | None = None,
 ) -> dict:
-    from src.llm.claude import claude_generate_json
+    # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate_json
 
     prior_context = "\n".join(
         f"{m.get('role', 'user')}: {str(m.get('content') or '').strip()}"
@@ -516,7 +520,13 @@ def _propose_discovery_questions(
         questions = [slot_questions[s] for s in normalized_missing]
     if normalized_missing:
         try:
-            payload = claude_generate_json(
+            # [NEW: Gateway-based provider-agnostic call with JSON extraction - Supports all LLM providers]
+            # All imports at module level: json, gateway, _extract_first_json_object,
+            # _record_message_usage, _extract_final_text_from_message
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
+                max_tokens=300,
+                temperature=0.2,
                 system=(
                     "Generate concise discovery questions for a consulting proposal kickoff. "
                     + (known_context + "\n" if known_context else "")
@@ -526,15 +536,22 @@ def _propose_discovery_questions(
                     )
                     + "Ask ONLY for listed missing_slots. Return JSON: {\"questions\": [\"...\", ...]}."
                 ),
-                user=(
-                    f"Instruction:\n{instruction}\n\n"
-                    f"Missing slots: {normalized_missing}\n\n"
-                    f"Recent context:\n{prior_context}\n\n"
-                    + (f"Wiki context excerpt:\n{str(wiki_context)[:2500]}" if wiki_context else "")
-                ),
-                temperature=0.2,
-                max_tokens=300,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Instruction:\n{instruction}\n\n"
+                        f"Missing slots: {normalized_missing}\n\n"
+                        f"Recent context:\n{prior_context}\n\n"
+                        + (f"Wiki context excerpt:\n{str(wiki_context)[:2500]}" if wiki_context else "")
+                    )
+                }],
             )
+            _record_message_usage(msg)
+            text = _extract_final_text_from_message(msg)
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = _extract_first_json_object(text)
             raw_q = payload.get("questions") if isinstance(payload, dict) else None
             if isinstance(raw_q, list):
                 questions = [str(q).strip() for q in raw_q if str(q).strip()][: max(1, len(normalized_missing))]
@@ -546,7 +563,8 @@ def _propose_discovery_questions(
 
     # Build a contextual, grounded message rather than the generic "3 quick inputs" template.
     # Reference what's already captured so Sheldon sounds like a colleague, not a form.
-    from src.llm.claude import claude_generate as _cg
+    # [DEPRECATED: Hardcoded claude_generate as _cg] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate as _cg
 
     known_bits: list[str] = []
     _client = known_slots.get("client") if isinstance(known_slots.get("client"), dict) else {}
@@ -563,7 +581,25 @@ def _propose_discovery_questions(
     known_summary = "; ".join(known_bits) if known_bits else ""
 
     try:
-        message = _cg(
+        # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        # ORIGINAL (BROKEN): user=(...) parameter was being ignored by all providers
+        # user=(
+        #     f"User said: {instruction}\n\n"
+        #     f"Still need (ask for ONE, the most important): {questions}\n\n"
+        #     f"Recent context:\n{prior_context}"
+        # ),
+
+        # FIX: Use messages=[...] format - works with Anthropic, Ollama, Groq, and all OpenAI-compatible providers
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            # ORIGINAL: max_tokens=200 (too low for extended reasoning)
+            # max_tokens=200,
+            # COMMENTED: max_tokens=1000 (hits Groq rate limits)
+            # max_tokens=1000,
+            max_tokens=400,  # NEW: Balanced for Ollama local + Groq free tier
+            temperature=0.4,
             system=(
                 "You are Sheldon, a consulting copilot. Be a thoughtful colleague, not a form.\n"
                 "Acknowledge what the user just shared (do NOT re-ask anything already captured).\n"
@@ -571,15 +607,25 @@ def _propose_discovery_questions(
                 "Keep it to 2-3 sentences. No numbered lists. One emoji max.\n"
                 + (f"Already established: {known_summary}\n" if known_summary else "")
             ),
-            user=(
-                f"User said: {instruction}\n\n"
-                f"Still need (ask for ONE, the most important): {questions}\n\n"
-                f"Recent context:\n{prior_context}"
-            ),
-            temperature=0.4,
-            max_tokens=200,
-        ).strip()
-    except Exception:
+            # NEW: Use messages=[...] instead of user=(...) - compatible with all providers
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"User said: {instruction}\n\n"
+                        f"Still need (ask for ONE, the most important): {questions}\n\n"
+                        f"Recent context:\n{prior_context}"
+                    )
+                }
+            ],
+        )
+        message = _extract_final_text_from_message(msg).strip()
+    except Exception as exc:
+        _LOG.error(
+            f"Discovery questions LLM call failed in _propose_discovery_questions: "
+            f"{exc.__class__.__name__}: {exc}",
+            exc_info=True
+        )
         q_count = len(questions)
         lead = "One more thing" if q_count == 1 else f"{q_count} things still needed"
         message = f"{lead}:\n- " + "\n- ".join(questions)
@@ -658,7 +704,8 @@ def _persist_conversational_response(
     so responses reference actual facts (e.g. client name, audience, win themes) rather than
     asking for information the user has already supplied.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
 
     recent_context = "\n".join(
         f"{m.get('role', 'user').upper()}: {str(m.get('content') or '')[:600]}"
@@ -673,6 +720,10 @@ def _persist_conversational_response(
     unsurfaced_refs = [x for x in wiki_refs if x not in already_surfaced_refs]
     routed_intent = str(router_intent or "").strip().lower()
     routed_confidence = float(router_confidence or 0.0)
+    
+    # [NEW: Gateway-based provider-agnostic imports for conversational response generation]
+    # gateway imported at module level (line 55)
+    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
     known_bits: list[str] = []
     client = slots.get("client") if isinstance(slots.get("client"), dict) else {}
@@ -760,13 +811,26 @@ def _persist_conversational_response(
     )
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
-            temperature=0.4,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+
+        # [NEW: Gateway-based provider-agnostic call]
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
             max_tokens=400,
-        ).strip()
-    except Exception:
+            temperature=0.4,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg)
+        response_text = _extract_final_text_from_message(msg).strip()
+    except Exception as exc:
+        # NEW: Log the actual error so we can diagnose why fallback is being used
+        _LOG.error(
+            f"Conversational response LLM call failed: "
+            f"{exc.__class__.__name__}: {exc}",
+            exc_info=True
+        )
         response_text = _grounded_conversational_fallback(slots=slots, missing_slots=missing_slots)
 
     msg = ConversationMessage(
@@ -802,7 +866,12 @@ def _persist_acknowledgment_response(
     Grounds the reply in captured slots and project context so responses
     remain coherent mid-conversation rather than generic.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
+    
+    # [NEW: Gateway-based provider-agnostic imports for acknowledgment responses]
+    # gateway imported at module level (line 55)
+    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
     recent_context = "\n".join(
         f"{m.get('role', 'user').upper()}: {str(m.get('content') or '')[:400]}"
@@ -858,12 +927,21 @@ User's acknowledgment: {user_message}
 Respond briefly, referencing the captured context above."""
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=150,
             temperature=0.4,
-            max_tokens=150
-        ).strip()
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg)
+        response_text = _extract_final_text_from_message(msg).strip()
     except Exception:
         response_text = "Great! What would you like to tackle next? 🎯"
 
@@ -900,7 +978,8 @@ def _update_conversation_summary(
     Returns True if the summary was updated; caller must call save_state() afterward.
     Non-blocking: failures are swallowed and return False.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
 
     n = len(messages)
     if n < 10:
@@ -930,12 +1009,21 @@ def _update_conversation_summary(
     user = f"Conversation transcript to summarize:\n\n{transcript}\n\nSummary:"
 
     try:
-        summary = claude_generate(
-            system=system,
-            user=user,
-            temperature=0.2,
+        # [DEPRECATED: Old claude_generate call]
+        # summary = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
             max_tokens=300,
-        ).strip()
+            temperature=0.2,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        summary = _extract_final_text_from_message(msg).strip()
     except Exception:
         return False
 
@@ -1073,7 +1161,12 @@ def _persist_contextual_response(db: Session, conv: Conversation, user_message: 
     Instead of generating a plan, provide a direct answer to the user's question
     using the conversation history for context.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
+    
+    # [NEW: Gateway-based provider-agnostic imports for contextual responses]
+    # gateway imported at module level (line 55)
+    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
     system_prompt = """You are Sheldon, a helpful execution partner in an active project discussion.
 The user has asked a follow-up question about previous context in the conversation.
@@ -1096,12 +1189,19 @@ User's follow-up question: {user_message}
 Provide a direct, contextual response to their question based on what was just discussed."""
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        msg_resp = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=300,
             temperature=0.6,
-            max_tokens=300
-        ).strip()
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg_resp)
+        response_text = _extract_final_text_from_message(msg_resp).strip()
     except Exception:
         # Fallback response
         response_text = (
@@ -1134,7 +1234,8 @@ def _persist_out_of_scope_message(db: Session, conv: Conversation, user_request:
     Creates a funny yet professional message saying we don't support this yet,
     but they can log feedback for future features.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
 
     system_prompt = """You are Sheldon, a helpful and witty digital teammate.
 A user has asked for something outside your current capabilities.
@@ -1157,12 +1258,21 @@ Examples of great tone:
     user_prompt = f"User request: {user_request}\n\nGenerate a short, witty response acknowledging this request is out of scope (no quotes, just the message):"
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=200,
             temperature=0.7,
-            max_tokens=200
-        ).strip()
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg)
+        response_text = _extract_final_text_from_message(msg).strip()
     except Exception:
         # Fallback if LLM unavailable
         response_text = (

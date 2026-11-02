@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 from src.prompts.prompt_hygiene import wrap_untrusted
 from src.core.state import AdviseWorkbenchState
 from src.agents.process_extraction import extract_process_model
 from src.agents.specialists import _shared
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
 
 def run_process_extraction(state: AdviseWorkbenchState) -> AdviseWorkbenchState:
@@ -114,7 +119,26 @@ def run_process_extraction(state: AdviseWorkbenchState) -> AdviseWorkbenchState:
             f"Context:\n{wrap_untrusted('assembled_context', str(ctx))}\n"
         )
         try:
-            pm = _shared.claude_generate_json(system=system, user=user, temperature=0.2, max_tokens=2500)
+            # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+            # pm = _shared.claude_generate_json(system=system, user=user, temperature=0.2, max_tokens=2500)
+            
+            # [NEW: Gateway-based provider-agnostic call with JSON extraction - Supports all LLM providers]
+            # All imports at module level: json, gateway, _extract_first_json_object,
+            # _record_message_usage, _extract_final_text_from_message
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
+                max_tokens=2500,
+                temperature=0.2,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            _record_message_usage(msg)
+            text = _extract_final_text_from_message(msg)
+            try:
+                pm = json.loads(text)
+            except json.JSONDecodeError:
+                pm = _extract_first_json_object(text)
+            
             if isinstance(pm, dict) and isinstance(pm.get("steps"), list):
                 if archetype == "advisory_pov" and is_meta_process_model(pm):
                     retry_user = (

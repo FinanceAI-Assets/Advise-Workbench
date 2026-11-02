@@ -197,7 +197,10 @@ class RelationshipGraph:
 
                 page_file = self.wiki_dir / f"{source_id}.md"
                 if page_file.exists():
-                    content = page_file.read_text(encoding="utf-8")
+                    try:
+                        content = page_file.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        content = page_file.read_text(encoding="latin-1", errors="ignore")
                     # Find context around target mention
                     pattern = r"\[\[" + re.escape(target_id) + r"\]\]"
                     match = re.search(pattern, content, re.IGNORECASE)

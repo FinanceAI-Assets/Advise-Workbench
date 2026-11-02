@@ -8,6 +8,8 @@ import pytest
 from anthropic import BadRequestError
 
 from src.llm import claude as claude_module
+from src.llm.errors import LLMBadRequestError
+
 def _bad_request_error(message: str) -> BadRequestError:
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     response = httpx.Response(400, request=request, json={"error": {"message": message}})
@@ -58,13 +60,11 @@ class _FakeClient:
 
 
 @pytest.fixture(autouse=True)
-def _no_circuit_breaker(monkeypatch):
-    monkeypatch.setattr(claude_module, "_guard_circuit", lambda: None)
-    monkeypatch.setattr(claude_module, "_record_failure", lambda: None)
-    monkeypatch.setattr(claude_module, "_record_success", lambda: None)
-    monkeypatch.setattr(claude_module, "_record_message_usage", lambda _msg: None)
-    monkeypatch.setattr(claude_module, "is_claude_enabled", lambda: True)
-    monkeypatch.setattr(claude_module.settings, "anthropic_api_key", "test-key", raising=False)
+def _anthropic_settings(monkeypatch):
+    monkeypatch.setattr(claude_module.settings, "llm_provider", "anthropic")
+    monkeypatch.setattr(claude_module.settings, "llm_api_key", "")
+    monkeypatch.setattr(claude_module.settings, "llm_model", "")
+    monkeypatch.setattr(claude_module.settings, "anthropic_api_key", "test-key")
 
 
 def test_retries_with_adaptive_thinking_on_legacy_type_rejection(monkeypatch):
@@ -98,6 +98,7 @@ def test_does_not_retry_on_unrelated_bad_request(monkeypatch):
     fake_client = _AlwaysFails()
     monkeypatch.setattr("anthropic.Anthropic", lambda **_: fake_client)
 
-    with pytest.raises(BadRequestError):
+    with pytest.raises(LLMBadRequestError) as excinfo:
         claude_module.claude_generate_with_thinking(system="sys", user="hi", budget_tokens=6000)
+    assert isinstance(excinfo.value.__cause__, BadRequestError)
     assert len(fake_client.calls) == 1

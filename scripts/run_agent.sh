@@ -254,9 +254,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 section "Model access"
-# Provider: LLM_PROVIDER in .env, else `provider:` in config/model_config.yaml, else anthropic.
+# Provider: LLM_PROVIDER in .env (see .env.example for every option), else anthropic.
 PROVIDER="$(env_get LLM_PROVIDER)"
-[ -z "$PROVIDER" ] && PROVIDER="$(sed -n 's/^provider:[[:space:]]*\([a-z_]*\).*/\1/p' "$ROOT/config/model_config.yaml" 2>/dev/null | head -n 1)"
 PROVIDER="${PROVIDER:-anthropic}"
 BASE_URL="$(env_get ANTHROPIC_BASE_URL)"
 API_KEY="$(env_get ANTHROPIC_API_KEY)"
@@ -281,13 +280,6 @@ case "$PROVIDER" in
     USES_CLI=1
     pass "provider claude_cli: the backend calls the Claude Code CLI directly (no bridge, no API key)"
     check_claude_cli ;;
-  openai_compatible)
-    LLM_MODEL_SET="$(env_get LLM_MODEL)"
-    [ -z "$LLM_MODEL_SET" ] && LLM_MODEL_SET="$(awk '/^models:/{f=1;next} f&&/^[^ ]/{f=0} f&&/default:/{gsub(/.*default:[[:space:]]*|"|#.*/,""); print; exit}' "$ROOT/config/model_config.yaml" 2>/dev/null | tr -d '[:space:]')"
-    if [ -n "$LLM_MODEL_SET" ]; then pass "provider openai_compatible, model $LLM_MODEL_SET"
-    else fail "provider openai_compatible needs a model" "set LLM_MODEL in .env or models.default in config/model_config.yaml"; fi
-    if [ -n "$(env_get LLM_API_KEY)" ] || [ -n "$(env_get LLM_BASE_URL)" ]; then pass "LLM_API_KEY or LLM_BASE_URL is set (not validated here)"
-    else fail "provider openai_compatible needs LLM_API_KEY (or LLM_BASE_URL for a local server)" "add it to .env"; fi ;;
   anthropic)
     if [ "$BRIDGE_MODE" = 1 ]; then
       USES_CLI=1
@@ -301,7 +293,15 @@ case "$PROVIDER" in
     else
       fail "no model access configured" "set a real ANTHROPIC_API_KEY, or LLM_PROVIDER=claude_cli to use the signed-in Claude Code CLI, or see docs/04-development/model-providers.md"
     fi ;;
-  *) fail "unknown LLM_PROVIDER '$PROVIDER'" "use anthropic, claude_cli or openai_compatible" ;;
+  *)
+    # openai, azure_openai, bedrock and the OpenAI-compatible presets: the app's own validator decides.
+    if [ -x "$VPY" ]; then
+      if REPORT="$(cd "$ROOT" && "$VPY" -m src.llm check 2>/dev/null)"; then
+        pass "provider $PROVIDER is configured ($(printf '%s' "$REPORT" | sed -n 's/^models: *//p'))"
+      else
+        fail "provider $PROVIDER is not ready: $(printf '%s' "$REPORT" | sed -n 's/^status: *//p')" "fix .env as described in .env.example, then run: make llm.check"
+      fi
+    else warn "provider $PROVIDER is checked once .venv exists" "run with --fix, then: make llm.check"; fi ;;
 esac
 
 if [ "$USES_CLI" = 1 ]; then
@@ -329,8 +329,19 @@ if [ ! -x "$VPY" ]; then
     else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
   else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
 fi
+
 if [ -x "$VPY" ]; then
   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
+# if [ ! -x "$VPY" ]; then
+#   if [ "$FIX" = 1 ] && [ -n "$PY" ]; then
+#     echo "        creating virtual environment and installing packages (several minutes)..."
+#     if "$PY" -m venv "$VENV" && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then
+#       fixed "created .venv and installed packages"
+#     else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+#   else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+# fi
+# if [ -x "$VPY" ]; then
+#   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
 import importlib
 names = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "anthropic", "pptx", "docx", "openpyxl", "reportlab", "sentence_transformers", "faiss",
          "celery", "boto3", "qdrant_client", "docling"]
@@ -338,8 +349,17 @@ print(" ".join(n for n in names if importlib.util.find_spec(n) is None))
 PYEOF
 )"
   if [ -z "$MISSING" ]; then pass "key Python packages are installed"
-  elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
-  else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
+  else
+    echo "        installing missing packages: $MISSING..."
+    if "$VPY" -m pip install -r "$ROOT/requirements-dev.txt"; then
+      fixed "installed packages"
+    else
+      fail "package installation failed" "$VENV_BIN/pip install -r requirements-dev.txt"
+    fi
+  fi
+  # if [ -z "$MISSING" ]; then pass "key Python packages are installed"
+  # elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
+  # else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
 
   ANTHROPIC_V="$("$VPY" -c 'from importlib.metadata import version; print(version("anthropic"))' 2>/dev/null)"
   case "$ANTHROPIC_V" in
@@ -511,7 +531,8 @@ if [ "$BRIDGE_MODE" = 1 ] && [ "$BRIDGE_UP" = 0 ]; then
   start_service bridge "$ROOT" "$PY" "$BRIDGE" --port "$BRIDGE_PORT" --claude "$(command -v claude)"
   wait_http bridge "http://127.0.0.1:$BRIDGE_PORT/" 20 "$PID_bridge" || cleanup 1
 fi
-if [ "$OO_ENABLED" = "true" ] && [ "$OO_UP" = 0 ]; then
+if [ "$OO_START_LOCAL" = 1 ]; then
+  # Start local OpenObserve only if configured for local and port is free
   start_service openobserve "$ROOT" "$ROOT/scripts/openobserve.sh" start
   wait_http openobserve "$OO_URL/healthz" 60 "$PID_openobserve" || cleanup 1
 fi

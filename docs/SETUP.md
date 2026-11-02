@@ -28,9 +28,12 @@ Edit `.env`:
 |---|---|
 | `JWT_SECRET` | Any random string of 16+ characters. `./scripts/run_agent.sh --fix` generates one |
 | `AUTH_ALLOW_SELF_SIGNUP` | `true` (already set in `.env.example`), so the first sign-in can create your user. Use `false` on shared deployments |
-| Anthropic API | `ANTHROPIC_API_KEY=<your key>` |
-| Claude Code subscription | `LLM_PROVIDER=claude_cli` |
-| OpenAI-style service | `LLM_PROVIDER=openai_compatible`, `LLM_MODEL=<model>`, `LLM_API_KEY=<key>`, and `LLM_BASE_URL=<address>` unless it is OpenAI itself |
+| Claude Code subscription | `LLM_PROVIDER=claude_cli` (agent tools work through a local MCP bridge) |
+| Anthropic API | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=<your key>` |
+| OpenAI | `LLM_PROVIDER=openai`, `OPENAI_API_KEY=<key>`, `OPENAI_MODEL=<model>` |
+| Azure OpenAI | `LLM_PROVIDER=azure_openai`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` |
+| AWS Bedrock (Claude) | `LLM_PROVIDER=bedrock`, `AWS_REGION`, `BEDROCK_MODEL`, plus AWS credentials or `AWS_PROFILE` |
+| Groq, OpenRouter, Mistral, DeepSeek, Together, xAI, LiteLLM, Ollama, LM Studio, other OpenAI-style servers | `LLM_PROVIDER=<name>`, `LLM_MODEL=<model>`, and the service's key; see [model-providers.md](04-development/model-providers.md) |
 | Claude Code via the bridge (older setup, still works) | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` and `ANTHROPIC_API_KEY=not-used-cli-bridge` (a placeholder; the app requires the field to be non-empty) |
 | Either Claude Code setup, recommended | `RUN_STUCK_TIMEOUT_SEC=1800` and `ANTHROPIC_MAX_TOKENS_PER_RUN=0`. `--fix` adds both |
 

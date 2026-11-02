@@ -30,6 +30,23 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_llm_layer(monkeypatch: pytest.MonkeyPatch):
+    """Fresh provider instances and circuit breakers per test, and no retry back-off sleeps
+    (tests that exercise retries set LLM_MAX_RETRIES themselves)."""
+    from src.core.config import settings
+    from src.llm.factory import ProviderRegistry
+    from src.llm.middleware.resilience import reset_breakers
+
+    monkeypatch.setattr(settings, "llm_max_retries", 0)
+    monkeypatch.setattr(settings, "llm_fallback_provider", "")
+    ProviderRegistry.clear()
+    reset_breakers()
+    yield
+    ProviderRegistry.clear()
+    reset_breakers()
+
+
+@pytest.fixture(autouse=True)
 def _disable_slowapi_rate_limits_for_tests() -> None:
     """Many tests log in; SlowAPI's default /login cap causes flaky 429s in full suite."""
     from src.core.rate_limit import limiter

@@ -7,6 +7,7 @@ from src.prompts.prompt_hygiene import context_excerpt_block, process_model_json
 from src.core.config import settings
 from src.core.observability.metrics import increment
 from src.agents.specialists import _shared
+from src.llm import gateway
 from src.agents.specialists._shared import (
     _append_conversation_digest_block,
     _build_system_from_skill,
@@ -59,12 +60,36 @@ def run_narrative_agent(ctx: AgentContext) -> AgentOutput:
         md: str | None = None
         if settings.subagent_narrative_thinking_enabled and _shared.is_claude_enabled():
             try:
-                res = _shared.claude_generate_with_thinking(
-                    system=sb.system,
-                    user=user,
-                    max_tokens=1800,
-                    budget_tokens=settings.anthropic_subagent_thinking_budget_tokens,
-                )
+                # [DEPRECATED: Hardcoded claude_generate_with_thinking - only works for Anthropic]
+                # res = _shared.claude_generate_with_thinking(
+                #     system=sb.system,
+                #     user=user,
+                #     max_tokens=1800,
+                #     budget_tokens=settings.anthropic_subagent_thinking_budget_tokens,
+                # )
+                
+                # [NEW: Capability-aware thinking - uses thinking if available, fallback for other providers]
+                # gateway imported at module level (line ~12)
+                if gateway.capabilities().extended_thinking:
+                    # Provider supports thinking (e.g., Anthropic)
+                    res = _shared.claude_generate_with_thinking(
+                        system=sb.system,
+                        user=user,
+                        max_tokens=1800,
+                        budget_tokens=settings.anthropic_subagent_thinking_budget_tokens,
+                    )
+                else:
+                    # Provider doesn't support thinking - use regular generation
+                    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+                    msg = gateway.create_message(
+                        model=gateway.model_for("default"),
+                        max_tokens=1800,
+                        temperature=sb.temperature,
+                        system=sb.system,
+                        messages=[{"role": "user", "content": user}],
+                    )
+                    _record_message_usage(msg)
+                    res = {"text": _extract_final_text_from_message(msg), "thinking_text": None}
                 thinking_t = str(res.get("thinking_text") or "").strip()
                 if thinking_t and ctx.emit_event:
                     ctx.emit_event("narrative_thinking_excerpt", {"thinking_excerpt": thinking_t[:1500]})

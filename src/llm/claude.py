@@ -1,42 +1,22 @@
+"""High-level text/JSON helpers over ``src.llm.gateway``.
+
+Retries, the circuit breaker and usage charging happen in the gateway for every call, so these helpers
+only shape requests and parse replies.
+"""
+
 from __future__ import annotations
 
 import base64
 import json
 import re
-import threading
-import time
 from typing import Any
 
 from src.core.config import settings
-from src.core.run_control import RunAborted, poll_abort
+from src.core.run_control import poll_abort
 from src.llm import gateway
-from src.llm.run_budget import charge_llm_usage, extract_usage_counts
+from src.llm.errors import LLMBadRequestError
 
-_CB_LOCK = threading.Lock()
-_CB_FAIL_COUNT = 0
-_CB_OPEN_UNTIL = 0.0
-
-
-def _guard_circuit() -> None:
-    with _CB_LOCK:
-        open_until = _CB_OPEN_UNTIL
-    if open_until > time.time():
-        raise RuntimeError("Claude circuit breaker is open")
-
-
-def _record_success() -> None:
-    global _CB_FAIL_COUNT, _CB_OPEN_UNTIL
-    with _CB_LOCK:
-        _CB_FAIL_COUNT = 0
-        _CB_OPEN_UNTIL = 0.0
-
-
-def _record_failure() -> None:
-    global _CB_FAIL_COUNT, _CB_OPEN_UNTIL
-    with _CB_LOCK:
-        _CB_FAIL_COUNT += 1
-        if max(1, int(settings.anthropic_circuit_breaker_failures)) <= _CB_FAIL_COUNT:
-            _CB_OPEN_UNTIL = time.time() + max(1, int(settings.anthropic_circuit_breaker_reset_sec))
+_NOT_CONFIGURED = "Model provider is not configured: set LLM_PROVIDER in .env (see .env.example and docs/SETUP.md)"
 
 
 def _extract_first_json_object(text: str) -> Any:
@@ -107,21 +87,6 @@ def is_claude_enabled() -> bool:
     return gateway.is_enabled()
 
 
-def _record_message_usage(message: Any) -> None:
-    inp, out = extract_usage_counts(message)  # billed weighted totals for budget check
-    usage = getattr(message, "usage", None)
-    raw_inp = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
-    cache_create = int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
-    if inp or out:
-        charge_llm_usage(
-            input_tokens=raw_inp,
-            output_tokens=out,
-            cache_read_tokens=cache_read,
-            cache_creation_tokens=cache_create,
-        )
-
-
 def _build_cached_system(system: str) -> list[dict[str, Any]]:
     """Wrap a system prompt as a cacheable content block."""
     return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
@@ -138,7 +103,7 @@ def claude_generate(
 ) -> str:
     """Low-level Claude call; returns raw text."""
     if not is_claude_enabled():
-        raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
+        raise RuntimeError(_NOT_CONFIGURED)
 
     # Pre-call budget checking and compression
     if getattr(settings, "prompt_compression_enabled", True):
@@ -176,27 +141,15 @@ def claude_generate(
                 f"{budget_info['remaining_budget']} remaining (output needs {needed_output})"
             )
 
-    _guard_circuit()
-    try:
-        kwargs: dict[str, Any] = dict(
-            model=model or gateway.model_for("default"),
-            max_tokens=max_tokens or settings.anthropic_max_tokens,
-            temperature=temperature if temperature is not None else settings.anthropic_temperature,
-            messages=[{"role": "user", "content": user}],
-            timeout=max(1, float(settings.anthropic_timeout_sec)),
-        )
-        if cache_system:
-            kwargs["system"] = _build_cached_system(system)
-        else:
-            kwargs["system"] = system
-        msg = gateway.create_message(stream=True, on_event=poll_abort, **kwargs)
-    except RunAborted:
-        raise
-    except Exception:
-        _record_failure()
-        raise
-    _record_message_usage(msg)
-    _record_success()
+    kwargs: dict[str, Any] = dict(
+        model=model or gateway.model_for("default"),
+        max_tokens=max_tokens or settings.anthropic_max_tokens,
+        temperature=temperature if temperature is not None else settings.anthropic_temperature,
+        messages=[{"role": "user", "content": user}],
+        system=_build_cached_system(system) if cache_system else system,
+        timeout=max(1, float(settings.anthropic_timeout_sec)),
+    )
+    msg = gateway.create_message(stream=True, on_event=poll_abort, **kwargs)
     return _extract_text(msg)
 
 
@@ -217,14 +170,13 @@ def claude_generate_with_thinking(
     Returns keys: ``thinking_text``, ``text`` (assistant visible text), ``raw_message``.
     """
     if not is_claude_enabled():
-        raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
+        raise RuntimeError(_NOT_CONFIGURED)
 
     budget = int(budget_tokens if budget_tokens is not None else settings.anthropic_thinking_budget_tokens)
     cap = max_tokens if max_tokens is not None else settings.anthropic_coordinator_plan_max_tokens
     if cap <= budget:
         cap = budget + 2048
 
-    _guard_circuit()
     resolved_model = model or gateway.model_for("default")
     create_kwargs = dict(
         model=resolved_model,
@@ -233,40 +185,30 @@ def claude_generate_with_thinking(
         messages=[{"role": "user", "content": user}],
         timeout=max(1, float(settings.anthropic_timeout_sec)),
     )
-    try:
-        if not gateway.capabilities().thinking:
-            # Provider without extended thinking: plain call, no thinking trace.
-            msg = gateway.create_message(stream=True, on_event=poll_abort, **create_kwargs)
-        else:
-            from anthropic import BadRequestError  # type: ignore
-
-            try:
-                msg = gateway.create_message(
-                    stream=True,
-                    on_event=poll_abort,
-                    thinking={"type": "enabled", "budget_tokens": budget},
-                    **create_kwargs,
-                )
-            except BadRequestError as exc:
-                # Newer models (e.g. claude-opus-4-8) dropped "enabled"/budget_tokens
-                # in favor of "adaptive" thinking + an output_config effort tier.
-                if "thinking.type" not in str(exc):
-                    raise
-                effort = "low" if budget < 4000 else "medium" if budget < 10000 else "high" if budget < 20000 else "max"
-                msg = gateway.create_message(
-                    stream=True,
-                    on_event=poll_abort,
-                    thinking={"type": "adaptive"},
-                    output_config={"effort": effort},
-                    **create_kwargs,
-                )
-    except RunAborted:
-        raise
-    except Exception:
-        _record_failure()
-        raise
-    _record_message_usage(msg)
-    _record_success()
+    if not gateway.capabilities().thinking:
+        # Provider without extended thinking: plain call, no thinking trace.
+        msg = gateway.create_message(stream=True, on_event=poll_abort, **create_kwargs)
+    else:
+        try:
+            msg = gateway.create_message(
+                stream=True,
+                on_event=poll_abort,
+                thinking={"type": "enabled", "budget_tokens": budget},
+                **create_kwargs,
+            )
+        except LLMBadRequestError as exc:
+            # Newer models (e.g. claude-opus-4-8) dropped "enabled"/budget_tokens
+            # in favor of "adaptive" thinking + an output_config effort tier.
+            if "thinking.type" not in str(exc):
+                raise
+            effort = "low" if budget < 4000 else "medium" if budget < 10000 else "high" if budget < 20000 else "max"
+            msg = gateway.create_message(
+                stream=True,
+                on_event=poll_abort,
+                thinking={"type": "adaptive"},
+                output_config={"effort": effort},
+                **create_kwargs,
+            )
     thinking_text, visible = extract_thinking_and_text(msg)
     if not visible.strip():
         visible = _extract_text(msg)
@@ -303,7 +245,7 @@ def claude_generate_json_with_images(
 ) -> Any:
     """Claude multimodal JSON response with image inputs."""
     if not is_claude_enabled():
-        raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
+        raise RuntimeError(_NOT_CONFIGURED)
     if not image_bytes:
         raise ValueError("At least one image is required for multimodal generation")
     if not gateway.capabilities().vision:
@@ -322,24 +264,15 @@ def claude_generate_json_with_images(
             }
         )
 
-    _guard_circuit()
-    try:
-        msg = gateway.create_message(
-            stream=True,
-            on_event=poll_abort,
-            model=model or gateway.model_for("default"),
-            max_tokens=max_tokens or settings.anthropic_max_tokens,
-            temperature=temperature if temperature is not None else settings.anthropic_temperature,
-            system=system,
-            messages=[{"role": "user", "content": content_blocks}],
-            timeout=max(1, float(settings.anthropic_timeout_sec)),
-        )
-    except RunAborted:
-        raise
-    except Exception:
-        _record_failure()
-        raise
-    _record_message_usage(msg)
-    _record_success()
+    msg = gateway.create_message(
+        stream=True,
+        on_event=poll_abort,
+        model=model or gateway.model_for("default"),
+        max_tokens=max_tokens or settings.anthropic_max_tokens,
+        temperature=temperature if temperature is not None else settings.anthropic_temperature,
+        system=system,
+        messages=[{"role": "user", "content": content_blocks}],
+        timeout=max(1, float(settings.anthropic_timeout_sec)),
+    )
     return _extract_first_json_object(_extract_text(msg))
 

@@ -26,7 +26,10 @@ from src.core.rate_limit import limiter
 from src.core.db.models import Conversation, ConversationMessage, MemoryEvent, Run, RunEvent, RunTask, ScheduledTaskRun, User, utcnow
 from src.core.db.session import SessionLocal, get_db
 from src.app.schemas.common import RunSummary
-from src.llm.claude import claude_generate_json, is_claude_enabled
+# [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
+from src.llm import gateway
+from src.llm.claude import claude_generate_json
+# is_claude_enabled
 from src.workflows.task_router.output_format_detection import (
     detect_deliverable_keyword_formats,
     detect_explicit_output_formats,
@@ -424,7 +427,11 @@ class RecommendOutputTypesRequest(BaseModel):
 def _recommend_output_types(
     instruction: str, available_output_types: list[dict]
 ) -> tuple[list[str], list[str], dict[str, str], str, dict | None]:
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     raise HTTPException(status_code=503, detail="LLM recommendations unavailable: missing ANTHROPIC_API_KEY")
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
         raise HTTPException(status_code=503, detail="LLM recommendations unavailable: missing ANTHROPIC_API_KEY")
     catalog = [
         {

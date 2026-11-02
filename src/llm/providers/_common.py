@@ -35,13 +35,22 @@ def tool_result_text(block: dict[str, Any]) -> str:
     return "" if inner is None else str(inner)
 
 
-def message(*, content: list[dict[str, Any]], stop_reason: str, input_tokens: int, output_tokens: int, model: str) -> SimpleNamespace:
+def message(
+    *,
+    content: list[dict[str, Any]],
+    stop_reason: str,
+    input_tokens: int,
+    output_tokens: int,
+    model: str,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> SimpleNamespace:
     """A response shaped like an Anthropic SDK message, with dict content blocks."""
     usage = SimpleNamespace(
         input_tokens=int(input_tokens or 0),
         output_tokens=int(output_tokens or 0),
-        cache_read_input_tokens=0,
-        cache_creation_input_tokens=0,
+        cache_read_input_tokens=int(cache_read_tokens or 0),
+        cache_creation_input_tokens=int(cache_creation_tokens or 0),
     )
     return SimpleNamespace(content=content, stop_reason=stop_reason, usage=usage, model=model, role="assistant", type="message")
 

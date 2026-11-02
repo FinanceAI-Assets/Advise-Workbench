@@ -16,6 +16,12 @@ from typing import Any
 
 from src.core.config import settings
 from src.memory.knowledge.wiki_ingest import _migrate_meta_directory, _parse_source
+from src.llm import gateway
+from src.llm.claude import (
+    claude_generate_json,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -506,8 +512,13 @@ def wiki_lint_with_retry(
 def _llm_enrich_page(raw_title: str, content: str) -> dict:
     """Use Claude to generate a structured wiki page from document content. Falls back gracefully."""
     try:
-        from src.llm.claude import claude_generate_json, is_claude_enabled
-        if not is_claude_enabled():
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import claude_generate_json, is_claude_enabled
+        # [DEPRECATED: Old check - kept for reference]
+        # if not is_claude_enabled():
+        #     return {}
+        # [NEW: Gateway-based provider-agnostic check]
+        if not gateway.is_enabled():
             return {}
 
         snippet = content[:6000]
@@ -982,7 +993,11 @@ def _llm_find_relationships(pages: dict) -> list:
     """
     try:
         from src.llm.claude import claude_generate_json, is_claude_enabled
-        if not is_claude_enabled() or len(pages) < 2:
+        # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+        # from src.llm.claude import claude_generate_json, is_claude_enabled
+        # gateway imported at module level (line ~21)
+        # [NEW: Gateway-based provider-agnostic check]
+        if not gateway.is_enabled() or len(pages) < 2:
             return []
 
         import re
@@ -1320,7 +1335,11 @@ def _detect_communities(
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md", "relationships.json"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 import re
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id.replace("_", " ").title()
@@ -1438,7 +1457,11 @@ def _detect_god_nodes(
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md", "relationships.json"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id.replace("_", " ").title()
                 G.add_node(page_id)
@@ -1582,7 +1605,11 @@ def _load_wiki_graph(wiki_type: str, project_id: str | None) -> tuple:
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md", "relationships.json"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id.replace("_", " ").title()
                 G.add_node(page_id)
@@ -1938,7 +1965,11 @@ def _check_broken_links(wiki_type: str, project_id: str | None) -> list:
                 page_id = md_file.stem
                 page_ids.add(page_id)
 
-                content = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id
                 page_titles[page_id] = title
@@ -1950,7 +1981,11 @@ def _check_broken_links(wiki_type: str, project_id: str | None) -> list:
                 continue
 
             page_id = md_file.stem
-            content = md_file.read_text(encoding="utf-8")
+            # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = md_file.read_text(encoding="latin-1", errors="ignore")
 
             # Find [[Page Name]] patterns
             links = re.findall(r"\[\[([^\]]+)\]\]", content)
@@ -2004,7 +2039,11 @@ def _check_orphaned_pages(wiki_type: str, project_id: str | None) -> list:
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id
                 page_titles[page_id] = title
@@ -2058,7 +2097,11 @@ def _check_missing_entities(wiki_type: str, project_id: str | None) -> list:
         for md_file in wiki_dir.glob("*.md"):
             if md_file.name not in ("index.md", "log.md"):
                 page_id = md_file.stem
-                content = md_file.read_text(encoding="utf-8")
+                # [NEW] UTF-8 encoding fix: fallback to latin-1 if UTF-8 fails
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
 
                 title_match = re.search(r'^title:\s*"?([^"\n]+)"?', content, re.MULTILINE)
                 title = title_match.group(1) if title_match else page_id

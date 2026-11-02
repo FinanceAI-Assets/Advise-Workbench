@@ -16,7 +16,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.core.db.models import MemoryItem
-from src.llm.claude import claude_generate_json
+# [DEPRECATED: Hardcoded claude_generate_json] Now using gateway for provider-agnostic calls
+# from src.llm.claude import claude_generate_json
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.memory.knowledge.leading_practices import leading_practice_library_service as _lp
 
 import logging
@@ -138,7 +142,25 @@ def propose_slide(
     )
 
     try:
-        payload = claude_generate_json(system=system, user=user, temperature=0.3, max_tokens=400)
+        # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+        # payload = claude_generate_json(system=system, user=user, temperature=0.3, max_tokens=400)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction - Supports all LLM providers]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=400,
+            temperature=0.3,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = _extract_first_json_object(text)
     except Exception:
         payload = {}
 
@@ -257,6 +279,29 @@ def load_agreed_slides(db: Session, *, project_id: str) -> list[dict[str, Any]]:
     slides.sort(key=lambda s: int(s.get("slide_num") or 0))
     return slides
 
+
+
+def _extract_bullets_from_slide(slide: dict[str, Any]) -> list[str]:
+    """Extract bullet points from slide metadata (key_message, evidence_source)."""
+    bullets = []
+
+    # Add key message as first bullet
+    key_msg = str(slide.get("key_message") or "").strip()
+    if key_msg:
+        bullets.append(key_msg)
+
+    # Add evidence as second bullet if present and different
+    evidence = str(slide.get("evidence_source") or "").strip()
+    if evidence and evidence != key_msg:
+        bullets.append(evidence)
+
+    # Fallback: use title if no bullets
+    if not bullets:
+        title = str(slide.get("title") or "").strip()
+        if title:
+            bullets.append(title)
+
+    return bullets
 
 def assemble_outline_from_decisions(db: Session, *, project_id: str) -> list[dict[str, str]]:
     """Convert agreed slide MemoryItems into the deck_outline_preview format expected by the PPTX agent."""

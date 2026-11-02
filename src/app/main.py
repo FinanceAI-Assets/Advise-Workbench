@@ -36,9 +36,11 @@ from src.core.middleware import request_timing_middleware
 from src.core.rate_limit import limiter
 from src.core.request_context import get_correlation_id
 from src.core.db.session import engine, init_db
+from src.llm.startup import shutdown_llm, validate_llm_on_startup
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
 from src.core.observability.metrics import snapshot as observability_snapshot
+from src.core.observability.advanced_metrics import get_all_advanced_metrics
 from src.core.observability.otel_tracing import flush_telemetry, init_otel_if_enabled
 from src.workflows.orchestrator import (
     admission_status,
@@ -81,6 +83,7 @@ async def lifespan(_app: FastAPI):
         repo_env_present=(_repo_root / ".env").is_file(),
     )
     init_otel_if_enabled()
+    validate_llm_on_startup()
     init_db()
     if settings.enable_deliverable_registry:
         DeliverableRegistry.register("pptx", PPTXDeliverable())
@@ -96,6 +99,7 @@ async def lifespan(_app: FastAPI):
     yield
     drain_execution_worker(timeout_sec=settings.run_drain_timeout_sec)
     await shutdown_mcp_servers()
+    shutdown_llm()
     flush_telemetry()
 
 
@@ -261,14 +265,24 @@ def _visual_qa_health_payload() -> dict:
 
 
 @app.get("/metrics")
-def metrics() -> dict:
+def metrics(project_id: str | None = None) -> dict:
+    """Get all observability metrics. Optionally scoped to a project.
+
+    Args:
+        project_id: Optional project ID to get per-project aggregated metrics
+
+    Returns:
+        Metrics dict with observability, advanced_metrics, run_queue, etc.
+    """
     return {
         "service": "advise-workbench-backend",
         "observability": observability_snapshot(),
+        "advanced_metrics": get_all_advanced_metrics(project_id),
         "run_queue": queue_runtime_stats(),
         "visual_qa": _visual_qa_health_payload(),
         "bash_tool": bash_tool_health(),
         "text_editor_tool": text_editor_tool_health(),
+        "scope": {"project_id": project_id} if project_id else {"scope": "global"},
     }
 
 

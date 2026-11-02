@@ -8,6 +8,10 @@ dev:
 doctor:
 	./scripts/run_agent.sh --check
 
+# Validate the LLM provider chosen by LLM_PROVIDER in .env (PING=1 also sends one tiny request).
+llm.check:
+	python -m src.llm check $(if $(PING),--ping,)
+
 # Enforced lint gate (mirrors CI): no new silent exception swallows.
 lint:
 	ruff check src --select S110,S112
