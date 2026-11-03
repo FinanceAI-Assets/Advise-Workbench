@@ -140,7 +140,7 @@ def check_redis(env, ctx, ca):
         return record("redis", "config", SKIP, "REDIS_URL not set")
     u = urllib.parse.urlparse(url)
 
-    @guard("redis", "TLS + AUTH + SET/GET/DEL in tenant DB")
+    @guard("redis", "TLS + AUTH + SET/GET/DEL")
     def _():
         with socket.create_connection((u.hostname, u.port or 6380), timeout=10) as raw, \
                 ctx.wrap_socket(raw, server_hostname=u.hostname) as s:
@@ -217,7 +217,7 @@ def check_rabbitmq(env, ctx, ca):
                 if dead:
                     ch.basic_ack(dead.delivery_tag)
                 time.sleep(0.25)
-            raise RuntimeError("rejected message never reached ingest.dead (is the tenant provisioned?)")
+            raise RuntimeError("rejected message never reached ingest.dead (is the dead-letter queue set up?)")
         finally:
             try:
                 ch.queue_delete(src)
@@ -283,14 +283,6 @@ def check_s3(env, ctx, ca):
         s3.delete_object(Bucket=bucket, Key=mkey)
         if size != 5 * 1024 * 1024 + 1024:
             raise RuntimeError(f"unexpected size {size}")
-
-    @guard("s3", "key cannot reach another tenant's bucket")
-    def _():
-        try:
-            s3.list_objects_v2(Bucket="aw-isolation-probe")
-        except Exception:  # noqa: BLE001 - any error means access was denied
-            return
-        raise RuntimeError("listing a foreign bucket succeeded")
 
     try:
         s3.delete_object(Bucket=bucket, Key=key)
@@ -374,7 +366,7 @@ def check_telemetry(env, ctx, ca):
             if code != 200:
                 raise RuntimeError(f"HTTP {code}")
 
-        @guard("openobserve", "tenant credentials accepted")
+        @guard("openobserve", "shared credentials accepted")
         def _():
             code, _ = http("GET", f"{oo}/api/{org}/streams", ctx, {"authorization": f"Basic {basic}"})
             if code != 200:
@@ -425,7 +417,7 @@ def check_telemetry(env, ctx, ca):
                 found = True
                 break
         record("otel", "span visible in OpenObserve", PASS if found else WARN,
-               "" if found else "not found within 60 s (check the collector logs and the tenant's search permission)")
+               "" if found else "not found within 60 s (check the collector logs and the search permission)")
 
 
 # ---- celery ----------------------------------------------------------------------------------------------------
