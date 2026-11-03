@@ -13,6 +13,7 @@ One command starts all of them: `./scripts/run_agent.sh`.
 | Claude CLI bridge | http://127.0.0.1:8787 | Lets the backend use a signed-in Claude Code CLI instead of an API key | Only in bridge mode (see section 3) |
 | OpenObserve | http://localhost:5080 | Monitoring: traces, metrics and logs | Optional |
 | Postgres, Redis, RabbitMQ | 127.0.0.1:5432, :6379, :5672 | Database, cache/run queue and message broker. `run_agent.sh` uses whatever already answers on those ports and starts the rest (see section 4) | Started automatically |
+| Ingestion worker | log in `.run/worker.log` | Celery worker for the document ingestion pipeline (see "Document ingestion pipeline" in section 5) | Started with the backend when RabbitMQ answers |
 
 Data stays on your machine: the database is `advise_workbench.db` and all uploaded and generated files are under `workspace/`.
 
@@ -178,6 +179,36 @@ For this example the files to look at are:
 ### Other deliverables
 
 `data/examples/northwind-p2p/run-scenarios/README.md` has six ready-made requests (scenarios A to F): a full pack, an Excel RACI matrix, the deck above, a process map with a Word SOP, and more. For those, upload all the files in `source-documents/`.
+
+### Library ingestion pipeline (SeaweedFS, Postgres, Qdrant)
+
+Admin console → Library management → **Upload sources** (`POST /api/admin/library/uploads`) is the one entry point. It
+returns at once (202) and a Celery worker runs every file through a single pipeline:
+`intake → uploading → parsing → chunking → embedding → library_validation → extracting_facts → generating_wiki →
+deduplicating → indexing_wiki → completed` (or `failed` with `failed_stage` / `error_message`; `retrying` while a stage
+waits). Intake checks the source, rejects duplicates and creates the practice and job; the file goes to SeaweedFS (S3),
+Docling parses it, the Library's section-aware chunker cuts it into passages (`chunk_archive`), embeddings go to
+Postgres (`chunk_embeddings`) and Qdrant (`<QDRANT_COLLECTION_PREFIX>document_chunks`), and `library_validation` runs the
+library's citation, duplicate and quality-gate checks on those same passages. Facts and wiki pages are built with the
+Claude CLI (`LLM_PROVIDER=claude_cli`). Review, approval and publishing work as before; users only retrieve the published
+version of Approved practices (Leading Practice search/Ask and `POST /api/query`), and publishing removes earlier
+versions from the index.
+
+Versions and duplicates: a file with the same name (case-insensitive) as an existing practice's latest version becomes
+that practice's next version; identical bytes are reported `unchanged` (nothing is queued); the same content under
+another practice is rejected (409). Passages are content-addressed across the whole Library: a passage already stored is
+linked (`document_chunk_links`, `reused=true`), not stored or embedded again, and its Qdrant point lists every
+`document_id` / `job_id` that uses it. Deleting a version removes a passage only when nothing else links to it. Run
+`alembic upgrade head` (migration 030) on an existing database.
+
+1. Put the current shared-service links and keys in `.env` (`S3_*`, `QDRANT_*`, `EMBEDDING_*`) and check them: `make shared.check`.
+2. Use Postgres and start everything with `./scripts/run_agent.sh` (the last lines list the worker). The first parse downloads Docling's layout models (once).
+3. Upload in Library management, or `POST /api/admin/library/uploads` (form: `files`, `owner`, `rights`, optional `category`, `practice_id`). Keep `jobs[i].ingestion.job_id`.
+4. Follow it: `GET /api/admin/library` (each `practiceInventory[].ingestion` and the selected `ingestion` hold the pipeline status; `pendingUploads` lists files not yet attached to a practice) or `GET /api/admin/library/documents/status/{job_id}`.
+5. `GET /api/admin/library/documents/{job_id}/details` shows the S3 object, the passages, the Qdrant points, facts and wiki pages; `GET /api/admin/library/documents/jobs` and `/wiki` list them all.
+6. `DELETE /api/admin/library/{practice_id}` removes the practice and its data from S3, Postgres and Qdrant.
+
+Scanned PDFs need `DOCLING_OCR_ENABLED=true`. Without the worker running, jobs stay `pending`.
 
 ## 6. What to expect
 

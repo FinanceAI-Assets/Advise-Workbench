@@ -63,11 +63,13 @@ class _MemoryWorkspaceStore:
 @pytest.fixture(autouse=True)
 def _workspace_backend_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run every test with the fs backend, or with AW_TEST_WORKSPACE=db to use the store path."""
-    if os.getenv("AW_TEST_WORKSPACE", "fs") != "db":
-        return
     import src.core.workspace_store as ws
     from src.core.config import settings
 
+    # .env may select db_s3 for the running app; tests choose their backend here, not from .env.
+    if os.getenv("AW_TEST_WORKSPACE", "fs") != "db":
+        monkeypatch.setattr(settings, "workspace_backend", "fs")
+        return
     store = _MemoryWorkspaceStore()
     monkeypatch.setattr(settings, "workspace_backend", "db_s3")
     monkeypatch.setattr(ws, "get_store", lambda: store)
@@ -112,6 +114,8 @@ def _auth_allow_self_signup_for_integration_tests(monkeypatch: pytest.MonkeyPatc
     # Integration tests predate the collaborative storyline flow and only need a confirmed plan
     # to exercise downstream behaviour; the legacy discovery→plan path reaches ready_for_confirmation.
     monkeypatch.setattr(settings, "collaborative_building_enabled", False)
+    # Unit tests use in-process stand-ins for the shared services; a developer's CA file is irrelevant.
+    monkeypatch.setattr(settings, "ssl_ca_file", "")
 
 
 @pytest.fixture(autouse=True)

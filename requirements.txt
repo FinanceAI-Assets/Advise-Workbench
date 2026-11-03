@@ -1,4 +1,4 @@
-# Pinned direct dependencies. Install with: pip install -r requirements-dev.txt (or requirements.txt for runtime only).
+# Pinned direct dependencies. Install with: pip install -r requirements.txt
 # anthropic must stay below 1.0: the code passes `temperature`, which 1.x rejects.
 # The [bedrock] extra adds boto3/botocore for LLM_PROVIDER=bedrock (imported only when that provider is used).
 alembic==1.20.0
@@ -40,3 +40,15 @@ slowapi==0.1.10
 sqlalchemy==2.1.2
 uvicorn[standard]==0.54.0
 xlrd==2.0.2
+
+# Added from updated-UI-advise-workbench
+celery>=5.3.0
+kombu>=5.3.0
+requests>=2.31.0
+docling==2.142.0
+docling-core>=2.0.0,<3.0.0
+onnxruntime>=1.18
+pytesseract>=0.3.10
+qdrant-client>=1.12.0
+boto3>=1.36.0
+scikit-learn>=1.0.0

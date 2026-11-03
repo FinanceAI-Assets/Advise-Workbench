@@ -71,7 +71,7 @@ export default function HelpPage() {
                   type="button"
                   aria-pressed={active}
                   onClick={() => setCategory(active ? null : item.name)}
-                  className={`rounded-md p-2 text-left transition hover:bg-[var(--surface-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue)] ${
+                  className={`rounded-md p-2 text-left transition hover:bg-[var(--surface-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-green)] ${
                     active ? "bg-[var(--surface-muted)]" : ""
                   }`}
                 >

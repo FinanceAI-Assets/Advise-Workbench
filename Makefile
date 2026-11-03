@@ -1,4 +1,4 @@
-.PHONY: dev.secret db.up db.down db.migrate db.reset redis.up redis.down shared.check pptx.canvas.parity lint test coverage dev doctor
+.PHONY: dev.secret db.up db.down db.migrate db.reset redis.up redis.down worker shared.check pptx.canvas.parity lint test coverage dev doctor
 
 # Check the environment, then run bridge + backend + frontend together (Ctrl+C stops all).
 dev:
@@ -65,6 +65,10 @@ redis.up:
 
 redis.down:
 	docker compose stop redis
+
+# Celery worker for the document ingestion pipeline (run_agent.sh starts one for you).
+worker:
+	python -m celery -A src.workers.celery_app worker --pool=solo --loglevel=INFO
 
 # Connectivity test against the team's shared services (see docs/06-deployment-operations/SHARED_SERVICES.md).
 # Reads the shared-service links and keys from .env.

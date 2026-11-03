@@ -32,7 +32,7 @@ function PreferenceRow({
         role="switch"
         aria-checked={enabled}
         onClick={() => onChange(!enabled)}
-        className="shrink-0 text-xs font-medium text-[var(--accent-green-dark)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue)]"
+        className="shrink-0 text-xs font-medium text-[var(--accent-green-dark)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-green)]"
       >
         {enabled ? "On" : "Off"}
       </button>

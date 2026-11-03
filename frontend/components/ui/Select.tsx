@@ -10,7 +10,7 @@ export function Select({ className, ...props }: SelectProps) {
     <select
       {...props}
       className={cn(
-        "input-select-base w-full min-h-11 text-sm outline-none ring-[var(--accent-blue-light)] transition focus:ring-2",
+        "input-select-base w-full min-h-11 text-sm outline-none ring-[var(--accent-green)] transition focus:border-[var(--accent-green)] focus:ring-2",
         className
       )}
     />

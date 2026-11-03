@@ -78,7 +78,7 @@ export function FieldBox({ label, required, children, className }: { label: stri
   return (
     <div
       className={cn(
-        "rounded-md border border-[var(--surface-border)] bg-white px-3 py-2 focus-within:border-[var(--coral-black)]",
+        "rounded-md border border-[var(--surface-border)] bg-white px-3 py-2 focus-within:border-[var(--accent-green)]",
         className
       )}
     >

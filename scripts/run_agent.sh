@@ -266,9 +266,9 @@ fi
 
 check_claude_cli() {
   if command -v claude >/dev/null 2>&1; then
-    CLI_WORK="${TMPDIR:-/tmp}/advise-cli-check"; mkdir -p "$CLI_WORK"
-    REPLY="$(cd "$CLI_WORK" && echo 'Reply with exactly: OK' | with_timeout 90 claude -p --model claude-haiku-4-5 \
-      --system-prompt 'Terse.' --tools '' --setting-sources '' --strict-mcp-config --no-session-persistence 2>&1 | tail -n 1)"
+    # Simplified test: just check if claude answers without special flags
+    # (some gateways don't support --system-prompt, --tools, --setting-sources, --strict-mcp-config, etc.)
+    REPLY="$(timeout 30 claude -p --model claude-haiku-4-5 <<< 'Reply with exactly: OK' 2>&1 | tail -n 1)"
     case "$REPLY" in *OK*) pass "claude CLI $(claude --version 2>/dev/null | head -n 1) is signed in and answers" ;;
       *) fail "claude CLI did not answer a test prompt: ${REPLY:0:160}" "run 'claude' once and sign in; if the command is broken: npm install -g @anthropic-ai/claude-code" ;; esac
   else fail "claude CLI not found" "npm install -g @anthropic-ai/claude-code   then run 'claude' and sign in"; fi
@@ -342,7 +342,8 @@ if [ -x "$VPY" ]; then
 # if [ -x "$VPY" ]; then
 #   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
 import importlib
-names = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "anthropic", "pptx", "docx", "openpyxl", "reportlab", "sentence_transformers", "faiss"]
+names = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "anthropic", "pptx", "docx", "openpyxl", "reportlab", "sentence_transformers", "faiss",
+         "celery", "boto3", "qdrant_client", "docling"]
 print(" ".join(n for n in names if importlib.util.find_spec(n) is None))
 PYEOF
 )"
@@ -539,6 +540,13 @@ fi
 if [ "$BACKEND_UP" = 0 ]; then
   start_service backend "$ROOT" "$VPY" -m uvicorn src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
   wait_http backend "http://127.0.0.1:$BACKEND_PORT/health" 120 "$PID_backend" || cleanup 1
+  # Document ingestion pipeline worker (S3 -> Docling -> Postgres chunks -> Qdrant); solo pool works on Windows.
+  if bash "$INFRA_SH" check rabbitmq >/dev/null 2>&1; then
+    start_service worker "$ROOT" "$VPY" -m celery -A src.workers.celery_app worker --pool=solo --loglevel=INFO
+    WORKER_STARTED=1
+  else
+    echo "[worker] RabbitMQ is not running, so the ingestion worker was not started (./scripts/infra.sh start rabbitmq)"
+  fi
 fi
 if [ "$FRONTEND_UP" = 0 ]; then
   export API_PROXY_TARGET="http://127.0.0.1:$BACKEND_PORT"
@@ -550,6 +558,7 @@ printf '\nReady.\n'
 [ "$BRIDGE_MODE" = 1 ] && printf '  Bridge    http://127.0.0.1:%s\n' "$BRIDGE_PORT"
 printf '  Backend   http://127.0.0.1:%s   (API docs at /docs)\n' "$BACKEND_PORT"
 printf '  Frontend  http://localhost:%s\n' "$FRONTEND_PORT"
+[ "${WORKER_STARTED:-0}" = 1 ] && printf '  Worker    document ingestion (log: %s/worker.log)\n' "$RUN_DIR"
 [ "$OO_ENABLED" = "true" ] && printf '  Monitoring %s   (sign in with OPENOBSERVE_USER / OPENOBSERVE_PASSWORD from .env)\n' "$OO_URL"
 if [ -z "$STARTED_PIDS" ]; then
   if [ -n "$INFRA_STARTED" ]; then

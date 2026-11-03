@@ -148,6 +148,11 @@ def unsave_practice(practice_id: str, user: User = Depends(get_current_user), db
 
 class AskLibrary(BaseModel):
     question: str = Field(min_length=1, max_length=500)
+    # Talk to data: answer only from these approved practices ("Ask selected sources only").
+    practice_ids: list[str] | None = Field(default=None, alias="practiceIds", max_length=20)
+    max_results: int = Field(default=5, alias="maxResults", ge=1, le=8)
+
+    model_config = {"populate_by_name": True}
 
 
 _ASK_STOPWORDS = frozenset(
@@ -229,6 +234,12 @@ def ask_library(body: AskLibrary, user: User = Depends(get_current_user), db: Se
     def reply(answer: str, practices: list[LpPractice], documents: list[dict] | None = None) -> dict:
         return {"answer": answer, "practices": [_ref(p) for p in practices[:8]], "documents": documents or [], "sources": []}
 
+    only = [pid for pid in dict.fromkeys(body.practice_ids or []) if pid in by_id]
+    if body.practice_ids and not only:
+        return reply("None of the selected sources is an approved practice. Select approved sources and ask again.", [])
+    if only:  # selected-sources questions are always answered from those practices' passages
+        intent, matched = "", [by_id[pid] for pid in only]
+
     if intent == "documents":
         docs = [{"practiceId": p.id, "practice": p.title, "filename": f} for p in scope for f in files.get(p.id, [])]
         if not docs:
@@ -276,11 +287,19 @@ def ask_library(body: AskLibrary, user: User = Depends(get_current_user), db: Se
     try:
         from src.memory.knowledge.leading_practices import leading_practice_library_service
 
-        found = leading_practice_library_service.answer(question)
+        found = leading_practice_library_service.answer(
+            question, max_results=body.max_results, practice_ids=only or None
+        )
     except Exception:  # noqa: BLE001 — retrieval or the model may be unavailable; the catalog match still helps
         found = {}
     sources = [
-        {"heading": s.get("heading", ""), "source": s.get("source", ""), "text": (s.get("text") or "")[:280]}
+        {
+            "heading": s.get("heading", ""),
+            "source": s.get("source", ""),
+            "text": (s.get("text") or "")[:280],
+            # The approved practice a passage belongs to; empty for library files outside the catalog.
+            "practiceId": s.get("practice_id") if s.get("practice_id") in by_id else "",
+        }
         for s in found.get("sources") or []
     ]
     if found.get("answer") and sources:

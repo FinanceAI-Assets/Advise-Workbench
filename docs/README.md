@@ -61,6 +61,7 @@ Working on the code: integration guides and conventions.
 |---|---|
 | [anthropic_skills_reconciliation.md](04-development/anthropic_skills_reconciliation.md) | Anthropic skills reconciliation (mapped built-ins) |
 | [layering.md](04-development/layering.md) | Layering rules |
+| [library-query-api.md](04-development/library-query-api.md) | Library Q&A API (frontend integration) |
 | [model-providers.md](04-development/model-providers.md) | Model providers |
 
 ## 05-testing

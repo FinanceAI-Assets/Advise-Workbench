@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
@@ -9,8 +8,6 @@ import { ReasonAction } from "@/components/workbench/AdminControls";
 import { ErrorNote } from "@/components/workbench/PageFrame";
 import { useAdminAction } from "@/hooks/useAdminConsole";
 import type { LibraryQualityGatesDetail } from "@/types/api";
-
-const LINK_CLASS = "text-sm font-medium text-[var(--accent-green-dark)] underline-offset-2 hover:underline";
 
 /** Publish the approved candidate; disabled, with the reasons, until every gate and the approval are in place. */
 export function PublishControl({ practiceId, canPublish, blockers }: { practiceId: string; canPublish: boolean; blockers: string[] }) {
@@ -30,8 +27,7 @@ export function PublishControl({ practiceId, canPublish, blockers }: { practiceI
 }
 
 /**
- * Approval for an uploaded candidate: choose an approver and submit once the quality gates pass, follow the
- * review, then publish when it is approved.
+ * Approval for an uploaded candidate: choose an approver and submit once the quality gates pass, then publish when it is approved.
  */
 export function LibraryApprovalControls({ practiceId, quality }: { practiceId: string; quality: LibraryQualityGatesDetail }) {
   const submit = useAdminAction();
@@ -53,11 +49,6 @@ export function LibraryApprovalControls({ practiceId, quality }: { practiceId: s
             ? `${review.state} · ${review.reviewer || "Unassigned"}${review.selfReview ? " (self-review)" : ""}`
             : "Not submitted"}
         </p>
-        {review && review.state !== "Draft" ? (
-          <Link href={`/reviews/${encodeURIComponent(review.id)}`} className={LINK_CLASS}>
-            Open review {review.id}
-          </Link>
-        ) : null}
       </div>
 
       {quality.canSubmit ? (
