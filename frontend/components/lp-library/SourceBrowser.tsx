@@ -1,9 +1,10 @@
 "use client";
 
 import { Bookmark, Loader2, MessagesSquare, Plus, Search, ShieldCheck, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { AddResultNote } from "@/components/lp-library/AddResultNote";
+import { AddResultNote, engagementSourcesPath } from "@/components/lp-library/AddResultNote";
 import { PracticeDetailPanel } from "@/components/lp-library/PracticeDetailPanel";
 import type { SelectedSource } from "@/components/lp-library/TalkToData";
 import { TaxonomyPanel } from "@/components/lp-library/TaxonomyPanel";
@@ -46,7 +47,7 @@ function PracticePanel({ id, onDeselect }: { id: string; onDeselect?: () => void
   const [projectId, setProjectId] = useState("");
   const rows = engagements.data?.items ?? [];
   const target = projectId || rows[0]?.id || "";
-  const added = actions.addToEngagement.data;
+  const router = useRouter();
 
   if (practice.isPending) return <Skeleton className="h-96 w-full" />;
   if (!practice.data) return <ErrorNote error={practice.error} />;
@@ -84,7 +85,7 @@ function PracticePanel({ id, onDeselect }: { id: string; onDeselect?: () => void
               <Button
                 className="flex items-center gap-2"
                 disabled={!target || actions.addToEngagement.isPending}
-                onClick={() => actions.addToEngagement.mutate(target)}
+                onClick={() => actions.addToEngagement.mutate(target, { onSuccess: () => router.push(engagementSourcesPath(target)) })}
               >
                 <Plus size={16} aria-hidden />
                 Add this practice
@@ -100,11 +101,6 @@ function PracticePanel({ id, onDeselect }: { id: string; onDeselect?: () => void
               {saved ? "Remove from saved" : "Save practice"}
             </Button>
           </div>
-          {added ? (
-            <p className="text-sm text-[#356B12]">
-              {added.added ? "Added. Conversations in that engagement can now cite it." : "Already in that engagement's sources."}
-            </p>
-          ) : null}
           <ErrorNote error={actions.addToEngagement.error ?? actions.save.error} />
         </div>
       }
@@ -138,6 +134,7 @@ export function SourceBrowser({
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<unknown>(null);
   const detailRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
   const library = useLibraryQuery(filters);
   const engagements = useMyEngagementOptionsQuery();
   const addPractices = useAddPracticesToEngagementMutation();
@@ -222,12 +219,16 @@ export function SourceBrowser({
     }
   };
 
-  // Whatever could not be added stays checked, so it can be retried or sent to another engagement.
+  // All added: on to the engagement's sources. Otherwise stay, with what could not be added still checked, so it can be
+  // retried or sent to another engagement.
   const addToEngagement = () =>
     addPractices.mutate(
       { projectId: target, practiceIds: picks.map((p) => p.id) },
       {
-        onSuccess: ({ failed }) => setPicks((prev) => prev.filter((p) => failed.some((f) => f.id === p.id))),
+        onSuccess: ({ failed }, { projectId: added }) => {
+          setPicks((prev) => prev.filter((p) => failed.some((f) => f.id === p.id)));
+          if (!failed.length) router.push(engagementSourcesPath(added));
+        },
       }
     );
 

@@ -138,12 +138,14 @@ export default function EngagementDetailPage() {
         </div>
       </header>
 
-      <EngagementTabs
-        large
-        tabs={tabs}
-        active={tab in STEP_TAB ? STEP_TAB[tab as StepView] : (tab as EngagementTabKey)}
-        onChange={setTab}
-      />
+      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+        <EngagementTabs
+          large
+          tabs={tabs}
+          active={tab in STEP_TAB ? STEP_TAB[tab as StepView] : (tab as EngagementTabKey)}
+          onChange={setTab}
+        />
+      </div>
 
       {tab === "overview" ? (
         <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
