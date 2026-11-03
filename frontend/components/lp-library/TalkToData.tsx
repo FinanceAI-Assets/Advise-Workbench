@@ -1,12 +1,20 @@
 "use client";
 
-import { ArrowRight, Check, CheckCircle2, FileText, Paperclip, Send, X } from "lucide-react";
+import { Check, CheckCircle2, FileText, Paperclip, Plus, Search, Send, X } from "lucide-react";
 import { type ChangeEvent, type DragEvent, type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 
+import { AddResultNote } from "@/components/lp-library/AddResultNote";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
-import { type LibraryAnswer, useLibraryAskMutation, usePracticeQuery } from "@/hooks/useWorkbench";
+import {
+  type LibraryAnswer,
+  useAddPracticesToEngagementMutation,
+  useLibraryAskMutation,
+  useMyEngagementOptionsQuery,
+  usePracticeQuery,
+} from "@/hooks/useWorkbench";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
@@ -199,43 +207,63 @@ function AnswerTurn({ turn, author }: { turn: DiscoveryTurn; author: string }) {
 }
 
 /**
- * Talk to data: ask the approved library, check the retrieved sources worth keeping, then take the checked
- * ones into an engagement. Checking a source never changes the answers unless "Ask selected sources only" is on.
+ * Talk to data: ask the approved library, check the retrieved sources worth keeping, then add the checked ones to an
+ * engagement's sources. Checking a source never changes the answers unless "Ask selected sources only" is on.
  */
 export function TalkToData({
   turns,
   setTurns,
   selection,
   onToggle,
-  onUse,
+  onBrowse,
+  chosenScope,
+  setScope,
+  browsing,
 }: {
   turns: DiscoveryTurn[];
   setTurns: (update: (prev: DiscoveryTurn[]) => DiscoveryTurn[]) => void;
   selection: SelectedSource[];
   onToggle: (source: SelectedSource) => void;
-  onUse: () => void;
+  onBrowse: () => void;
+  chosenScope: DiscoveryTurn["scope"];
+  setScope: (scope: DiscoveryTurn["scope"]) => void;
+  browsing: boolean;
 }) {
   const ask = useLibraryAskMutation();
+  const addPractices = useAddPracticesToEngagementMutation();
+  const engagements = useMyEngagementOptionsQuery();
   const { user } = useAuth();
+  const [projectId, setProjectId] = useState("");
   const [question, setQuestion] = useState("");
-  const [chosenScope, setScope] = useState<"broad" | "selected">("broad");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachProblems, setAttachProblems] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const nextId = useRef(turns.length);
   const bottom = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLFormElement>(null);
   const checkedIds = new Set(selection.map((s) => s.practiceId));
   const latest = [...turns].reverse().find((t) => t.answer);
   const sources = latest?.answer?.sources ?? [];
   const unchecked = sources.filter((s) => !s.practiceId || !checkedIds.has(s.practiceId)).length;
   const author = user?.name || "You";
+  const rows = engagements.data?.items ?? [];
+  const target = projectId || rows[0]?.id || "";
+  const selectionIds = selection.map((s) => s.practiceId);
+  // The sources stay selected after adding, since the chat may still be answering from them; the note is about these.
+  const result = addPractices.variables?.practiceIds.join() === selectionIds.join() ? addPractices.data : undefined;
+  const resultProject = addPractices.variables?.projectId ?? "";
   // With nothing checked, "selected sources only" has nothing to search, so discovery is broad again.
   const scope = selection.length ? chosenScope : "broad";
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns]);
+
+  // Coming back from the source screen, the next thing to do is ask.
+  useEffect(() => {
+    if (!browsing) composer.current?.querySelector("textarea")?.focus();
+  }, [browsing]);
 
   const send = () => {
     const q = question.trim();
@@ -288,11 +316,19 @@ export function TalkToData({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+      <div className={cn("grid gap-4", latest && "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]")}>
         <Card className="flex min-h-[560px] flex-col gap-4">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-base font-semibold text-[var(--text-default)]">Talk to your knowledge</h2>
-            <span className="rounded-md bg-[#EFF6E6] px-2 py-0.5 text-2xs font-medium text-[#356B12]">Library discovery</span>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-[var(--text-default)]">Talk to your knowledge</h2>
+              <p className="text-2xs text-[var(--text-muted)]">
+                Permission-aware retrieval · Approved practices only · External web search off · Discovery, not generation
+              </p>
+            </div>
+            <Button type="button" variant="secondary" onClick={onBrowse} className="flex shrink-0 items-center gap-2">
+              <Search size={16} aria-hidden />
+              Browse sources
+            </Button>
           </div>
 
           <fieldset className="space-y-1.5">
@@ -336,7 +372,9 @@ export function TalkToData({
           <div className="flex-1 space-y-4 overflow-y-auto" aria-live="polite">
             {turns.length === 0 ? (
               <p className="rounded-lg border border-dashed border-[var(--surface-border)] p-4 text-sm text-[var(--text-muted)]">
-                Ask what guidance the library holds, compare approaches, or narrow down the sources to take into an engagement.
+                {scope === "selected"
+                  ? `Ask anything about ${listOf(selection.map((s) => s.title))}. Answers come only from ${selection.length === 1 ? "this source" : "these sources"}.`
+                  : "Ask what guidance the library holds, compare approaches, or narrow down the sources to take into an engagement."}
               </p>
             ) : (
               turns.map((turn) => <AnswerTurn key={turn.id} turn={turn} author={author} />)
@@ -344,7 +382,7 @@ export function TalkToData({
             <div ref={bottom} />
           </div>
 
-          <form onSubmit={onSubmit} className="space-y-2">
+          <form ref={composer} onSubmit={onSubmit} className="space-y-2">
             <div
               className={cn(
                 "rounded-lg border p-2 transition",
@@ -389,7 +427,11 @@ export function TalkToData({
                 maxLength={500}
                 onChange={(e) => setQuestion(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder="Ask about practices, compare approaches or refine your search…"
+                placeholder={
+                  scope === "selected"
+                    ? `Ask about your ${selection.length} selected source${selection.length === 1 ? "" : "s"}…`
+                    : "Ask about practices, compare approaches or refine your search…"
+                }
                 aria-label="Question"
                 className="border-0 px-2 focus:ring-0"
               />
@@ -440,11 +482,12 @@ export function TalkToData({
           </form>
         </Card>
 
+        {latest ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-[var(--text-default)]">
-                Retrieved sources{latest ? ` · ${sources.length} match${sources.length === 1 ? "" : "es"}` : ""}
+                Retrieved sources · {sources.length} match{sources.length === 1 ? "" : "es"}
               </h2>
               <p className="text-2xs text-[var(--text-muted)]">Ranked by relevance · Check independently to include</p>
             </div>
@@ -469,9 +512,7 @@ export function TalkToData({
             </div>
           ) : (
             <Card className="text-sm text-[var(--text-muted)]">
-              {latest
-                ? "This answer cites no library passages. Try naming a practice, topic or outcome."
-                : "Sources the answer draws on appear here. Check the ones you want to take into an engagement."}
+              This answer cites no library passages. Try naming a practice, topic or outcome.
             </Card>
           )}
 
@@ -480,7 +521,7 @@ export function TalkToData({
             <div>
               <p className="text-sm font-semibold text-[var(--text-default)]">Selection is separate from discovery</p>
               <p className="text-xs text-[var(--text-muted)]">
-                Only checked sources will transfer.
+                Only checked sources go into an engagement.
                 {selection.length
                   ? ` Switch to "Ask selected sources only" to restrict future answers to your ${selection.length} checked source${selection.length === 1 ? "" : "s"}.`
                   : " Check a source to keep it while you keep asking."}
@@ -488,27 +529,80 @@ export function TalkToData({
             </div>
           </div>
         </div>
+        ) : null}
       </div>
 
+      {selection.length || latest ? (
       <div className="flex flex-wrap items-center gap-4 rounded-lg border-2 border-[var(--accent-green)] bg-white p-4 shadow-sm">
         <span className="flex items-center gap-1.5 rounded-md border border-[var(--accent-green)] bg-[#EFF6E6] px-2.5 py-1 text-2xs font-semibold text-[#356B12]">
           <Check size={12} aria-hidden />
           {selection.length} source{selection.length === 1 ? "" : "s"} selected
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-[var(--text-default)]">
-            {selection.length ? selection.map((s) => `${s.code} · ${s.title}`).join(" / ") : "No sources checked yet"}
-          </p>
+          {selection.length ? (
+            <ul className="mb-1 flex flex-wrap gap-1.5" aria-label="Selected sources">
+              {selection.map((source) => (
+                <li
+                  key={source.practiceId}
+                  className="flex max-w-[280px] items-center gap-1 rounded-full bg-[#EFF6E6] py-0.5 pl-2.5 pr-1 text-2xs font-medium text-[#356B12]"
+                >
+                  <span className="truncate" title={`${source.code} · ${source.title}`}>
+                    {source.code} · {source.title}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onToggle(source)}
+                    aria-label={`Remove ${source.title}`}
+                    className="shrink-0 rounded-full p-0.5 hover:bg-white"
+                  >
+                    <X size={12} aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="truncate text-sm font-medium text-[var(--text-default)]">No sources checked yet</p>
+          )}
           <p className="text-2xs text-[var(--text-muted)]">
             {latest ? `${unchecked} unchecked result${unchecked === 1 ? "" : "s"} stay in discovery. ` : ""}
-            Review your selection before adding it to an engagement.
+            Adding puts them in the engagement&apos;s sources and opens no conversation.
           </p>
         </div>
-        <Button type="button" onClick={onUse} disabled={!selection.length} className="flex items-center gap-2">
-          <ArrowRight size={16} aria-hidden />
-          Use in engagement
+        <Select
+          aria-label="Engagement"
+          value={target}
+          onChange={(e) => setProjectId(e.target.value)}
+          disabled={!rows.length}
+          className="w-auto max-w-[260px]"
+        >
+          {rows.length ? null : <option value="">{engagements.isPending ? "Loading…" : "No active engagements"}</option>}
+          {rows.map((row) => (
+            <option key={row.id} value={row.id}>
+              {row.name} · {row.code}
+            </option>
+          ))}
+        </Select>
+        <Button
+          type="button"
+          onClick={() => addPractices.mutate({ projectId: target, practiceIds: selectionIds })}
+          disabled={!selection.length || !target || addPractices.isPending}
+          className="flex items-center gap-2"
+        >
+          <Plus size={16} aria-hidden />
+          {addPractices.isPending ? "Adding…" : "Add to engagement"}
         </Button>
+        {result ? (
+          <div className="basis-full space-y-1">
+            <AddResultNote
+              result={result}
+              projectId={resultProject}
+              projectName={rows.find((row) => row.id === resultProject)?.name ?? "the engagement"}
+              failedHint="Not added:"
+            />
+          </div>
+        ) : null}
       </div>
+      ) : null}
     </div>
   );
 }

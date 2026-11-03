@@ -68,21 +68,22 @@ def browse_library(
     """Approved practices only: candidates stay in the admin console until published."""
     approved = db.scalars(select(LpPractice).where(LpPractice.status == "Approved")).all()
     saved = _saved_ids(db, user)
-    counts: dict[str, int] = {}
-    for practice in approved:
-        counts[practice.category] = counts.get(practice.category, 0) + 1
-    categories = [{"id": "all", "label": "All practices", "count": len(approved)}] + [
-        {"id": _slug(label), "label": label, "count": count} for label, count in sorted(counts.items())
-    ]
     needle = q.strip().lower()
-    matches = [
+    found = [
         p
         for p in approved
-        if (category == "all" or _slug(p.category) == category)
-        and (not maturity or p.maturity == maturity)
+        if (not maturity or p.maturity == maturity)
         and (not saved_only or p.id in saved)
         and (not needle or needle in f"{p.title} {p.description} {p.category}".lower())
     ]
+    # Each category counts what clicking it would list; one with no matches stays, so the list does not jump.
+    counts = {practice.category: 0 for practice in approved}
+    for practice in found:
+        counts[practice.category] += 1
+    categories = [{"id": "all", "label": "All practices", "count": len(found)}] + [
+        {"id": _slug(label), "label": label, "count": count} for label, count in sorted(counts.items())
+    ]
+    matches = [p for p in found if category == "all" or _slug(p.category) == category]
     if sort == "title":
         matches.sort(key=lambda p: p.title.lower())
     elif sort == "updated":
@@ -304,6 +305,15 @@ def ask_library(body: AskLibrary, user: User = Depends(get_current_user), db: Se
     ]
     if found.get("answer") and sources:
         return {**reply(found["answer"], matched), "sources": sources}
+    if only:  # asked about these sources, so a list of "matching" practices would not be an answer
+        listed = ", ".join(p.title for p in matched[:5])
+        if not found:
+            return reply(f"The answer service is unavailable, so nothing could be read from: {listed}. Please try again.", matched)
+        return reply(
+            f"The selected sources have no searchable content yet, so this cannot be answered from them: {listed}. "
+            "Choose other sources or switch to Broad discovery.",
+            matched,
+        )
     if matched:
         listed = ", ".join(p.title for p in matched[:5])
         return reply(f"These approved practices match your question: {listed}. Open one to read its guidance.", matched)

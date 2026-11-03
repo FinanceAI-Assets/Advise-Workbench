@@ -55,11 +55,6 @@ export function SourcesSection({ id, detail }: SectionProps) {
             ))}
           </ul>
         )}
-        <Link href="/library" className="!no-underline">
-          <Button variant="secondary" className="w-full justify-center">
-            Browse the library
-          </Button>
-        </Link>
         <p className="text-xs text-[var(--text-muted)]">
           Only permitted, indexed sources are retrieved. Source boundaries travel with drafts.
         </p>
