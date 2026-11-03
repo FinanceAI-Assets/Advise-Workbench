@@ -24,6 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.agents.supervisor_agent import Coordinator
+from src.agents.investigator_agent import InvestigatorAgent
 from src.core.config import settings
 from src.core.exceptions import RunBudgetExceeded
 from src.evaluation.narrative_feedback import (
@@ -1111,7 +1112,10 @@ class RunJob:
 
 # Variables each phase needs from the earlier ones (the LangGraph orchestrator checkpoints these).
 PHASE_CARRY: dict[str, tuple[str, ...]] = {
-    "context": ('_run_cost', '_run_usage', 'plan_payload_obj'),
+    "context": ('_run_cost', '_run_usage', 'plan_payload_obj', 'init_state', 'conversation_digest', 'requested', 'output_type_representations'),
+    "path_router": ('_run_cost', '_run_usage', 'plan_payload_obj', 'init_state', 'conversation_digest', 'requested', 'routing_decision', 'router_input'),  # NEW
+    "path_conversation": ('routing_decision',),  # NEW
+    "path_rag_search": ('_run_cost', '_run_usage', 'init_state', 'routing_decision'),  # NEW
     "generate": ('_run_cost', '_run_usage', 'hard_gate_enabled', 'init_state', 'output_type_representations', 'plan_payload_obj', 'requested'),
     "evaluate": ('_run_cost', '_run_usage', 'final_artifact_report', 'hard_gate_enabled', 'plan_payload_obj', 'requested', 'run_dir', 'run_todos', 'state'),
     "remember": ('state',),
@@ -1319,15 +1323,28 @@ def _phase_prepare(job: RunJob) -> RunOutcome | None:
 
 
 def _phase_context(job: RunJob) -> RunOutcome | None:
-    """Assemble what the coordinator starts from: run settings, the plan and the conversation digest.
+    """Phase 2: Context + Sheldon Router. Assemble coordinator input and route user intent.
 
-    Returns the job's outcome when this phase ends the attempt, else None to continue with the next phase.
+    Steps 1-7: Current behavior (load config, build digest, create state)
+    Step 8: NEW - Call Sheldon Router Agent for intent-based routing
+    Step 9: NEW - Branch based on routing decision:
+        - Path 1.a: Conversation (direct answer) → END
+        - Path 1.b: RAG search → Answer or continue to Phase 3
+        - Path 1.c: Generation → Continue to Phase 3
+
+    Returns the job's outcome when this phase ends the attempt (Path 1.a/1.b answer),
+    else None to continue with the next phase (Path 1.b generate or 1.c).
     """
+    from src.agents.sheldon_router_agent import route_user_intent
+    from src.agents.conversation.answer_agent import answer_user_question
+    from src.agents.conversation.rag_agent import search_knowledge_base
+
     project_id, run_id = job.project_id, job.run_id
     run = job.vars.get("run")
     session = job.vars.get("session")
     print(f"\n{'='*80}\n[PHASE-CONTEXT] STARTED for run_id={run_id}\n{'='*80}\n")
     try:
+        print(f"[PHASE-CONTEXT] STEPS 1-7: Loading config, digest, and state...")
         print(f"[PHASE-CONTEXT] 1. Parsing output_types...")
         try:
             requested = json.loads(run.output_types) if run.output_types else []
@@ -1416,9 +1433,87 @@ def _phase_context(job: RunJob) -> RunOutcome | None:
         if digest:
             init_state["conversation_digest"] = digest
             print(f"[PHASE-CONTEXT] 4a. Conversation digest added to state")
-        print(f"[PHASE-CONTEXT] 5. Committing session...")
-        session.commit()
-        print(f"[PHASE-CONTEXT] [OK] PHASE COMPLETE - moving to next phase\n")
+
+        # STEP 8: NEW - Call Sheldon Router for intent-based routing
+        print(f"[PHASE-CONTEXT] 8. Calling Sheldon Router Agent...")
+        router_input = {
+            "user_instruction": run.instruction or "",
+            "conversation_digest": digest,
+            "plan_payload": plan_payload_obj,
+            "requested_outputs": requested,
+            "init_state": init_state,
+            "project_context": {"project_id": project_id}
+        }
+        routing_decision = route_user_intent(router_input)
+        print(f"[PHASE-CONTEXT] 8a. Router decision: path={routing_decision['path']}, "
+              f"confidence={routing_decision['confidence']:.2f}")
+        append_run_event(session, run_id, "router_decision", routing_decision)
+
+        # STEP 9: NEW - Branch based on routing decision
+        path = routing_decision.get("path", "1.c")
+
+        # PATH 1.a: CONVERSATION (Direct Answer) - END RUN
+        if path == "1.a":
+            print(f"[PHASE-CONTEXT] 9. PATH 1.a: CONVERSATION - Generating direct answer...")
+            answer_result = answer_user_question(router_input)
+            if answer_result.get("success"):
+                print(f"[PHASE-CONTEXT] 9a. Answer generated successfully")
+                append_run_event(session, run_id, "conversation_answer", {
+                    "answer": answer_result.get("answer", ""),
+                    "sources": answer_result.get("sources", []),
+                    "confidence": answer_result.get("confidence", 0.0),
+                    "switch_to_generation": answer_result.get("switch_to_generation", False)
+                })
+                run.status = "completed"
+                session.commit()
+                print(f"[PHASE-CONTEXT] [OK] PATH 1.a COMPLETE - Run ended\n")
+                return (True, None)
+            else:
+                print(f"[PHASE-CONTEXT] 9a. ERROR in answer generation: {answer_result.get('error')}")
+                raise Exception(f"Answer agent failed: {answer_result.get('error')}")
+
+        # PATH 1.b: RAG SEARCH (Knowledge Base) - Conditional
+        elif path == "1.b":
+            print(f"[PHASE-CONTEXT] 9. PATH 1.b: RAG SEARCH - Searching knowledge base...")
+            rag_result = search_knowledge_base(router_input)
+            if rag_result.get("success"):
+                print(f"[PHASE-CONTEXT] 9a. RAG search completed")
+                append_run_event(session, run_id, "rag_search", {
+                    "should_answer": rag_result.get("should_answer", False),
+                    "should_generate": rag_result.get("should_generate", False),
+                    "confidence": rag_result.get("confidence", 0.0),
+                    "documents_found": len(rag_result.get("documents", []))
+                })
+
+                # If RAG answer is sufficient, END RUN
+                if rag_result.get("should_answer"):
+                    print(f"[PHASE-CONTEXT] 9b. RAG answer sufficient - Ending run")
+                    append_run_event(session, run_id, "rag_answer", {
+                        "answer": rag_result.get("answer_preview", ""),
+                        "sources": [doc.get("title") for doc in rag_result.get("documents", [])]
+                    })
+                    run.status = "completed"
+                    session.commit()
+                    print(f"[PHASE-CONTEXT] [OK] PATH 1.b (ANSWER) COMPLETE - Run ended\n")
+                    return (True, None)
+
+                # If generation needed, continue with RAG context
+                else:
+                    print(f"[PHASE-CONTEXT] 9b. RAG insufficient - Continue to Phase 3 with RAG context")
+                    accumulated = rag_result.get("accumulated_context", {})
+                    init_state["rag_context"] = accumulated.get("rag_context", "")
+                    init_state["rag_documents"] = accumulated.get("rag_documents", [])
+                    # Fall through to Phase 3
+            else:
+                print(f"[PHASE-CONTEXT] 9a. RAG search failed: {rag_result.get('error')}, defaulting to Phase 3")
+                # Fall through to Phase 3 on error
+
+        # PATH 1.c: GENERATION (Default) - Continue to Phase 3
+        # (This is the current behavior - no special handling needed)
+
+        # Final: Store routing decision and continue to path router
+        print(f"[PHASE-CONTEXT] [OK] STEPS 1-7 COMPLETE - Routing decision stored\n")
+
     except Exception as phase_exception:
         print(f"\n{'='*80}")
         print(f"[PHASE-CONTEXT] [ERROR] EXCEPTION CAUGHT:")
@@ -1433,9 +1528,181 @@ def _phase_context(job: RunJob) -> RunOutcome | None:
     return None
 
 
+def _path_router(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Router Node: Sheldon Router Agent - Analyze intent and route to path.
+
+    This is Step 8 of Phase 2: Call Sheldon Router Agent for intelligent routing.
+    Returns None to continue to conditional edges (path_conversation, path_rag_search, or generate).
+    """
+    from src.agents.sheldon_router_agent import route_user_intent
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    digest = job.vars.get("conversation_digest", "")
+    plan_payload_obj = job.vars.get("plan_payload_obj", {})
+    requested = job.vars.get("requested", [])
+    init_state = job.vars.get("init_state", {})
+
+    print(f"\n{'='*80}\n[PATH-ROUTER] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-ROUTER] Calling Sheldon Router Agent...")
+        router_input = {
+            "user_instruction": run.instruction or "",
+            "conversation_digest": digest,
+            "plan_payload": plan_payload_obj,
+            "requested_outputs": requested,
+            "init_state": init_state,
+            "project_context": {"project_id": project_id}
+        }
+        routing_decision = route_user_intent(router_input)
+        print(f"[PATH-ROUTER] Router decision: path={routing_decision['path']}, confidence={routing_decision['confidence']:.2f}")
+        append_run_event(session, run_id, "router_decision", routing_decision)
+
+        # Store for use by conditional edges
+        job.vars["routing_decision"] = routing_decision
+        job.vars["router_input"] = router_input
+
+        session.commit()
+        print(f"[PATH-ROUTER] [OK] COMPLETE - Routing decision made\n")
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-ROUTER] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+    return None
+
+
+def _path_conversation(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Path 1.a Node: Conversation Agent - Direct answer to user question.
+
+    Handles conversational Q&A without file generation.
+    Returns outcome (True, None) to end run on success.
+    """
+    from src.agents.conversation.answer_agent import answer_user_question
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    router_input = job.vars.get("router_input", {})
+
+    print(f"\n{'='*80}\n[PATH-CONVERSATION] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-CONVERSATION] Generating conversational answer...")
+        answer_result = answer_user_question(router_input)
+
+        if answer_result.get("success"):
+            print(f"[PATH-CONVERSATION] Answer generated successfully")
+            append_run_event(session, run_id, "conversation_answer", {
+                "answer": answer_result.get("answer", ""),
+                "sources": answer_result.get("sources", []),
+                "confidence": answer_result.get("confidence", 0.0),
+                "switch_to_generation": answer_result.get("switch_to_generation", False)
+            })
+            run.status = "completed"
+            session.commit()
+            print(f"[PATH-CONVERSATION] [OK] COMPLETE - Run ended with answer\n")
+            increment("path_conversation_success_total")
+            return (True, None)  # END RUN
+        else:
+            print(f"[PATH-CONVERSATION] ERROR in answer generation: {answer_result.get('error')}")
+            raise Exception(f"Answer agent failed: {answer_result.get('error')}")
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-CONVERSATION] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+
+
+def _path_rag_search(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Path 1.b Node: RAG Search Agent - Knowledge base search + decision.
+
+    Searches knowledge base and decides if answer is sufficient or generation needed.
+    Returns outcome (True, None) to end run if answer sufficient.
+    Returns None to continue to Phase 3 if generation needed.
+    """
+    from src.agents.conversation.rag_agent import search_knowledge_base
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    router_input = job.vars.get("router_input", {})
+    init_state = job.vars.get("init_state", {})
+
+    print(f"\n{'='*80}\n[PATH-RAG-SEARCH] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-RAG-SEARCH] Searching knowledge base...")
+        rag_result = search_knowledge_base(router_input)
+
+        if rag_result.get("success"):
+            print(f"[PATH-RAG-SEARCH] RAG search completed")
+            append_run_event(session, run_id, "rag_search", {
+                "should_answer": rag_result.get("should_answer", False),
+                "should_generate": rag_result.get("should_generate", False),
+                "confidence": rag_result.get("confidence", 0.0),
+                "documents_found": len(rag_result.get("documents", []))
+            })
+
+            # If RAG answer is sufficient, END RUN
+            if rag_result.get("should_answer"):
+                print(f"[PATH-RAG-SEARCH] RAG answer sufficient - Ending run")
+                append_run_event(session, run_id, "rag_answer", {
+                    "answer": rag_result.get("answer_preview", ""),
+                    "sources": [doc.get("title") for doc in rag_result.get("documents", [])]
+                })
+                run.status = "completed"
+                session.commit()
+                print(f"[PATH-RAG-SEARCH] [OK] COMPLETE - Run ended with RAG answer\n")
+                increment("path_rag_answer_total")
+                return (True, None)  # END RUN
+
+            # If generation needed, continue with RAG context
+            else:
+                print(f"[PATH-RAG-SEARCH] RAG insufficient - Continue to Phase 3 with RAG context")
+                accumulated = rag_result.get("accumulated_context", {})
+                init_state["rag_context"] = accumulated.get("rag_context", "")
+                init_state["rag_documents"] = accumulated.get("rag_documents", [])
+                job.vars["init_state"] = init_state
+                session.commit()
+                print(f"[PATH-RAG-SEARCH] [OK] COMPLETE - Continuing to generation with RAG context\n")
+                increment("path_rag_generate_total")
+                return None  # Continue to Phase 3
+        else:
+            print(f"[PATH-RAG-SEARCH] RAG search failed: {rag_result.get('error')}, defaulting to Phase 3")
+            session.commit()
+            return None  # Fall through to Phase 3 on error
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-RAG-SEARCH] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+
+
 def _phase_generate(job: RunJob) -> RunOutcome | None:
     """Run pre-execution hooks and the coordinator, then save the generated artifacts and stream the outputs.
 
+    Receives context_validation from Phase 2 (if available) and passes to supervisor/agents.
     Returns the job's outcome when this phase ends the attempt, else None to continue with the next phase.
     """
     project_id, run_id, queue_payload = job.project_id, job.run_id, job.queue_payload  # noqa: F841
@@ -1449,6 +1716,12 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
     requested = job.vars.get("requested")
     output_type_representations = job.vars.get("output_type_representations")
     print(f"\n{'='*80}\n[PHASE-GENERATE] STARTED for run_id={run_id}\n{'='*80}\n")
+
+    # Retrieve context_validation from Phase 2 (if available)
+    context_validation = job.vars.get("context_validation", {})
+    if context_validation:
+        print(f"[PHASE-GENERATE] Context validation received: confidence={context_validation.get('overall_confidence', 1.0):.2f}")
+        print(f"[PHASE-GENERATE] User decision: {context_validation.get('user_decision', 'auto')}")
     try:
         print(f"[PHASE-GENERATE] 1. Syncing hooks from db...")
         sync_disabled_hooks_from_db(session, project_id=project_id)
@@ -1517,6 +1790,12 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 return True
             session.refresh(run)
             return bool(run.abort_requested)
+
+        # Add context_validation to init_state for supervisor/agents
+        if context_validation:
+            init_state["context_validation"] = context_validation
+            init_state["context_confidence"] = context_validation.get("overall_confidence", 1.0)
+            print(f"[PHASE-GENERATE] Passing context_validation to supervisor/agents")
 
         async def _consume_coordinator() -> dict[str, Any]:
             final_state: dict[str, Any] = {}
@@ -2142,8 +2421,26 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 final_artifact_report=final_artifact_report if isinstance(final_artifact_report, dict) else {},
                 evidence_gate=evidence_gate,
             )
+
+        # ✅ DETAILED EVALUATION RESULT LOGGING
+        print(f"\n{'─'*80}")
+        print(f"[PHASE-EVALUATE] 📊 EVALUATION RESULTS:")
+        print(f"[PHASE-EVALUATE]   Status: {evaluator_pipeline.get('status', 'unknown')}")
+        print(f"[PHASE-EVALUATE]   Visual QA Passed: {evaluator_pipeline.get('visual_qa_passed')}")
+        print(f"[PHASE-EVALUATE]   QA Passed: {evaluator_pipeline.get('qa_passed')}")
+        print(f"[PHASE-EVALUATE]   Guardrails Passed: {evaluator_pipeline.get('guardrails_passed')}")
+        print(f"[PHASE-EVALUATE]   Evidence Passed: {evaluator_pipeline.get('evidence_passed')}")
+        print(f"{'─'*80}\n")
+
         append_run_event(session, run_id, "evaluator_pipeline", evaluator_pipeline)
-        if hard_gate_enabled and evaluator_pipeline["status"] != "pass":
+
+        # Check if evaluation passed
+        if evaluator_pipeline["status"] == "pass":
+            print(f"\n[PHASE-EVALUATE] ✅ EVALUATION PASSED!")
+            print(f"[PHASE-EVALUATE]   All quality checks passed")
+            print(f"[PHASE-EVALUATE]   Moving to next phase (REMEMBER/REVIEW)...\n")
+            # Continue to next phase (don't return, fall through)
+        elif hard_gate_enabled and evaluator_pipeline["status"] != "pass":
             prior_retry_count = int(
                 session.scalar(
                     select(func.count()).select_from(RunEvent).where(
@@ -2152,6 +2449,7 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 )
                 or 0
             )
+            print(f"[PHASE-EVALUATE] ⚠️ EVALUATION FAILED - Current retry count: {prior_retry_count}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}")
             if prior_retry_count < MAX_EVALUATOR_REMEDIATION_ROUNDS:
                 run.status = "approved"
                 nxt = prior_retry_count + 1
@@ -2160,6 +2458,11 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 run.error_message = (
                     f"Evaluator checks failed; auto-remediation {nxt}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}."
                 )
+                print(f"[PHASE-EVALUATE] 🔄 RETRY PATH: Attempt {nxt}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+                print(f"[PHASE-EVALUATE]   Re-queueing run for Phase 3 generation with feedback...")
+                print(f"[PHASE-EVALUATE]   Failed checks: visual_qa={not evaluator_pipeline.get('visual_qa_passed')}, "
+                      f"qa={not evaluator_pipeline.get('qa_passed')}, "
+                      f"guardrails={not evaluator_pipeline.get('guardrails_passed')}")
                 # ── Inject per-artifact visual feedback into plan_payload so each
                 # agent receives targeted remediation hints on the retry pass.
                 # Mapping: per_artifact key → plan_payload key that agent reads.
@@ -2316,6 +2619,187 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 session.commit()
                 enqueue_run_execution(project_id, run_id)
                 return True, None
+
+            # ── INVESTIGATOR AGENT: Retries exhausted → analyze failures & route
+            print(f"\n{'='*80}")
+            print(f"[PHASE-EVALUATE] 🔴 RETRIES EXHAUSTED ({prior_retry_count}/{MAX_EVALUATOR_REMEDIATION_ROUNDS})")
+            print(f"[PHASE-EVALUATE] ⏳ Initiating Investigator Agent Analysis...")
+            print(f"{'='*80}\n")
+            try:
+                investigator = InvestigatorAgent()
+                print(f"[INVESTIGATOR] ✅ Investigator instance created")
+
+                # Get all failed attempts data from run_events
+                retry_events = session.query(RunEvent).filter(
+                    RunEvent.run_id == run_id,
+                    RunEvent.event_type == "evaluator_retry_requested"
+                ).order_by(RunEvent.created_at.asc()).all()
+
+                print(f"[INVESTIGATOR] 📋 Found {len(retry_events)} retry events")
+
+                attempts_data = []
+                for i, event in enumerate(reversed(retry_events)):
+                    payload = event.payload or {}
+                    error_summary = payload.get("evaluator_pipeline", {}).get("summary", "Unknown error")
+                    attempts_data.append({
+                        "attempt": i + 1,
+                        "error": error_summary,
+                        "stage": "evaluation",
+                        "artifact": "multiple",
+                        "event_data": payload
+                    })
+                    print(f"[INVESTIGATOR]   Attempt {i+1}: {error_summary[:100]}...")
+
+                if not attempts_data:
+                    # Fallback if no retry events
+                    print(f"[INVESTIGATOR] ⚠️ No retry events found, using fallback attempt data")
+                    attempts_data = [{
+                        "attempt": 1,
+                        "error": "Evaluator checks failed",
+                        "stage": "evaluation",
+                        "artifact": "multiple"
+                    }]
+
+                # Get context_validation from state
+                context_validation = state.get("context_validation", {})
+                context_info = {
+                    "context_validation": context_validation,
+                    "run_instruction": run.instruction or "",
+                    "project_context": run.short_name or ""
+                }
+
+                print(f"[INVESTIGATOR] 🔍 Starting analysis pipeline...")
+                # Run full investigation pipeline
+                investigation_result = investigator.investigate_and_decide(
+                    attempts_data,
+                    context_info
+                )
+
+                root_cause = investigation_result['classification'].get('root_cause', 'unknown')
+                confidence = investigation_result.get('investigator_confidence', 0)
+                route_to = investigation_result['routing_decision'].get('route_to', 'unknown')
+
+                print(f"\n{'─'*80}")
+                print(f"[INVESTIGATOR] 📊 ANALYSIS COMPLETE:")
+                print(f"[INVESTIGATOR]   Root Cause: {root_cause}")
+                print(f"[INVESTIGATOR]   Confidence: {confidence:.1%}")
+                print(f"[INVESTIGATOR]   Routing to: {route_to}")
+                print(f"[INVESTIGATOR]   Chat message length: {len(investigation_result.get('chat_message', ''))}")
+                print(f"{'─'*80}\n")
+
+                # Persist investigator's chat message
+                from src.core.db.models import ConversationMessage
+                conv = session.query(ConversationMessage).filter_by(run_id=run_id).first()
+                if conv:
+                    conv_id = conv.conversation_id
+                    msg = ConversationMessage(
+                        conversation_id=conv_id,
+                        role="assistant",
+                        content=investigation_result["chat_message"],
+                        metadata_json=json.dumps({
+                            "kind": "investigator_analysis",
+                            "root_cause": investigation_result["classification"].get("root_cause"),
+                            "confidence": investigation_result["investigator_confidence"],
+                            "source": "phase4_evaluator"
+                        })
+                    )
+                    session.add(msg)
+                    session.commit()
+                    print(f"[INVESTIGATOR] Chat message persisted to conversation")
+
+                # Handle routing decision
+                route_to = investigation_result["routing_decision"].get("route_to", "escalate")
+
+                if route_to == "phase_2":
+                    print(f"\n[INVESTIGATOR] ↩️ ROUTING DECISION: PHASE 2 (Clarification Needed)")
+                    message = investigation_result["routing_decision"].get(
+                        "message",
+                        "Investigator analysis suggests clarification needed"
+                    )
+                    print(f"[INVESTIGATOR]   Message: {message[:150]}...")
+                    run.status = "awaiting_clarification"
+                    run.error_message = message
+                    session.commit()
+                    append_run_event(
+                        session,
+                        run_id,
+                        "investigator_routed_to_phase2",
+                        investigation_result
+                    )
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Run status set to 'awaiting_clarification'")
+                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_routed_to_phase2")
+
+                elif route_to == "phase_3":
+                    print(f"\n[INVESTIGATOR] ♻️ ROUTING DECISION: PHASE 3 (LLM Problem with Guidance)")
+                    guidance = investigation_result["routing_decision"].get("guidance", [])
+                    print(f"[INVESTIGATOR]   Guidance items: {len(guidance)}")
+                    for i, g in enumerate(guidance[:3], 1):
+                        print(f"[INVESTIGATOR]     {i}. {str(g)[:100]}...")
+                    run.status = "approved"
+                    run.plan_payload = json.dumps({
+                        **json.loads(run.plan_payload or "{}"),
+                        "investigator_guidance": guidance,
+                        "investigator_root_cause": investigation_result["classification"].get("root_cause")
+                    })
+                    run.error_message = "Investigator recommended Phase 3 retry with guidance"
+                    session.commit()
+                    append_run_event(
+                        session,
+                        run_id,
+                        "investigator_routed_to_phase3",
+                        investigation_result
+                    )
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Run status set to 'approved'")
+                    print(f"[INVESTIGATOR] ✅ Guidance injected into plan_payload")
+                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_routed_to_phase3")
+                    print(f"[INVESTIGATOR] ✅ Re-queuing run for Phase 3 generation...")
+                    enqueue_run_execution(project_id, run_id)
+                    return True, None
+
+                else:  # escalate
+                    print(f"\n[INVESTIGATOR] 🚨 ROUTING DECISION: ESCALATE (Technical Issue)")
+                    message = investigation_result["routing_decision"].get(
+                        "message",
+                        "Technical issue detected - escalated for review"
+                    )
+                    print(f"[INVESTIGATOR]   Message: {message[:150]}...")
+                    print(f"[INVESTIGATOR]   Alternatives: {investigation_result['routing_decision'].get('alternatives', [])}")
+                    run.status = "escalated_for_review"
+                    run.error_message = message
+                    session.commit()
+                    append_run_event(
+                        session,
+                        run_id,
+                        "investigator_escalated",
+                        investigation_result
+                    )
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Run status set to 'escalated_for_review'")
+                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_escalated")
+
+                print(f"\n{'='*80}")
+                print(f"[INVESTIGATOR] ✅ INVESTIGATION PIPELINE COMPLETE")
+                print(f"[INVESTIGATOR]   Status: {run.status}")
+                print(f"[INVESTIGATOR]   Chat message persisted: YES")
+                print(f"{'='*80}\n")
+
+            except Exception as investigator_error:
+                print(f"\n{'='*80}")
+                print(f"[INVESTIGATOR] ❌ ERROR DURING INVESTIGATION")
+                print(f"[INVESTIGATOR]   Error Type: {type(investigator_error).__name__}")
+                print(f"[INVESTIGATOR]   Error Message: {str(investigator_error)[:200]}")
+                print(f"[INVESTIGATOR]   Traceback:")
+                import traceback
+                for line in traceback.format_exc().split('\n'):
+                    if line.strip():
+                        print(f"[INVESTIGATOR]     {line}")
+                print(f"[INVESTIGATOR] ⚠️ Falling back to standard hard-fail logic")
+                print(f"{'='*80}\n")
+                _log.error(f"[INVESTIGATOR] Error during investigation: {investigator_error}", exc_info=True)
+                # Fall through to standard hard-fail logic below
+
             guardrails_only_failure = (
                 not evaluator_pipeline.get("guardrails_passed")
                 and evaluator_pipeline.get("qa_passed", True)
@@ -2614,6 +3098,9 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
 RUN_PHASES: tuple[tuple[str, Any], ...] = (
     ("prepare", _phase_prepare),
     ("context", _phase_context),
+    ("path_router", _path_router),  # NEW: Phase 2 Router Node
+    ("path_conversation", _path_conversation),  # NEW: Phase 2 Path 1.a Node
+    ("path_rag_search", _path_rag_search),  # NEW: Phase 2 Path 1.b Node
     ("generate", _phase_generate),
     ("evaluate", _phase_evaluate),
     ("remember", _phase_remember),
