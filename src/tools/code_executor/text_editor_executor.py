@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import json
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from src.core.config import settings, text_editor_allowed_extensions_set
-from src.core.storage import ensure_workspace, workspace_path
+from src.core.workspace_store import scratch
+
+# Folder for the tool call in progress (see execute_text_editor_tool).
+_ROOT: ContextVar[Path | None] = ContextVar("text_editor_root", default=None)
 
 
 def _project_root(project_id: str) -> Path:
-    ensure_workspace(project_id)
-    return workspace_path(project_id).resolve()
+    root = _ROOT.get()
+    if root is None:
+        raise RuntimeError("text editor helpers must run inside execute_text_editor_tool")
+    return root.resolve()
 
 
 def _resolve_path(project_id: str, raw_path: str) -> tuple[Path | None, str | None]:
@@ -208,33 +214,12 @@ def execute_text_editor_tool(
     command = str(tool_input.get("command") or "").strip()
     raw_path = str(tool_input.get("path") or "").strip()
     try:
-        if command == "view":
-            content, is_error = _view(project_id, raw_path, tool_input.get("view_range"))
-        elif command == "str_replace":
-            content, is_error = _str_replace(
-                project_id,
-                raw_path,
-                str(tool_input.get("old_str") or ""),
-                str(tool_input.get("new_str") or ""),
-                allow_write=allow_write,
-            )
-        elif command == "create":
-            content, is_error = _create(
-                project_id,
-                raw_path,
-                str(tool_input.get("file_text") or ""),
-                allow_write=allow_write,
-            )
-        elif command == "insert":
-            content, is_error = _insert(
-                project_id,
-                raw_path,
-                int(tool_input.get("insert_line") or 0),
-                str(tool_input.get("insert_text") or ""),
-                allow_write=allow_write,
-            )
-        else:
-            content, is_error = (f"Error: Unsupported text editor command '{command}'", True)
+        with scratch(project_id, hydrate=True) as root:
+            token = _ROOT.set(root)
+            try:
+                content, is_error = _dispatch(command, project_id, raw_path, tool_input, allow_write)
+            finally:
+                _ROOT.reset(token)
     except Exception as e:  # defensive: tool errors should return as tool_result
         content, is_error = (f"Error: text editor operation failed: {e}", True)
 
@@ -247,3 +232,34 @@ def execute_text_editor_tool(
         detail=content,
     )
     return content, is_error
+
+
+def _dispatch(
+    command: str, project_id: str, raw_path: str, tool_input: dict[str, Any], allow_write: bool
+) -> tuple[str, bool]:
+    if command == "view":
+        return _view(project_id, raw_path, tool_input.get("view_range"))
+    if command == "str_replace":
+        return _str_replace(
+            project_id,
+            raw_path,
+            str(tool_input.get("old_str") or ""),
+            str(tool_input.get("new_str") or ""),
+            allow_write=allow_write,
+        )
+    if command == "create":
+        return _create(
+            project_id,
+            raw_path,
+            str(tool_input.get("file_text") or ""),
+            allow_write=allow_write,
+        )
+    if command == "insert":
+        return _insert(
+            project_id,
+            raw_path,
+            int(tool_input.get("insert_line") or 0),
+            str(tool_input.get("insert_text") or ""),
+            allow_write=allow_write,
+        )
+    return (f"Error: Unsupported text editor command '{command}'", True)

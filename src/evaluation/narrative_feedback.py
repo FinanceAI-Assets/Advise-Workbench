@@ -112,9 +112,9 @@ def persist_narrative_signals(run_dir: Path, signals: dict[str, dict[str, Any]])
 
     if not signals:
         return None
-    if not isinstance(run_dir, Path):
+    if isinstance(run_dir, str):
         try:
-            run_dir = Path(str(run_dir))
+            run_dir = Path(run_dir)
         except Exception as exc:
             logger.warning("%s: suppressed error: %s", 'persist_narrative_signals', exc)
             return None
@@ -180,9 +180,9 @@ def narrative_signals_from_run_dir(run_dir: Path) -> dict[str, dict[str, Any]]:
     Fail-open: returns ``{}`` on any error.
     """
 
-    if not isinstance(run_dir, Path):
+    if isinstance(run_dir, str):
         try:
-            run_dir = Path(str(run_dir))
+            run_dir = Path(run_dir)
         except Exception:
             return {}
     path = run_dir / _NARRATIVE_SIGNALS_FILENAME

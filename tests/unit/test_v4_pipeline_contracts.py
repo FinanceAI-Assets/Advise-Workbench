@@ -8,7 +8,7 @@ from src.core.db.session import SessionLocal, init_db
 from src.guardrails.data_protection.service import DPDPService
 from src.memory.retrieval import TieredContextEngine
 from src.workflows.orchestrator import append_memory_event, upsert_project_memory_profile
-from src.core.storage import save_run_artifacts
+from src.core.storage import save_run_artifacts, workspace_path
 from src.tools.web_search import WebSearchService
 
 
@@ -27,7 +27,7 @@ def test_storage_uses_spec_filenames(tmp_path) -> None:
             "guardrail_report": {"status": "pass"},
         }
         save_run_artifacts("p1", "r1", payload)
-        run_dir = Path(tmp_path) / "p1" / "runs" / "r1"
+        run_dir = workspace_path("p1") / "runs" / "r1"
         assert (run_dir / "drawio.xml").exists()
         assert (run_dir / "raci.html").exists()
         assert (run_dir / "sop.md").exists()
@@ -43,7 +43,7 @@ def test_retrieval_assembles_from_parsed_docs(tmp_path) -> None:
     old_root = settings.workspace_root
     settings.workspace_root = str(tmp_path)
     try:
-        project_dir = Path(tmp_path) / "p1"
+        project_dir = workspace_path("p1")
         (project_dir / "parsed_docs").mkdir(parents=True, exist_ok=True)
         (project_dir / "CONTEXT.md").write_text("Project context", encoding="utf-8")
         (project_dir / "parsed_docs" / "doc1.json").write_text(
@@ -155,7 +155,7 @@ def test_assemble_v2_budget_and_deterministic_trim(tmp_path) -> None:
     old_root = settings.workspace_root
     settings.workspace_root = str(tmp_path)
     try:
-        project_dir = Path(tmp_path) / "p1"
+        project_dir = workspace_path("p1")
         (project_dir / "parsed_docs").mkdir(parents=True, exist_ok=True)
         (project_dir / "CONTEXT.md").write_text("Context baseline " * 100, encoding="utf-8")
         (project_dir / "parsed_docs" / "doc1.json").write_text(
@@ -282,7 +282,7 @@ def test_project_level_retention_days_override(tmp_path) -> None:
     init_db()
     session = SessionLocal()
     try:
-        project_dir = Path(tmp_path) / "p5"
+        project_dir = workspace_path("p5")
         project_dir.mkdir(parents=True, exist_ok=True)
         (project_dir / "settings.json").write_text(
             json.dumps({"memory_events_retention_days": 0}),

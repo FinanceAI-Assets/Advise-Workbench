@@ -13,6 +13,7 @@ Extracts text content from various file formats:
 Used by content quality evaluator to get text for LLM judgment.
 """
 
+import io
 import json
 import logging
 from pathlib import Path
@@ -75,7 +76,7 @@ class ContentExtractor:
             return ""
 
         try:
-            doc = Document(file_path)
+            doc = Document(io.BytesIO(file_path.read_bytes()))
             paragraphs = [para.text for para in doc.paragraphs]
 
             # Also extract from tables
@@ -101,7 +102,7 @@ class ContentExtractor:
             return ""
 
         try:
-            prs = Presentation(file_path)
+            prs = Presentation(io.BytesIO(file_path.read_bytes()))
             slides_text = []
 
             for slide_num, slide in enumerate(prs.slides, 1):
@@ -134,7 +135,7 @@ class ContentExtractor:
             return ""
 
         try:
-            wb = openpyxl.load_workbook(file_path)
+            wb = openpyxl.load_workbook(io.BytesIO(file_path.read_bytes()))
             sheets_text = []
 
             for sheet_name in wb.sheetnames:
@@ -169,7 +170,7 @@ class ContentExtractor:
                 return ""
 
         try:
-            reader = pypdf.PdfReader(file_path)
+            reader = pypdf.PdfReader(io.BytesIO(file_path.read_bytes()))
             pages_text = []
 
             for page_num, page in enumerate(reader.pages, 1):
@@ -185,8 +186,7 @@ class ContentExtractor:
     def _extract_json(file_path: Path) -> str:
         """Extract text from JSON file (process maps, structured data, etc.)."""
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = json.loads(file_path.read_text(encoding="utf-8"))
 
             # Convert JSON to readable text format
             return ContentExtractor._json_to_text(data)
@@ -218,13 +218,11 @@ class ContentExtractor:
     def _extract_txt(file_path: Path) -> str:
         """Extract text from plain text or markdown file."""
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return f.read()
+            return file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             # Try with different encoding
             try:
-                with open(file_path, "r", encoding="latin-1") as f:
-                    return f.read()
+                return file_path.read_text(encoding="latin-1")
             except Exception as e:
                 logger.error(f"Error reading text file: {e}")
                 return ""

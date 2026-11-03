@@ -14,6 +14,7 @@ from typing import Any
 
 from src.core.config import settings
 from src.core.storage import workspace_path
+from src.core.workspace_store import as_path
 from src.llm import gateway
 from src.llm.claude import (
     claude_generate,
@@ -62,7 +63,7 @@ def _save_raw_source(wiki_dir: Any, slug: str, content: bytes, ext: str = ".html
     once written, matching Karpathy's principle of preserving original sources.
     """
     try:
-        raw_dir = Path(wiki_dir) / "raw"
+        raw_dir = as_path(wiki_dir) / "raw"
         raw_dir.mkdir(exist_ok=True)
         dest = raw_dir / f"{slug}{ext}"
         if not dest.exists():
@@ -568,7 +569,7 @@ Parse with: `grep "^## \\[" log.md | tail -10`
 
 def _migrate_meta_directory(wiki_dir):
     """One-time migration: move JSON state files into wiki/.meta/."""
-    meta_dir = Path(wiki_dir) / ".meta"
+    meta_dir = as_path(wiki_dir) / ".meta"
     meta_dir.mkdir(exist_ok=True)
     old_names = {
         "graph.json": "graph.json",
@@ -578,7 +579,7 @@ def _migrate_meta_directory(wiki_dir):
         ".page_manifest.json": "page_manifest.json",
     }
     for old_name, new_name in old_names.items():
-        old = Path(wiki_dir) / old_name
+        old = as_path(wiki_dir) / old_name
         new = meta_dir / new_name
         if old.exists() and not new.exists():
             old.rename(new)
@@ -675,7 +676,7 @@ def _weave_backlinks(wiki_dir: Any, new_page_ids: list, new_page_titles: dict) -
         return 0
     woven = 0
     try:
-        for md_file in sorted(Path(wiki_dir).glob("*.md")):
+        for md_file in sorted(as_path(wiki_dir).glob("*.md")):
             if md_file.name in ("index.md", "log.md", "WIKI_SCHEMA.md"):
                 continue
             try:
@@ -736,7 +737,7 @@ def _weave_entity_backlinks(wiki_dir: Any, entities: list) -> int:
 
     woven = 0
     try:
-        for md_file in sorted(Path(wiki_dir).glob("*.md")):
+        for md_file in sorted(as_path(wiki_dir).glob("*.md")):
             if md_file.name in ("index.md", "log.md", "WIKI_SCHEMA.md"):
                 continue
             try:

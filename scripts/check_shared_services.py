@@ -61,7 +61,7 @@ def load_env(path: str | None) -> dict[str, str]:
 
 
 def tls_context(ca: str) -> ssl.SSLContext:
-    # "system" = trust the normal public CAs (links served through a public tunnel).
+    # "system" = trust the normal public CAs (the shared server's certificate is issued by the team CA, so use the file).
     return ssl.create_default_context() if ca == "system" else ssl.create_default_context(cafile=ca)
 
 

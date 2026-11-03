@@ -52,6 +52,7 @@ from src.workflows.orchestrator import (
     reset_dead_letter_attempts,
 )
 from src.core.storage import workspace_path
+from src.core.workspace_store import remove_tree
 from src.extensions.swarm.swarm import persist_instruction_broadcast_swarm_event_payload
 
 router = APIRouter()
@@ -691,7 +692,7 @@ def clear_runs(
     for run_id in run_ids:
         run_dir = runs_dir / run_id
         if run_dir.exists():
-            shutil.rmtree(run_dir, ignore_errors=True)
+            remove_tree(run_dir, ignore_errors=True)
     return {"project_id": project_id, "deleted_runs": int(deleted_runs)}
 
 
@@ -715,7 +716,7 @@ def delete_run(
 
     run_dir = workspace_path(project_id) / "runs" / run_id
     if run_dir.exists():
-        shutil.rmtree(run_dir, ignore_errors=True)
+        remove_tree(run_dir, ignore_errors=True)
     return {"project_id": project_id, "run_id": run_id, "deleted": True}
 
 

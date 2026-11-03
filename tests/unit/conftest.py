@@ -1,6 +1,7 @@
 """Use in-memory SQLite for tests (StaticPool in session.py shares one DB across threads)."""
 
 import os
+import time
 
 import pytest
 
@@ -27,6 +28,49 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(redis.Redis, "from_url", classmethod(lambda cls, *a, **k: client))
     yield client
     client.flushall()
+
+
+class _MemoryWorkspaceStore:
+    """In-memory stand-in for the db_s3 store, so tests never write to the shared services."""
+
+    def __init__(self) -> None:
+        self._files: dict[tuple[str, str], tuple[bytes, float]] = {}
+
+    def read_bytes(self, project_id, rel):
+        hit = self._files.get((project_id, rel))
+        return hit[0] if hit else None
+
+    def write_bytes(self, project_id, rel, data):
+        self._files[(project_id, rel)] = (bytes(data), time.time())
+
+    def exists(self, project_id, rel):
+        return (project_id, rel) in self._files
+
+    def list_files(self, project_id):
+        return sorted(rel for pid, rel in self._files if pid == project_id)
+
+    def delete(self, project_id, rel):
+        self._files.pop((project_id, rel), None)
+
+    def info(self, project_id, rel):
+        hit = self._files.get((project_id, rel))
+        return (len(hit[0]), hit[1]) if hit else None
+
+    def projects(self):
+        return sorted({pid for pid, _ in self._files})
+
+
+@pytest.fixture(autouse=True)
+def _workspace_backend_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test with the fs backend, or with AW_TEST_WORKSPACE=db to use the store path."""
+    if os.getenv("AW_TEST_WORKSPACE", "fs") != "db":
+        return
+    import src.core.workspace_store as ws
+    from src.core.config import settings
+
+    store = _MemoryWorkspaceStore()
+    monkeypatch.setattr(settings, "workspace_backend", "db_s3")
+    monkeypatch.setattr(ws, "get_store", lambda: store)
 
 
 @pytest.fixture(autouse=True)

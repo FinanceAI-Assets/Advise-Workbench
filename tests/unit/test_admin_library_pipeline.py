@@ -129,7 +129,9 @@ def test_uploaded_practice_reaches_the_library_only_after_approval_and_publicati
     assert detail["status"] == "Approved" and detail["versionLabel"] == "v1.0"
     assert detail["coreGuidance"] and detail["practiceOwner"] == "Maya Patel"
     assert detail["sourceQuality"].startswith("2 / 2 citations verified")
-    served = Path(settings.workspace_root) / "leading_practices" / "published" / f"{practice_id}.md"
+    from src.core.storage import workspace_path
+
+    served = workspace_path("leading_practices") / "published" / f"{practice_id}.md"
     assert topic in served.read_text(encoding="utf-8")
     index = lp_index.load_index(force=True)
     assert any(c["source"] == "published" and "risk screening" in c["heading"].lower() for c in index.chunks)

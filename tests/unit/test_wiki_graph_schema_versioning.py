@@ -1,6 +1,7 @@
 import json
 
 from src.core.config import settings
+from src.core.storage import workspace_path
 from src.memory.knowledge.wiki_graph import _build_and_persist_relationships, _load_persistent_graph
 
 
@@ -8,7 +9,7 @@ def test_build_relationships_writes_schema_envelope(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path))
     monkeypatch.setattr(settings, "wiki_meta_schema_versioning_enabled", True)
 
-    wiki_dir = tmp_path / "p1" / "wiki"
+    wiki_dir = workspace_path("p1") / "wiki"
     wiki_dir.mkdir(parents=True, exist_ok=True)
     (wiki_dir / "a.md").write_text('---\ntitle: "A"\n---\n# A\n')
     (wiki_dir / "b.md").write_text('---\ntitle: "B"\n---\n# B\n[[a|A]]\n')
@@ -26,7 +27,7 @@ def test_load_persistent_graph_reads_old_style_payload(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path))
     monkeypatch.setattr(settings, "wiki_meta_schema_versioning_enabled", True)
 
-    wiki_dir = tmp_path / "p2" / "wiki" / ".meta"
+    wiki_dir = workspace_path("p2") / "wiki" / ".meta"
     wiki_dir.mkdir(parents=True, exist_ok=True)
     # Old-style shape (no schema_version envelope)
     (wiki_dir / "graph.json").write_text(

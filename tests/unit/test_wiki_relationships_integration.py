@@ -26,10 +26,12 @@ created_at: "2026-01-01T00:00:00+00:00"
 
 def test_relationships_generated_from_three_ingested_docs(tmp_path, monkeypatch):
     project_id = "proj_rel_test"
+    from src.core.storage import workspace_path
+
     workspace_root = tmp_path / "workspace"
-    wiki_dir = workspace_root / project_id / "wiki"
-    wiki_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "workspace_root", str(workspace_root))
+    wiki_dir = workspace_path(project_id) / "wiki"
+    wiki_dir.mkdir(parents=True, exist_ok=True)
 
     _write_page(
         wiki_dir / "doc_one.md",

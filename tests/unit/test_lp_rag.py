@@ -7,6 +7,7 @@ import pytest
 
 from src.core.cache import cache_service
 from src.core.config import settings
+from src.core.storage import workspace_path
 from src.memory.knowledge import lp_index, lp_rag
 from src.memory.knowledge.leading_practices import leading_practice_library_service as service
 from src.prompts.registry import get_prompt, list_prompts
@@ -64,7 +65,7 @@ def test_files_are_cut_into_passages_by_heading(library) -> None:
     index = lp_index.load_index()
     assert [c["heading"] for c in index.chunks] == ["Procure to pay", "Three-way match", "Supplier onboarding", "Close calendar"]
     assert all(c["source"] == "library" and len(c["id"]) == 16 for c in index.chunks)
-    assert (library.parent / "workspace" / ".lp_index" / "index.json").is_file()
+    assert (workspace_path(".lp_index") / "index.json").is_file()
 
 
 def test_keyword_search_finds_the_matching_passage(library, monkeypatch: pytest.MonkeyPatch) -> None:

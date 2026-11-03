@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from src.core.storage import workspace_path
+from src.core.workspace_store import list_projects
 
 import logging
 logger = logging.getLogger(__name__)
@@ -191,7 +192,7 @@ def build_breach_notification_report(
 
 def process_due_breach_notifications(project_id: str | None = None) -> dict[str, int]:
     """Best-effort notifier worker: marks due incidents as sent/retry_failed."""
-    roots = [workspace_path(project_id)] if project_id else [p for p in Path(workspace_path("__dummy__")).parent.glob("*") if p.is_dir()]
+    roots = [workspace_path(project_id)] if project_id else [workspace_path(p) for p in list_projects()]
     sent = 0
     failed = 0
     now = datetime.now(IST)

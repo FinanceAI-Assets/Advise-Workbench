@@ -21,6 +21,8 @@ orjson==3.12.0
 passlib[bcrypt]==1.7.4
 pillow==12.3.0
 psycopg[binary]==3.3.6
+# S3 client for the shared SeaweedFS (aw-shared bucket); works with the existing S3_* keys.
+minio==7.2.20
 pydantic-settings==2.15.0
 pydantic==2.13.5
 pypdf==6.19.0

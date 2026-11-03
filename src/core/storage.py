@@ -12,16 +12,18 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 from src.core.config import settings
+from src.core.workspace_store import WsPath, project_root, scratch
 from src.deliverables.deliverable import DeliverableRegistry
 
 logger = logging.getLogger(__name__)
 
 
-def workspace_path(project_id: str) -> Path:
-    return Path(settings.workspace_root) / project_id
+def workspace_path(project_id: str):
+    """Project root: a real folder in fs mode, a store-backed WsPath in db_s3 mode."""
+    return project_root(project_id)
 
 
-def ensure_workspace(project_id: str) -> Path:
+def ensure_workspace(project_id: str):
     base = workspace_path(project_id)
     for rel in ["source_docs", "parsed_docs", "runs", "custom_skills", "brand", "dpdp"]:
         (base / rel).mkdir(parents=True, exist_ok=True)
@@ -45,6 +47,9 @@ def ensure_obsidian_vault_layout(project_id: str) -> dict[str, str]:
         alias_path = base / alias
         target.mkdir(parents=True, exist_ok=True)
         if alias_path.exists():
+            continue
+        if isinstance(base, WsPath):
+            # A store cannot hold symlinks; the wiki/source_docs/runs folders are used directly.
             continue
         try:
             os.symlink(target, alias_path)
@@ -113,7 +118,12 @@ def create_run(project_id: str, output_types: list[str]) -> dict:
 
 
 def save_run_artifacts(project_id: str, run_id: str, payload: dict) -> None:
-    run_dir = workspace_path(project_id) / "runs" / run_id
+    # Renderers and Excel/Word writers need a real folder; scratch() provides one and stores the results.
+    with scratch(project_id, f"runs/{run_id}") as run_dir:
+        _write_run_artifacts(run_dir, run_id, payload)
+
+
+def _write_run_artifacts(run_dir: Path, run_id: str, payload: dict) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Spec-aligned artifact filenames.

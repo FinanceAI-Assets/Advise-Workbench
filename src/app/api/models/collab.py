@@ -126,7 +126,7 @@ def reports_download(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
-    from fastapi.responses import FileResponse
+    from src.core.workspace_store import download_response
     require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
     # Sanitize — no path traversal
     if "/" in filename or "\\" in filename or filename.startswith("."):
@@ -134,7 +134,7 @@ def reports_download(
     path = _model_dir(pid, mid) / "reports" / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report not found")
-    return FileResponse(str(path), filename=filename)
+    return download_response(path, filename=filename)
 
 
 # ---------------------------------------------------------------------------

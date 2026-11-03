@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # When False, Redis must be reachable or CacheService startup fails (avoids split-brain cache across API replicas).
     cache_allow_memory_fallback: bool = True
     workspace_root: str = "./workspace"
+    # fs: project files in workspace_root (default). db_s3: text in Postgres workspace_files, binaries in S3.
+    workspace_backend: str = "fs"
+    s3_endpoint_url: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_bucket: str = ""
+    s3_ca_file: str = ""
     redis_url: str = "redis://localhost:6379/0"
     # Shared connection pool for SSE pub/sub. Each active SSE stream borrows one
     # pubsub connection; size to >= peak concurrent streams expected.
