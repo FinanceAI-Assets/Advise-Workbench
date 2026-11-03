@@ -8,14 +8,20 @@ export function EngagementTabs<K extends string>({
   tabs,
   active,
   onChange,
+  large = false,
 }: {
   tabs: Tab<K>[];
   active: K;
   onChange: (key: K) => void;
+  /** Taller tabs that share the full width of the page. Narrow panels keep the compact default. */
+  large?: boolean;
 }) {
   return (
     <div
-      className="inline-flex max-w-full flex-wrap gap-1 rounded-lg border border-[var(--surface-border)] bg-white p-1 shadow-sm"
+      className={cn(
+        "max-w-full flex-wrap gap-1 rounded-lg border border-[var(--surface-border)] bg-white p-1 shadow-sm",
+        large ? "flex w-full" : "inline-flex"
+      )}
       role="tablist"
     >
       {tabs.map((tab) => {
@@ -28,7 +34,8 @@ export function EngagementTabs<K extends string>({
             aria-selected={isActive}
             onClick={() => onChange(tab.key)}
             className={cn(
-              "flex shrink-0 items-center gap-2 rounded-md px-4 py-2 text-sm transition",
+              "flex shrink-0 items-center gap-2 rounded-md transition",
+              large ? "flex-1 justify-center px-2 py-3 text-base sm:px-6" : "px-4 py-2 text-sm",
               isActive
                 ? "bg-[var(--accent-green)] font-semibold text-white shadow-sm"
                 : "font-medium text-[var(--text-muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-default)]"

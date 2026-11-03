@@ -119,6 +119,34 @@ def test_practice_filter_keeps_only_passages_of_those_practices(library, monkeyp
     assert [r["practice_id"] for r in only] == ["lp-002"]
 
 
+def test_chosen_sources_are_answered_from_even_when_the_question_shares_no_words(
+    library, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def released() -> list[dict]:
+        return [
+            {"id": f"rel-{n}", "path": f"published/{pid}", "heading": f"{pid} part {n}", "text": f"Guidance {n} of {pid}.",
+             "source": "published", "practice_id": pid, "job_id": f"job-{pid}"}
+            for n, pid in enumerate(["lp-001", "lp-001", "lp-001", "lp-002", "lp-003"])
+        ]
+
+    monkeypatch.setattr(lp_index, "_released_passages", released)
+    monkeypatch.setattr(settings, "lp_rag_semantic_enabled", False)
+    monkeypatch.setattr(lp_rag, "claude_generate", lambda **kwargs: "From the passages [1].")
+    lp_index._index = None
+
+    answered = service.answer("zzzz qqqq", max_results=3, practice_ids=["lp-001", "lp-002"])
+    # Each chosen practice is represented before a second passage of any one, and nothing else gets in.
+    assert [s["practice_id"] for s in answered["sources"]] == ["lp-001", "lp-002", "lp-001"]
+    assert answered["answer"] == "From the passages [1]."
+
+    # Searching is not asking about them: no match still means no results.
+    assert lp_rag.run_lp_rag("zzzz qqqq", practice_ids=["lp-001"])["results"] == []
+    # Without a choice of sources nothing is invented for a question that matches nothing.
+    assert service.answer("zzzz qqqq")["sources"] == []
+    # A chosen practice with no passages has nothing to answer from.
+    assert service.answer("zzzz qqqq", practice_ids=["lp-009"])["sources"] == []
+
+
 def test_index_is_rebuilt_when_a_file_changes(library) -> None:
     assert service.search("cash forecasting") == []
     (library / "treasury.md").write_text("# Treasury\n\nRolling thirteen-week cash forecasting.\n", encoding="utf-8")

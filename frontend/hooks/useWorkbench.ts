@@ -250,6 +250,11 @@ export type LibraryView = Omit<LPLibraryDetail, "practices" | "cards"> & {
   savedCount: number;
 };
 
+/** Whether anything narrows the library: search text, a category, the saved practices or a maturity. */
+export function isLibraryFiltered({ q, category, maturity, savedOnly }: LibraryFilters) {
+  return Boolean(q || savedOnly || category !== "all" || maturity);
+}
+
 export function useLibraryQuery(filters: LibraryFilters) {
   const params = new URLSearchParams({
     q: filters.q,
@@ -258,7 +263,19 @@ export function useLibraryQuery(filters: LibraryFilters) {
     sort: filters.sort,
     saved_only: String(filters.savedOnly),
   });
-  return useWorkbenchQuery<LibraryView>(["library", filters], `/api/library?${params}`, "Failed to load the library");
+  const { api, token } = useAuth();
+  // The previous results stay on screen while the next ones load, so the list does not blink while typing. The
+  // unfiltered library is not results, though: the first search must not flash all of it.
+  return useQuery({
+    queryKey: ["library", filters],
+    enabled: Boolean(token),
+    staleTime: 15 * 1000,
+    placeholderData: (previous, previousQuery) =>
+      previous && previousQuery && !isLibraryFiltered(previousQuery.queryKey[1] as LibraryFilters)
+        ? { ...previous, cards: [], matchingCount: 0 }
+        : previous,
+    queryFn: () => fetchJson<LibraryView>(api, `/api/library?${params}`, "Failed to load the library"),
+  });
 }
 
 export function usePracticeQuery(id: string) {
@@ -268,6 +285,18 @@ export function usePracticeQuery(id: string) {
     "Practice not found",
     Boolean(id)
   );
+}
+
+/** Loads a practice on demand, sharing the `usePracticeQuery` cache: for acting on results that are not open. */
+export function usePracticeFetcher() {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return (id: string) =>
+    qc.fetchQuery({
+      queryKey: ["practice", id],
+      staleTime: 15 * 1000,
+      queryFn: () => fetchJson<PracticeDetail & { saved: boolean }>(api, `/api/library/${enc(id)}`, "Practice not found"),
+    });
 }
 
 export function usePracticeActions(id: string) {
@@ -306,7 +335,7 @@ export function useLibraryAskMutation() {
   );
 }
 
-/** The signed-in user's active engagements, for the "Use in engagement" destination picker. */
+/** The signed-in user's active engagements, for choosing where to add library sources. */
 export function useMyEngagementOptionsQuery() {
   return useWorkbenchQuery<{ items: Array<{ id: string; name: string; code: string }> }>(
     ["engagements", "options"],
@@ -315,48 +344,35 @@ export function useMyEngagementOptionsQuery() {
   );
 }
 
-export type LibraryHandoff = {
-  projectId: string;
-  practiceIds: string[];
-  // An existing conversation to continue, or the title of a new one.
-  conversation: { id: string } | { title: string };
-  brief: string;
-};
-
-/** Key under which the handoff brief waits for the engagement conversation page to put it in the composer. */
-export const handoffDraftKey = (pid: string) => `aw:library-handoff:${pid}`;
+export type AddPracticesResult = { added: string[]; already: string[]; failed: Array<{ id: string; message: string }> };
 
 /**
- * Use in engagement: add each selected practice to the engagement's sources, open the target conversation,
- * and leave the edited brief as a draft there. Nothing is sent to Sheldon and no artifact is generated.
+ * Puts several practices in an engagement's sources, and nothing else: no conversation is opened or changed.
+ * One at a time, reporting each, so one refused practice does not lose the others.
  */
-export function useLibraryHandoffMutation() {
+export function useAddPracticesToEngagementMutation() {
   const { api } = useAuth();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ projectId, practiceIds, conversation, brief }: LibraryHandoff) => {
+    mutationFn: async ({ projectId, practiceIds }: { projectId: string; practiceIds: string[] }) => {
+      const result: AddPracticesResult = { added: [], already: [], failed: [] };
       for (const id of practiceIds) {
-        await fetchJson(api, `/api/library/${enc(id)}/add-to-engagement`, `Could not add ${id.toUpperCase()}`, {
-          method: "POST",
-          body: JSON.stringify({ projectId }),
-        });
+        try {
+          const { added } = await fetchJson<{ added: boolean }>(
+            api,
+            `/api/library/${enc(id)}/add-to-engagement`,
+            `Could not add ${id.toUpperCase()}`,
+            { method: "POST", body: JSON.stringify({ projectId }) }
+          );
+          (added ? result.added : result.already).push(id);
+        } catch (error) {
+          result.failed.push({ id, message: error instanceof Error ? error.message : "Could not add the practice" });
+        }
       }
-      const base = `/api/engagements/${enc(projectId)}/conversations`;
-      if ("title" in conversation) {
-        await fetchJson(api, base, "Could not start the conversation", {
-          method: "POST",
-          body: JSON.stringify({ title: conversation.title }),
-        });
-      } else {
-        await fetchJson(api, `${base}/${enc(conversation.id)}/activate`, "Could not open the conversation", { method: "POST" });
-      }
-      if (brief.trim()) window.sessionStorage.setItem(handoffDraftKey(projectId), brief.trim());
-      return { projectId };
+      return result;
     },
-    onSettled: (_data, _error, { projectId }) => {
-      for (const key of [["library"], ["practice"], ["engagement", projectId], ["conversation-context", projectId], ["conversation", projectId]]) {
-        void qc.invalidateQueries({ queryKey: key });
-      }
+    onSettled: () => {
+      for (const key of [["library"], ["practice"], ["engagement"]]) void qc.invalidateQueries({ queryKey: key });
     },
   });
 }

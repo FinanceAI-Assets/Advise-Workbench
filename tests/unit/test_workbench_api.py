@@ -181,6 +181,30 @@ def test_library_shows_approved_practices_and_saves_per_user() -> None:
     assert client.get("/api/library/lp-missing", headers=headers).status_code == 404
 
 
+def test_library_search_lists_every_match_and_a_category_narrows_it() -> None:
+    client = TestClient(fastapi_app)
+    headers = _login(client, _email("reader"))
+    word = uuid.uuid4().hex[:8]
+    with session_scope() as db:
+        for pid, category in ((f"lp-{word}a", "Operating model"), (f"lp-{word}b", "Operating model"), (f"lp-{word}c", "Procurement")):
+            db.add(LpPractice(id=pid, title=f"Playbook {word}", description="Method.", category=category,
+                              maturity="Managed", version_label="v1.0", status="Approved", owner="Maya Patel"))
+
+    everything = client.get(f"/api/library?q={word}", headers=headers).json()
+    assert everything["matchingCount"] == 3
+    counts = {c["label"]: c["count"] for c in everything["categories"]}
+    assert counts["All practices"] == 3 and counts["Operating model"] == 2 and counts["Procurement"] == 1
+
+    narrowed = client.get(f"/api/library?q={word}&category=procurement", headers=headers).json()
+    assert [c["id"] for c in narrowed["cards"]] == [f"lp-{word}c"]
+    # The counts still say what each category would list, whichever is open.
+    assert {c["label"]: c["count"] for c in narrowed["categories"]} == counts
+
+    no_match = client.get(f"/api/library?q={word}-absent", headers=headers).json()
+    assert no_match["cards"] == [] and no_match["totalPractices"] >= 3
+    assert {c["label"]: c["count"] for c in no_match["categories"]}["Procurement"] == 0
+
+
 def test_ask_the_library_answers_from_the_approved_catalog() -> None:
     client = TestClient(fastapi_app)
     headers = _login(client, _email("reader"))
@@ -198,6 +222,26 @@ def test_ask_the_library_answers_from_the_approved_catalog() -> None:
     docs = client.post("/api/library/ask", json={"question": f"docuemement name for {approved}"}, headers=headers).json()
     assert docs["answer"].startswith("No uploaded source documents") and [p["id"] for p in docs["practices"]] == [approved]
     assert client.post("/api/library/ask", json={"question": ""}, headers=headers).status_code == 422
+
+
+def test_asking_selected_sources_is_honest_when_they_cannot_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.memory.knowledge.leading_practices import leading_practice_library_service as service
+
+    client = TestClient(fastapi_app)
+    headers = _login(client, _email("reader"))
+    approved = _practice()
+    body = {"question": "Summarize this", "practiceIds": [approved]}
+
+    monkeypatch.setattr(service, "answer", lambda *a, **k: {"answer": "Nothing on this.", "sources": []})
+    empty = client.post("/api/library/ask", json=body, headers=headers).json()
+    assert "no searchable content" in empty["answer"] and "match your question" not in empty["answer"]
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(service, "answer", unavailable)
+    down = client.post("/api/library/ask", json=body, headers=headers).json()
+    assert "unavailable" in down["answer"] and "no searchable content" not in down["answer"]
 
 
 def test_practice_added_to_engagement_counts_as_a_source_and_is_searchable() -> None:

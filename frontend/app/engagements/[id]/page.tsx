@@ -1,6 +1,6 @@
 "use client";
 
-import { MessagesSquare } from "lucide-react";
+import { BookOpen, MessagesSquare } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -125,6 +125,12 @@ export default function EngagementDetailPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Link href="/library" className="!no-underline">
+            <Button type="button" variant="secondary" className="flex items-center gap-2">
+              <BookOpen size={16} aria-hidden />
+              Browse the library
+            </Button>
+          </Link>
           <Button type="button" className="flex items-center gap-2" onClick={() => router.push(`/engagements/${id}/conversation`)}>
             <MessagesSquare size={16} aria-hidden />
             Open conversation
@@ -133,6 +139,7 @@ export default function EngagementDetailPage() {
       </header>
 
       <EngagementTabs
+        large
         tabs={tabs}
         active={tab in STEP_TAB ? STEP_TAB[tab as StepView] : (tab as EngagementTabKey)}
         onChange={setTab}
