@@ -16,6 +16,9 @@ class CacheService:
         self._mem: dict[str, tuple[float, str]] = {}
         self._mem_lock = threading.Lock()
         self._redis = None
+        if not settings.redis_url:
+            log.info("REDIS_URL not set; using in-memory cache.")
+            return
         try:
             self._redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
             self._redis.ping()

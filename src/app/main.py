@@ -51,6 +51,10 @@ from src.workflows.orchestrator import (
     start_execution_worker,
 )
 from src.extensions.scheduler.scheduled_tasks import start_scheduler_worker
+from src.workflows.workers.conversation_idle_worker import (
+    start_idle_detection_worker,
+    stop_idle_detection_worker,
+)
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -96,7 +100,12 @@ async def lifespan(_app: FastAPI):
     reconcile_stalled_approved_runs_on_startup()
     if settings.scheduler_enabled:
         start_scheduler_worker()
+    # NEW: Start conversation idle detection worker (Phase 2: Idle Detection & Session Management)
+    start_idle_detection_worker()
     yield
+    # NEW: Stop conversation idle detection worker (Phase 2: Idle Detection & Session Management)
+    stop_idle_detection_worker(timeout_sec=5)
+    # END NEW
     drain_execution_worker(timeout_sec=settings.run_drain_timeout_sec)
     await shutdown_mcp_servers()
     shutdown_llm()

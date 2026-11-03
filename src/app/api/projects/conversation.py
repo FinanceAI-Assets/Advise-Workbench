@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from time import perf_counter
 
-from fastapi import Depends, HTTPException
+from fastapi import BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Any
 from sqlalchemy import delete, select
@@ -28,6 +28,8 @@ from src.core.tz import IST
 from src.core.db.models import (
     Conversation,
     ConversationMessage,
+    ConversationSummary,
+    EngagementMeta,
     ProjectMemoryProfile,
     Run,
     User,
@@ -36,6 +38,9 @@ from src.core.db.session import get_db
 from src.app.api.projects._engagement_context import engagement_brief_text, engagement_discovery
 from src.workflows.conversation_graph import run_turn
 from src.workflows.task_router.conversation_router import fallback_decision, route_turn
+# NEW: Phase 3 - State Synchronization & API Integration
+from src.extensions.conversation_session import EngagementSessionRegistry
+from src.core.tz import ist_now
 from src.memory.short_term.conversation_state import ConversationState, load_state, save_state, stamp_router
 from src.memory.long_term.memory_event_service import (
     get_aggregated_profile,
@@ -110,6 +115,40 @@ from src.app.api.projects._schemas import (  # noqa: F401
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+def _record_activity_sync(project_id: str) -> None:
+	"""Sync wrapper for recording engagement activity.
+
+	Called from background tasks to avoid event loop issues in sync routes.
+	"""
+	try:
+		import asyncio
+		loop = asyncio.new_event_loop()
+		asyncio.set_event_loop(loop)
+		try:
+			loop.run_until_complete(EngagementSessionRegistry.record_activity(project_id))
+		finally:
+			loop.close()
+	except Exception as e:
+		_LOG.debug(f"Failed to record activity: {e}")
+
+
+def _start_session_sync(project_id: str, idle_timeout: int = 600) -> None:
+	"""Sync wrapper for starting engagement session.
+
+	Called from background tasks to avoid event loop issues in sync routes.
+	"""
+	try:
+		import asyncio
+		loop = asyncio.new_event_loop()
+		asyncio.set_event_loop(loop)
+		try:
+			loop.run_until_complete(EngagementSessionRegistry.start_session(project_id, idle_timeout))
+		finally:
+			loop.close()
+	except Exception as e:
+		_LOG.debug(f"Failed to start engagement session: {e}")
 
 
 def _generate_and_execute_plan(
@@ -1597,7 +1636,7 @@ def _persist_assistant_plan_message(
     }
 
 
-def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: User | None = None) -> Conversation:
+def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: User | None = None, background_tasks: BackgroundTasks | None = None) -> Conversation:
     conv = db.scalar(
         select(Conversation)
         .where(Conversation.project_id == pid, Conversation.user_id == user_id)
@@ -1605,6 +1644,25 @@ def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: Us
         .limit(1)
     )
     if conv:
+        # NEW: Phase 3 - Check if engagement is resuming from summary and restore state
+        summary = db.query(ConversationSummary).filter(
+            ConversationSummary.project_id == pid
+        ).first()
+
+        if summary and not summary.restored_at:
+            # RESTORE from summary
+            try:
+                state_dict = json.loads(summary.state_snapshot_json)
+                conv_state = ConversationState.from_dict(state_dict)
+                # Save restored state to JSON file
+                save_state(pid, conv.id, conv_state)
+                # Mark as restored
+                summary.restored_at = ist_now()
+                db.commit()
+                _LOG.info(f"Restored engagement {pid} from summary {summary.id}")
+            except Exception as e:
+                _LOG.error(f"Failed to restore state from summary: {e}")
+        # END NEW
         return conv
 
     # Create new conversation with greeting
@@ -1634,6 +1692,30 @@ def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: Us
     db.add(greeting_msg)
     db.commit()
     db.refresh(conv)
+
+    # NEW: Phase 1 + Phase 4 - Ensure engagement metadata exists and start session
+    try:
+        engagement = db.query(EngagementMeta).filter(
+            EngagementMeta.project_id == pid
+        ).first()
+        if not engagement:
+            engagement = EngagementMeta(
+                id=f"em_{uuid.uuid4().hex[:10]}",
+                project_id=pid,
+                idle_timeout_seconds=600,
+                enable_idle_detection=True,
+            )
+            db.add(engagement)
+            db.commit()
+            _LOG.debug(f"Created engagement metadata for project {pid}")
+
+        idle_timeout = engagement.idle_timeout_seconds if engagement else 600
+        if background_tasks:
+            background_tasks.add_task(_start_session_sync, pid, idle_timeout)
+    except Exception as e:
+        _LOG.debug(f"Failed to start engagement session: {e}")
+    # END NEW
+
     return conv
 
 
@@ -1678,6 +1760,7 @@ def get_project_conversation(
 def post_project_conversation_message(
     pid: str,
     body: ConversationMessageRequest,
+    background_tasks: BackgroundTasks,
     background: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -1688,7 +1771,7 @@ def post_project_conversation_message(
 
         return start_turn(pid, body, user, db)
     try:
-        return _post_project_conversation_message_impl(pid, body, user, db)
+        return _post_project_conversation_message_impl(pid, body, user, db, background_tasks=background_tasks)
     except HTTPException:
         raise
     except Exception as exc:
@@ -2079,20 +2162,36 @@ def _post_project_conversation_message_impl(
     user: User,
     db: Session,
     on_phase: Callable[[str], None] | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> dict:
     from src.app.api.projects._conversation_usage import live_key, record_turn_usage
     from src.llm.run_budget import capture_usage, project_token_context
+
+    # NEW: Phase 1 - Record activity for idle detection using background tasks
+    if background_tasks:
+        background_tasks.add_task(_record_activity_sync, pid)
+    # END NEW
 
     with project_token_context(pid), capture_usage(live_key(pid, user.id)) as usage:
         response = _post_project_conversation_message_inner(pid, body, user, db, on_phase=on_phase)
     # Add this reply's tokens to the conversation's total. Tracking must never fail the reply itself.
     try:
-        conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
+        conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user, background_tasks=background_tasks)
         record_turn_usage(db, conversation_id=conv.id, project_id=pid, usage=usage.snapshot())
         db.commit()
     except Exception as exc:
         db.rollback()
         _LOG.warning("conversation usage not recorded for project %s: %s", pid, exc)
+
+    # NEW: Phase 3 - Persist conversation state after every message
+    try:
+        conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
+        state = load_state(conv)
+        save_state(conv, state)
+    except Exception as e:
+        _LOG.debug(f"Failed to persist conversation state: {e}")
+    # END NEW
+
     return response
 
 
@@ -2970,6 +3069,68 @@ def post_project_conversation_outline(
     }
 
 
+@router.post("/{pid}/conversation/close")
+def close_engagement_session(
+    pid: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+	"""Close engagement session and generate summary on user navigation away.
+
+	Called when user navigates away from engagement (to engagement menu).
+	Generates summary if there's meaningful activity, updates conversation_summaries table.
+	"""
+	require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
+
+	# Close session and get metadata
+	session_meta = {}
+	try:
+		import asyncio
+		loop = asyncio.new_event_loop()
+		asyncio.set_event_loop(loop)
+		try:
+			session_meta = loop.run_until_complete(EngagementSessionRegistry.close_session(pid))
+		finally:
+			loop.close()
+	except Exception as e:
+		_LOG.debug(f"Failed to close session: {e}")
+
+	# Generate and save summary
+	idle_duration = session_meta.get("idle_duration_sec", 0)
+	try:
+		conv = db.query(Conversation).filter(
+			Conversation.project_id == pid,
+			Conversation.user_id == user.id
+		).order_by(Conversation.updated_at.desc()).first()
+
+		if conv:
+			# Generate summary for user navigation
+			from src.workflows.conversation_summary_worker import (
+				_generate_engagement_summary,
+				_upsert_conversation_summary,
+			)
+
+			loop = asyncio.new_event_loop()
+			asyncio.set_event_loop(loop)
+			try:
+				summary = loop.run_until_complete(
+					_generate_engagement_summary(db, pid, "user_navigation_away", idle_duration)
+				)
+				if summary:
+					loop.run_until_complete(_upsert_conversation_summary(db, summary))
+					_LOG.info(f"Generated summary for engagement {pid} on user navigation away")
+			finally:
+				loop.close()
+	except Exception as e:
+		_LOG.debug(f"Failed to generate summary on close: {e}")
+
+	return {
+		"session_closed": True,
+		"idle_duration_seconds": idle_duration,
+		"summary_generated": session_meta.get("session_state") == "user_closed",
+	}
+
+
 @router.delete("/{pid}/conversation")
 def clear_project_conversation(
     pid: str,
@@ -3102,3 +3263,47 @@ def confirm_project_conversation_plan(
     }
 
 
+# NEW: Phase 3 - Close engagement session endpoint
+@router.post("/{pid}/close-engagement-session")
+def close_engagement_session(
+    pid: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Close engagement session (user navigates away from engagement).
+
+    Triggers summary generation if idle > 5 minutes.
+    """
+    require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
+
+    import asyncio
+    from src.workflows.conversation_summary_worker import (
+        _generate_engagement_summary,
+        _upsert_conversation_summary,
+    )
+
+    async def close_and_summarize():
+        session_meta = await EngagementSessionRegistry.close_session(pid)
+
+        # Trigger summary if idle > 5 minutes
+        if session_meta.get("idle_duration_sec", 0) > 300:
+            try:
+                summary = await _generate_engagement_summary(
+                    db, pid, "session_closed", session_meta.get("idle_duration_sec", 0)
+                )
+                if summary:
+                    await _upsert_conversation_summary(db, summary)
+                    return {"status": "closed_with_summary", "idle_duration_sec": session_meta.get("idle_duration_sec")}
+            except Exception as e:
+                _LOG.error(f"Failed to generate summary on session close: {e}")
+
+        return {"status": "closed"}
+
+    try:
+        result = asyncio.run(close_and_summarize())
+    except Exception as e:
+        _LOG.error(f"Error closing engagement session: {e}")
+        result = {"status": "error", "error": str(e)}
+
+    return result
+# END NEW

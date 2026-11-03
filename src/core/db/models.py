@@ -93,6 +93,13 @@ class EngagementMeta(Base):
     classification: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # Idle detection & session management
+    engagement_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    idle_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600, server_default="600")
+    enable_idle_detection: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
@@ -368,6 +375,41 @@ class ConversationTurn(Base):
     response_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ConversationSummary(Base):
+    """ONE summary row per engagement (project).
+
+    Upsert pattern: UPDATE with latest state snapshot when idle/close.
+    Mirrors conversation_state.json: one file per engagement, updated as needed.
+    """
+
+    __tablename__ = "conversation_summaries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), unique=True, nullable=False)
+
+    # Summary content (2-3 lines)
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+    # State snapshot (complete conversation state at this moment)
+    state_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    discovery_slots_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    decision_answers_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    conversation_fsm_state: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    # Trigger metadata
+    summary_trigger: Mapped[str] = mapped_column(String(32), nullable=False)  # "idle_10min" | "session_closed"
+    idle_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Timestamps (NO versioning)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Restoration tracking
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class MemoryItem(Base):
