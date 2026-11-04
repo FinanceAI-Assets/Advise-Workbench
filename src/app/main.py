@@ -13,11 +13,14 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
+from src.core.env_files import dotenv_ignored
 from src.core.exceptions import AdviseWorkbenchHTTPException
 
 _repo_root = Path(__file__).resolve().parents[2]
 # Repo-root `.env` wins over variables already in the environment so RUN_QUEUE_BACKEND / DATABASE_URL match what you edit there.
-load_dotenv(_repo_root / ".env", override=True)
+# Tests skip it: it names shared databases and services (see tests/conftest.py).
+if not dotenv_ignored():
+    load_dotenv(_repo_root / ".env", override=True)
 
 # All app-level imports MUST follow the load_dotenv() call above so that
 # Settings() and other modules observe the final env-var state. Suppress E402

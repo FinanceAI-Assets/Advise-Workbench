@@ -4,7 +4,6 @@ import os
 
 import pytest
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-chars-long-ok!")
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
 # Leading Practice search must not load the embedding model (seconds, and a network call) inside a test.
