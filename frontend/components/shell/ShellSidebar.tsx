@@ -159,7 +159,7 @@ function SidebarUserFooter({ onNavigate }: { onNavigate?: () => void }) {
           onNavigate?.();
           logout();
         }}
-        className="flex min-h-9 w-full items-center gap-2 px-2 py-0 text-left font-normal text-[#C0C8BC] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:text-white"
+        className="flex min-h-9 w-full items-center justify-start gap-2 px-2 py-0 text-left font-normal text-[#C0C8BC] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:text-white"
       >
         <LogOut size={16} />
         Sign out
