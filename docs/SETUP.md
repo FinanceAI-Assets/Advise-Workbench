@@ -119,6 +119,7 @@ Sample documents for a fictional client are in `data/examples/northwind-p2p/`. U
 | `UNIQUE constraint failed: run_tasks.id` on a second run | An old database from before the checklist key fix | Restart the backend; it rebuilds the table on start-up and keeps the rows |
 | "Claude gate evaluation failed" during checks | The default cap of 50,000 tokens per run is used up | `ANTHROPIC_MAX_TOKENS_PER_RUN=0` |
 | Run stops with "Execution timed out after 600s" | Slow generation through the CLI | `RUN_STUCK_TIMEOUT_SEC=1800` |
+| Run stops with "Generation was interrupted by a server restart" | A server started while the run had been quiet for `RUN_ORPHAN_IDLE_SEC` (default 600) and had no checkpoint to resume from | Generate again. With slow generation through the CLI, set `RUN_ORPHAN_IDLE_SEC=1800` |
 | Redis "connection refused" messages at start-up | Redis is not installed | Harmless on one machine |
 
 ## 8. Tests

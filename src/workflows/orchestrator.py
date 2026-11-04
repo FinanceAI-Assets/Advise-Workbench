@@ -92,6 +92,9 @@ _librarian_tick_interval_sec = 7 * 24 * 60 * 60
 _stuck_sweep_interval_sec = 30.0
 _stuck_watchdog_lock = threading.Lock()
 _stuck_watchdog_started = False
+# Runs found "running" at start-up that have not yet gone quiet long enough to count as orphaned.
+_orphan_suspects: set[str] = set()
+_orphan_suspects_lock = threading.Lock()
 
 # Graceful shutdown: set by drain_execution_worker() on SIGTERM/SIGINT (via the
 # FastAPI lifespan shutdown hook) so dispatch loops stop pulling new jobs while
@@ -422,6 +425,7 @@ def _stuck_watchdog_loop() -> None:
     while True:
         try:
             auto_fail_stuck_runs()
+            settle_orphan_suspects()
         except Exception as exc:  # never let the watchdog thread die
             _log.warning("stuck-run watchdog tick error: %s", exc)
         time.sleep(_stuck_sweep_interval_sec)
@@ -429,7 +433,8 @@ def _stuck_watchdog_loop() -> None:
 
 def _start_stuck_watchdog_once() -> None:
     global _stuck_watchdog_started
-    if int(getattr(settings, "run_stuck_timeout_sec", 0) or 0) <= 0:
+    timeout_sec = int(getattr(settings, "run_stuck_timeout_sec", 0) or 0)
+    if timeout_sec <= 0 and int(getattr(settings, "run_orphan_idle_sec", 0) or 0) <= 0:
         return
     with _stuck_watchdog_lock:
         if _stuck_watchdog_started:
@@ -636,25 +641,62 @@ def reconcile_stalled_approved_runs_on_startup() -> None:
             )
         if re_enqueued:
             _log.info("run_queue startup reconcile: total re_enqueued=%s", re_enqueued)
-        # A run still in status="running" on a fresh process is definitionally orphaned: the
-        # worker thread that owned it died with the previous process. Fail it so its admission
-        # slot frees and the UI stops showing it as active.
-        orphaned = session.scalars(select(Run).where(Run.status == "running")).all()
-        for run in orphaned:
-            if _resume_from_checkpoint(session, run):
-                continue
-            run.status = "failed"
-            run.abort_requested = True
-            run.error_message = "Orphaned by restart: worker thread no longer running."
-            session.commit()
-            append_run_event(session, run.id, "stuck_auto_failed", {"reason": "orphaned_by_restart"})
-            session.commit()
-        if orphaned:
-            _log.info("run_queue startup reconcile: failed %s orphaned running run(s)", len(orphaned))
+        # A run still in status="running" on a fresh process may have lost its worker with the
+        # previous process, or may be alive on another server using this database. Only silence
+        # tells them apart, so check now and again on each watchdog tick.
+        running = session.scalars(select(Run.id).where(Run.status == "running")).all()
+        with _orphan_suspects_lock:
+            _orphan_suspects.update(running)
+        settle_orphan_suspects()
     except SQLAlchemyError as exc:
         _log.warning("run_queue startup reconcile failed: %s", exc)
     finally:
         session.close()
+
+
+def _last_run_activity(session: Session, run: Run) -> datetime | None:
+    """When the run last showed signs of life: its newest event, else when it was approved or created."""
+    last_event_at = session.scalar(select(func.max(RunEvent.created_at)).where(RunEvent.run_id == run.id))
+    return last_event_at or run.approved_at or run.created_at
+
+
+def settle_orphan_suspects() -> int:
+    """Resume or fail the runs found running at start-up that have since gone quiet.
+
+    Failing a run frees its admission slot and stops the UI showing it as active.
+    Returns the number of runs failed.
+    """
+    with _orphan_suspects_lock:
+        suspects = list(_orphan_suspects)
+    if not suspects:
+        return 0
+    cutoff = utcnow() - timedelta(seconds=int(getattr(settings, "run_orphan_idle_sec", 0) or 0))
+    failed = 0
+    session = SessionLocal()
+    try:
+        for run_id in suspects:
+            run = session.get(Run, run_id)
+            if run is not None and run.status == "running":
+                ref = _last_run_activity(session, run)
+                if ref is not None and ref > cutoff:
+                    continue
+                if not _resume_from_checkpoint(session, run):
+                    run.status = "failed"
+                    run.abort_requested = True
+                    run.error_message = "Generation was interrupted by a server restart. Please generate again."
+                    session.commit()
+                    append_run_event(session, run.id, "stuck_auto_failed", {"reason": "orphaned_by_restart"})
+                    session.commit()
+                    failed += 1
+            with _orphan_suspects_lock:
+                _orphan_suspects.discard(run_id)
+        if failed:
+            _log.info("run_queue orphan check: failed %s orphaned running run(s)", failed)
+    except SQLAlchemyError as exc:
+        _log.warning("run_queue orphan check failed: %s", exc)
+    finally:
+        session.close()
+    return failed
 
 
 def auto_fail_stuck_runs() -> int:
@@ -675,10 +717,7 @@ def auto_fail_stuck_runs() -> int:
     try:
         running = session.scalars(select(Run).where(Run.status == "running")).all()
         for run in running:
-            last_event_at = session.scalar(
-                select(func.max(RunEvent.created_at)).where(RunEvent.run_id == run.id)
-            )
-            ref = last_event_at or run.approved_at or run.created_at
+            ref = _last_run_activity(session, run)
             if ref is None or ref > cutoff:
                 continue
             run.abort_requested = True
@@ -967,6 +1006,20 @@ def reset_dead_letter_attempts(item_id: str, *, actor: str | None = None) -> dic
     return payload
 
 
+def _abort_was_requested(project_id: str, run_id: str) -> bool:
+    """True when the run was deliberately stopped, so retrying could only hit the same abort again."""
+    session = SessionLocal()
+    try:
+        return bool(
+            session.scalar(select(Run.abort_requested).where(Run.id == run_id, Run.project_id == project_id))
+        )
+    except SQLAlchemyError as exc:
+        _log.warning("could not read abort flag for run %s: %s", run_id, exc)
+        return False
+    finally:
+        session.close()
+
+
 def _handle_failed_job(
     *,
     project_id: str,
@@ -976,6 +1029,8 @@ def _handle_failed_job(
     prior_attempt_history: list[dict[str, Any]] | None,
     backend: str,
 ) -> None:
+    if _abort_was_requested(project_id, run_id):
+        return
     next_attempt = attempt + 1
     now_ms = int(time.time() * 1000)
     history_item: dict[str, Any] = {
@@ -1216,7 +1271,8 @@ def _phase_prepare(job: RunJob) -> RunOutcome | None:
         if bool(_control.get("abort_requested")) or bool(run.abort_requested):
             print(f"[PHASE-PREPARE] 3. Abort requested, failing run")
             run.status = "failed"
-            run.error_message = "Aborted via persisted control_state before execution."
+            # Whoever requested the abort recorded why; keep that reason.
+            run.error_message = run.error_message or "Generation was stopped before it started."
             session.commit()
             append_run_event(session, run_id, "run_aborted", {"reason": "persisted_abort_requested"})
             session.commit()
@@ -1495,7 +1551,7 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
         if run.abort_requested:
             append_run_event(session, run_id, "run_control_applied", {"action": "abort", "checkpoint": "before_generation"})
             run.status = "failed"
-            run.error_message = "Aborted before generation."
+            run.error_message = run.error_message or "Aborted before generation."
             session.commit()
             return False, run.error_message
         record_run_trace("run_execution_started", project_id=project_id, run_id=run_id)
@@ -1602,7 +1658,7 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                     "run_control_applied",
                     {"action": "abort", "checkpoint": "during_generation"},
                 )
-                run.error_message = "Aborted during generation."
+                run.error_message = run.error_message or "Aborted during generation."
             _write_token_usage(run, _run_usage, _run_cost)
             run.status = "failed"
             session.commit()
@@ -1661,7 +1717,7 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
         if run.abort_requested:
             append_run_event(session, run_id, "run_control_applied", {"action": "abort", "checkpoint": "after_generation"})
             run.status = "failed"
-            run.error_message = "Aborted after generation."
+            run.error_message = run.error_message or "Aborted after generation."
             session.commit()
             return False, run.error_message
         run_todos = list(state.get("run_todos") or [])
@@ -2579,7 +2635,7 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
             print(f"[DEBUG-FINALIZE] 14a. ABORT REQUESTED - returning early")
             append_run_event(session, run_id, "run_control_applied", {"action": "abort", "checkpoint": "before_terminal_commit"})
             run.status = "failed"
-            run.error_message = "Aborted before terminal commit."
+            run.error_message = run.error_message or "Aborted before terminal commit."
             session.commit()
             return False, run.error_message
         print(f"[DEBUG-FINALIZE] 15. About to call record_run_trace for run_execution_done")

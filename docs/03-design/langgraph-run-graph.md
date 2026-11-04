@@ -55,8 +55,8 @@ START -> prepare -> context -> generate -> evaluate -> remember -> finalize -> E
 
 ### Resume after a restart
 
-1. On start-up, `reconcile_stalled_approved_runs_on_startup` finds runs still marked running.
-2. A run whose current attempt has a checkpoint with phases still to run is re-queued, and a `step` event with `status: execution_resumed` is written. A run with no such checkpoint is failed as orphaned.
+1. On start-up, `reconcile_stalled_approved_runs_on_startup` finds runs still marked running. Such a run may still be alive on another server using the same database, so it is left alone until it has had no event for `RUN_ORPHAN_IDLE_SEC` (default 600). The stuck-run watchdog thread re-checks it until then, so a resume can start up to that long after a restart.
+2. A quiet run whose current attempt has a checkpoint with phases still to run is re-queued, and a `step` event with `status: execution_resumed` is written. A quiet run with no such checkpoint is failed as orphaned.
 3. The graph is invoked for the same thread. LangGraph skips the finished nodes.
 4. The first remaining node rebuilds the job: it opens a session, runs the prepare phase again to reload the run and re-check admission, then restores the carried variables from the checkpoint.
 

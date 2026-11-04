@@ -235,7 +235,7 @@ def _execute_plan_now(
         assistant_msg = ConversationMessage(
             conversation_id=conv.id,
             role="assistant",
-            content="Drafts are already being generated. The progress panel above this conversation shows where they are.",
+            content="Drafts are already being generated. The progress panel in this conversation shows where they are.",
             metadata_json=json.dumps({"kind": "auto_execute_skipped", "run_id": existing_run.id}),
         )
         db.add(assistant_msg)
@@ -400,11 +400,11 @@ def _execute_plan_now(
     save_state(conv, state)
 
     queue_msg = (
-        "Generation has started. The progress panel above this conversation shows each step; "
+        "Generation has started. The progress panel in this conversation shows each step; "
         "when it finishes, open Deliverables to see the drafts and submit them for review."
         if enqueued
         else "The plan is saved but generation could not start right now. "
-        "Use Approve plan and generate in the progress panel above this conversation to try again."
+        "Use Approve plan and generate in the progress panel in this conversation to try again."
     )
     assistant_msg = ConversationMessage(
         conversation_id=conv.id,
