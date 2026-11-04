@@ -6,6 +6,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { BUTTON_COMPACT, Panel, SKILLS_HOME, SkillTabs, type SkillTabKey } from "@/components/skill-management/SkillParts";
 import { Button } from "@/components/ui/Button";
+import { BackButton } from "@/components/workbench/BackButton";
 import { PageFrame } from "@/components/workbench/PageFrame";
 import { useSkillManagement } from "@/hooks/useSkillManagement";
 import type { Skill } from "@/lib/skillManagement";
@@ -71,7 +72,11 @@ export function SkillPageFrame({
 }) {
   if (!skill) {
     return (
-      <PageFrame breadcrumb="Admin console / Skills management" title="Skill not found">
+      <PageFrame
+        back={<BackButton href={SKILLS_HOME} label="Back to the skill registry" />}
+        breadcrumb="Admin console / Skills management"
+        title="Skill not found"
+      >
         <Panel>
           <p className="text-xs text-[var(--text-muted)]">This skill is not in the registry for this session.</p>
           <Link href={SKILLS_HOME} className="text-xs">
@@ -82,7 +87,14 @@ export function SkillPageFrame({
     );
   }
   return (
-    <PageFrame breadcrumb={`Admin console / Skills management / ${crumb}`} title={title} subtitle={meta} actions={actions}>
+    <PageFrame
+      // Definition is the skill's first screen, so it returns to the registry; every other screen returns to Definition.
+      back={tab === "definition" ? <BackButton href={SKILLS_HOME} label="Back to the skill registry" /> : <BackButton href={`${SKILLS_HOME}/${skill.id}`} label="Back to skill" />}
+      breadcrumb={`Admin console / Skills management / ${crumb}`}
+      title={title}
+      subtitle={meta}
+      actions={actions}
+    >
       <SkillTabs skillId={skill.id} active={tab} />
       {children}
     </PageFrame>

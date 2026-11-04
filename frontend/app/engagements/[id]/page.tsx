@@ -26,6 +26,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { BackButton } from "@/components/workbench/BackButton";
 import { useEngagementDetailQuery } from "@/hooks/useEngagements";
 import { useAuth } from "@/lib/auth-context";
 
@@ -118,11 +119,18 @@ export default function EngagementDetailPage() {
       </nav>
 
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--text-default)]">{data.name}</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
-            {data.subtitle} · {data.dateRange} · Engagement lead: {data.lead}
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          {tab === "overview" ? (
+            <BackButton href="/engagements" label="Back to engagements" />
+          ) : (
+            <BackButton onClick={() => setTab("overview")} label="Back to overview" />
+          )}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold text-[var(--text-default)]">{data.name}</h1>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              {data.subtitle} · {data.dateRange} · Engagement lead: {data.lead}
+            </p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Link href="/library" className="!no-underline">
