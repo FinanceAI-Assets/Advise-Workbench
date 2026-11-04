@@ -297,6 +297,30 @@ def test_sheldon_sends_document_questions_to_the_rag_agent(env, monkeypatch):
     assert meta["scope"]["engagement_id"] == eid
 
 
+def test_document_questions_are_not_held_by_context_validation(env, monkeypatch):
+    """The context validator may ask "wiki or best practices?" on any turn; a document question still reaches the
+    rag_agent, while other messages keep getting the validator's question."""
+    from src.core.context import validation
+
+    def always_conflicting(self):
+        conflicts = {"conflicts": [{"field": "planning_cadence", "description": "different planning cycles"}]}
+        return {"has_issues": True, "needs_clarification": True, "conflicts": conflicts,
+                "freshness": {"freshness_issues": []}, "overall_confidence": 0.5}
+
+    monkeypatch.setattr(validation.ContextValidator, "validate_all", always_conflicting)
+    client, user = env["client"], env["user"]
+    eid = _engagement(env)
+    _route_as(monkeypatch, "knowledge_question")
+    reply = client.post(f"/api/projects/{eid}/conversation/messages", headers=user,
+                        json={"content": "How long do vendor master changes take?"}).json()["messages"]
+    assert reply[-1]["metadata"]["kind"] == "rag_answer" and reply[-1]["metadata"]["status"] == "answered"
+
+    _route_as(monkeypatch, "smalltalk")
+    chat = client.post(f"/api/projects/{eid}/conversation/messages", headers=user,
+                       json={"content": "Thanks, that was useful"}).json()["messages"][-1]
+    assert chat["metadata"]["kind"] == "context_clarification"  # their validator still runs for other messages
+
+
 def test_sheldon_says_so_when_nothing_supports_an_answer(env, monkeypatch):
     client, user = env["client"], env["user"]
     eid = _engagement(env)

@@ -36,6 +36,9 @@ FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 IS_WIN=0; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) IS_WIN=1 ;; esac
 # Python on Windows otherwise writes the console code page (cp1252) and crashes on non-ASCII log output.
 [ "$IS_WIN" = 1 ] && export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
+# Service output goes to .run/<service>.log and is shown here as it is written. Without this, Python holds print()
+# output (the agents' [PHASE2] / [PHASE-CONTEXT] / investigator lines) in an 8 KB buffer, so it arrives late or in bursts.
+export PYTHONUNBUFFERED=1
 CHECK_ONLY=0
 FIX=0
 for arg in "$@"; do
@@ -433,7 +436,10 @@ if [ "$BRIDGE_MODE" = 1 ]; then
     *) fail "port $BRIDGE_PORT is used by ${S#busy:}" "stop that process or set BRIDGE_PORT" ;; esac
 fi
 S="$(check_port backend "$BACKEND_PORT" "http://127.0.0.1:$BACKEND_PORT/health")"
-case "$S" in up) BACKEND_UP=1; pass "backend already running on $BACKEND_PORT" ;; free) pass "port $BACKEND_PORT is free for the backend" ;;
+case "$S" in up) BACKEND_UP=1
+    warn "backend already running on $BACKEND_PORT (started elsewhere${IS_WIN:+, $(port_owner "$BACKEND_PORT")}): it is used as is, and its logs ([SHELDON], [RAG_AGENT], [QUERY], [PHASE2] ...) are NOT shown here" \
+         "to see them here, stop that backend (Ctrl+C in its window, or end the process) and run this script again" ;;
+  free) pass "port $BACKEND_PORT is free for the backend" ;;
   *) fail "port $BACKEND_PORT is used by ${S#busy:}" "stop that process or set BACKEND_PORT" ;; esac
 S="$(check_port frontend "$FRONTEND_PORT" "http://localhost:$FRONTEND_PORT/")"
 case "$S" in up) FRONTEND_UP=1; pass "frontend already running on $FRONTEND_PORT" ;; free) pass "port $FRONTEND_PORT is free for the frontend" ;;
@@ -549,10 +555,27 @@ fi
 # Started even when the backend was already running: without it, uploads stay "pending". A worker this script
 # started earlier is reused. (Other workers on a shared broker are not counted: they may run other code.)
 WORKER_PID_FILE="$RUN_DIR/worker.pid"
+stray_workers() { # pids of ingestion workers on this machine (any terminal), Windows or Unix
+  if [ "$IS_WIN" = 1 ]; then
+    powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | Where-Object { \$_.CommandLine -match 'celery -A src.workers.celery_app worker' -and \$_.CommandLine -notmatch 'spawn_main' } | ForEach-Object { \$_.ProcessId }" 2>/dev/null | tr -d '\r'
+  else
+    pgrep -f "celery -A src.workers.celery_app worker" 2>/dev/null
+  fi
+}
 if [ -f "$WORKER_PID_FILE" ] && kill -0 "$(cat "$WORKER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
   echo "[worker] already running (pid $(cat "$WORKER_PID_FILE"), log: $RUN_DIR/worker.log)"
   WORKER_STARTED=1
 elif bash "$INFRA_SH" check rabbitmq >/dev/null 2>&1; then
+  # A worker left from an earlier run or another terminal would take half of every upload's tasks, with the code it
+  # started with, and log elsewhere. Stop it so this run's worker processes (and shows) everything.
+  STRAY="$(stray_workers | tr '\n' ' ')"
+  if [ -n "${STRAY// /}" ]; then
+    echo "[worker] stopping ingestion workers not started by this run (pid $STRAY): they would split uploads and run old code"
+    for p in $STRAY; do
+      if [ "$IS_WIN" = 1 ]; then taskkill //PID "$p" //T //F >/dev/null 2>&1; else kill "$p" 2>/dev/null; fi
+    done
+    sleep 2
+  fi
   start_service worker "$ROOT" "$VPY" -m celery -A src.workers.celery_app worker --pool=solo --loglevel=INFO
   WORKER_STARTED=1
 else

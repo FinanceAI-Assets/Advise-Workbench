@@ -44,8 +44,9 @@ function formatTimestamp(iso: string | null): string {
  */
 export function toConversationMessage(raw: RawConversationMessage): ConversationMessage {
   const listed = raw.metadata?.wiki_context_refs ?? raw.metadata?.wiki_refs;
+  // Only Sheldon's replies cite sources; a user message's wiki_refs are the pages looked up for it, not citations.
   const refs =
-    raw.metadata?.kind !== "rag_answer" && Array.isArray(listed)
+    raw.role !== "user" && raw.metadata?.kind !== "rag_answer" && Array.isArray(listed)
       ? (listed as unknown[]).filter((x): x is string => typeof x === "string")
       : [];
   const body = refs.length ? `${raw.content}\n\nSources: ${refs.join(" · ")}` : raw.content;

@@ -2681,6 +2681,16 @@ def _turn_context_validate(turn: Turn) -> dict | None:
     _LOG.info(f"[PHASE-2-VALIDATE] START: user={user}, conversation={conv.id if conv else 'unknown'}")
 
     try:
+        # Document questions go to Sheldon's rag_agent, which answers only from cited engagement documents and the
+        # Leading Practice Library: the wiki-vs-best-practice choice below does not apply, so they are not held for it.
+        decision = turn.vars.get("decision")
+        if decision is not None and state is not None and sheldon_router_agent.route(
+            intent=decision.intent, rationale=decision.rationale or "", message=content, state=state.state
+        ) == sheldon_router_agent.RAG:
+            _LOG.info("[SHELDON] project=%s context validation skipped: document question for the rag_agent", pid)
+            turn.vars["context_validation"] = {"validated": True, "skipped": "rag_agent", "overall_confidence": 1.0}
+            return None
+
         # Check if this is a clarification response (user replied to context question)
         last_message_kind = None
         if prior_messages:
