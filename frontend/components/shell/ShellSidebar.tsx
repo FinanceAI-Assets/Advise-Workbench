@@ -58,13 +58,13 @@ function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
       icon: MessagesSquare,
       active: isConversation,
     },
-    { href: "/reviews", label: "Reviews", icon: ClipboardCheck, active: pathname.startsWith("/reviews") },
     {
       href: engagementId ? `/engagements/${engagementId}/deliverables` : "/deliverables",
       label: "Deliverables",
       icon: FileStack,
       active: isDeliverables,
     },
+    { href: "/reviews", label: "Reviews", icon: ClipboardCheck, active: pathname.startsWith("/reviews") },
     { href: "/skills", label: "Skills", icon: Sparkles, active: pathname.startsWith("/skills") },
   ];
 

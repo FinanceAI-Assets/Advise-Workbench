@@ -1,6 +1,5 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
@@ -10,7 +9,7 @@ import {
   SourceBrowser,
   TalkToData,
 } from "@/components/lp-library";
-import { Button } from "@/components/ui/Button";
+import { BackButton } from "@/components/workbench/BackButton";
 import { PageFrame } from "@/components/workbench/PageFrame";
 
 // Leading Practice Library: the chat by default, with Browse sources opening the search screen. Sources checked in
@@ -54,20 +53,13 @@ export default function LibraryPage() {
 
   return (
     <PageFrame
+      back={browsing ? <BackButton onClick={backToChat} label="Back to chat" /> : undefined}
       breadcrumb={browsing ? "User workspace / Leading Practice Library / Browse sources" : "User workspace / Leading Practice Library"}
       title={browsing ? "Browse sources" : "Leading Practice Library"}
       subtitle={
         browsing
           ? "Search the approved library, check the sources you want and add them to an engagement."
           : "Discover approved guidance, ask questions and choose the sources to take into your engagement."
-      }
-      actions={
-        browsing ? (
-          <Button variant="secondary" className="flex items-center gap-2" onClick={backToChat}>
-            <ArrowLeft size={16} aria-hidden />
-            Back to chat
-          </Button>
-        ) : null
       }
     >
       {/* Stays mounted while browsing: a half-typed question and an answer still on its way must survive the visit. */}

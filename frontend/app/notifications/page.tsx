@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { type NotificationFilter, useNotificationActions, useNotificationsQuery } from "@/hooks/useWorkbench";
 
@@ -24,6 +25,7 @@ export default function NotificationsPage() {
 
   return (
     <PageFrame
+      back={<BackButton />}
       breadcrumb="User workspace / Header / Notifications"
       title="Notifications"
       subtitle="Review assignments, mentions and source-processing updates that need your attention."

@@ -24,6 +24,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ReasonAction } from "@/components/workbench/AdminControls";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { type AdminLibrary, type LibraryUploadJob, queuedJobIds, useAdminLibraryQuery } from "@/hooks/useAdminConsole";
 
@@ -108,6 +109,7 @@ export default function AdminConsoleLibraryPage() {
   const quality = data.qualityGates;
   const selectedTitle = data.practiceInventory.find((row) => row.id === practiceId)?.practiceSource.split(" · ")[0];
   const tabLabel = TABS.find((item) => item.key === tab)?.label ?? "";
+  const previousStep = TABS[TABS.findIndex((item) => item.key === tab) - 1];
 
   const sampleNote =
     !uploaded && tab !== "source-upload" ? (
@@ -120,6 +122,7 @@ export default function AdminConsoleLibraryPage() {
 
   const frame = (title: string, subtitle: ReactNode, content: ReactNode, actions?: ReactNode) => (
     <PageFrame
+      back={previousStep ? <BackButton onClick={() => openTab(previousStep.key)} label={`Back to ${previousStep.label}`} /> : undefined}
       breadcrumb={tab === "source-upload" ? BREADCRUMB : `${BREADCRUMB} / ${tabLabel}`}
       title={title}
       subtitle={subtitle}

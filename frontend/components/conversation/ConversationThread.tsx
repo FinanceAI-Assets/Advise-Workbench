@@ -4,8 +4,10 @@ import { Copy, Sparkles } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { ReplyOptions, type ReplyHandlers, hasReplyOptions } from "@/components/conversation/ReplyOptions";
+import { ChatRunProgress } from "@/components/conversation/RunProgressCard";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { useRunProgressQuery } from "@/hooks/useWorkbench";
 import { cn } from "@/lib/utils";
 import type { ConversationMessage } from "@/types/api";
 
@@ -136,19 +138,19 @@ function TypingDots() {
 }
 
 export function ConversationThread({
+  pid,
   scopeSummary,
   messages,
   pendingText,
-  onCreateDrafts,
   onReply,
   onDraft,
   busy,
 }: ReplyHandlers & {
+  pid: string;
   scopeSummary: string;
   messages: ConversationMessage[];
   // The message you just sent, shown at once while Sheldon is still replying.
   pendingText?: string | null;
-  onCreateDrafts?: () => void;
   busy?: boolean;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -160,11 +162,12 @@ export function ConversationThread({
     [pendingText]
   );
   const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant")?.body ?? "";
+  const run = useRunProgressQuery(pid).data?.run;
 
   // Keep the newest message in view, as a chat does.
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages.length, pendingText, busy]);
+  }, [messages.length, pendingText, busy, run?.id, run?.status]);
 
   return (
     <Card className="flex flex-col gap-3 p-0">
@@ -204,13 +207,15 @@ export function ConversationThread({
             </span>
           </Bubble>
         ) : null}
+        {run ? (
+          <Bubble mine={false} author="Sheldon" time="">
+            <ChatRunProgress pid={pid} run={run} />
+          </Bubble>
+        ) : null}
         <div ref={endRef} />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--surface-border)] px-4 py-3">
-        <Button type="button" className="whitespace-nowrap text-sm" disabled={!onCreateDrafts || busy} onClick={onCreateDrafts}>
-          Create PPTX + DOCX drafts
-        </Button>
+      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-[var(--surface-border)] px-4 py-3">
         <Button
           type="button"
           variant="ghost"

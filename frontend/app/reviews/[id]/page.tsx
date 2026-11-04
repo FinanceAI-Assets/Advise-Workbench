@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Textarea } from "@/components/ui/Textarea";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useReviewActions, useReviewQuery } from "@/hooks/useWorkbench";
 import { useAuth } from "@/lib/auth-context";
@@ -64,6 +65,7 @@ export default function ReviewDetailPage() {
 
   return (
     <PageFrame
+      back={<BackButton href="/reviews" label="Back to reviews" />}
       breadcrumb={
         <>
           {data.engagementName} / <Link href="/reviews">Reviews</Link> / {data.code}
