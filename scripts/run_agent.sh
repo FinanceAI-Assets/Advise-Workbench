@@ -166,6 +166,7 @@ else
 fi
 
 section "Shared services (local addresses in .env)"
+SHARED_LOG="$RUN_DIR/infra/shared-services.txt"; mkdir -p "$RUN_DIR/infra"; : > "$SHARED_LOG"   # captured each run, shown after the prechecks
 # link_state HTTP-code -> up | down. 000 = no connection; 502/504/52x = a dead proxy or unreachable origin.
 link_state() { case "$1" in 000|502|504|52[0-9]) echo down ;; *) echo up ;; esac; }
 # Team settings that travel with `git pull`: when .env.example carries an active "team-shared-services" block,
@@ -187,9 +188,13 @@ if [ "$(env_get TEAM_SYNC)" != false ] && [ -f "$ENV_FILE" ] && grep -q '^# >>> 
         env_append "$k=$(example_get "$k")"
       done
       fixed "updated $n shared-service setting(s) in .env from the team block in .env.example:$TEAM_DIFF"
+      printf 'team settings: UPDATED %s key(s) in .env from .env.example:%s\n' "$n" "$TEAM_DIFF" >> "$SHARED_LOG"
     else
       warn "$n shared-service setting(s) in .env differ from the team's current values in .env.example:$TEAM_DIFF" "run with --fix to update .env (personal settings are kept; TEAM_SYNC=false opts out)"
+      printf 'team settings: %s key(s) DIFFER from .env.example, run with --fix to update:%s\n' "$n" "$TEAM_DIFF" >> "$SHARED_LOG"
     fi
+  else
+    echo "team settings: in sync with .env.example" >> "$SHARED_LOG"
   fi
 fi
 SHARED_REQUIRED="$(env_get SHARED_SERVICES_REQUIRED)"
@@ -201,6 +206,7 @@ check_link() { # label ENV_VAR path need200(1|0)
   SHARED_SEEN=$((SHARED_SEEN + 1))
   code="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' "${url%/}$3" 2>/dev/null)"
   state="$(link_state "$code")"
+  printf '%-18s HTTP %-4s %-5s %s\n' "$1" "$code" "$state" "${url%/}" >> "$SHARED_LOG"
   if [ "$state" = up ] && { [ "$4" = 0 ] || [ "$code" = 200 ]; }; then pass "$1 answers (HTTP $code) at ${url%/}"
   else
     hint="check the address, the shared server's port and its key in .env"
@@ -417,6 +423,33 @@ fi
 
 section "Ports"
 BRIDGE_UP=0; BACKEND_UP=0; FRONTEND_UP=0
+
+kill_tree() { # stop a process and everything it started
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
+    # Git Bash cannot see native Windows grandchildren (uvicorn's reloader, node's workers): end the whole tree.
+    winpid="$(ps 2>/dev/null | awk -v p="$1" '$1 == p {print $4}')"
+    [ -n "$winpid" ] && taskkill //PID "$winpid" //T //F >/dev/null 2>&1 ;;
+  esac
+  if command -v pgrep >/dev/null 2>&1; then kids="$(pgrep -P "$1" 2>/dev/null)"
+  else kids="$(ps -A -o pid=,ppid= 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"
+       [ -n "$kids" ] || kids="$(ps 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"; fi   # Git Bash: plain ps
+  for child in $kids; do kill_tree "$child"; done
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) kill -f "$1" 2>/dev/null ;; *) kill "$1" 2>/dev/null ;; esac
+}
+# Stop the worker, backend and frontend that the previous run recorded in .run/*.pid, so this run starts them fresh.
+stop_previous() {
+  for name in worker backend frontend; do
+    f="$RUN_DIR/$name.pid"; [ -f "$f" ] || continue
+    pid="$(tr -d '\r\n ' < "$f")"
+    if [ -n "$pid" ]; then kill_tree "$pid"; printf '  STOP  previous %s (pid %s)\n' "$name" "$pid"; fi
+    rm -f "$f"
+  done
+  for _ in $(seq 15); do   # wait up to 15 s for the ports to be released
+    [ -z "$(port_owner "$BACKEND_PORT")" ] && [ -z "$(port_owner "$FRONTEND_PORT")" ] && break
+    sleep 1
+  done
+}
+[ "$CHECK_ONLY" = 1 ] || stop_previous
 check_port() { # name port health-url ; echoes up | free | busy:<owner>
   if http_ok "$3"; then echo up; return; fi
   owner="$(port_owner "$2")"
@@ -465,6 +498,7 @@ if command -v tesseract >/dev/null 2>&1 || [ -f "/c/Program Files/Tesseract-OCR/
 else warn "Tesseract not installed: scanned PDFs cannot be read" "$(hint tesseract)"; fi
 
 printf '\nPrechecks: %d passed, %d warnings, %d failed\n' "$PASS_N" "$WARN_N" "$FAIL_N"
+printf '\nShared services (captured in %s):\n' "$SHARED_LOG"; sed 's/^/  /' "$SHARED_LOG"
 if [ "$FAIL_N" -gt 0 ]; then
   echo "Fix the FAIL items above and run again (--fix repairs the ones marked 'run with --fix')."
   abort_prechecks 1
@@ -476,18 +510,6 @@ mkdir -p "$RUN_DIR"
 STARTED_PIDS=""
 TAIL_PIDS=""
 
-kill_tree() { # stop a process and everything it started
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
-    # Git Bash cannot see native Windows grandchildren (uvicorn's reloader, node's workers): end the whole tree.
-    winpid="$(ps 2>/dev/null | awk -v p="$1" '$1 == p {print $4}')"
-    [ -n "$winpid" ] && taskkill //PID "$winpid" //T //F >/dev/null 2>&1 ;;
-  esac
-  if command -v pgrep >/dev/null 2>&1; then kids="$(pgrep -P "$1" 2>/dev/null)"
-  else kids="$(ps -A -o pid=,ppid= 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"
-       [ -n "$kids" ] || kids="$(ps 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"; fi   # Git Bash: plain ps
-  for child in $kids; do kill_tree "$child"; done
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) kill -f "$1" 2>/dev/null ;; *) kill "$1" 2>/dev/null ;; esac
-}
 cleanup() {
   trap - INT TERM EXIT
   printf '\nStopping...\n'
