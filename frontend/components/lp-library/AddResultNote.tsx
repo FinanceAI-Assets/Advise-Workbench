@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import type { AddPracticesResult } from "@/hooks/useWorkbench";
 
+export const engagementSourcesPath = (projectId: string) => `/engagements/${encodeURIComponent(projectId)}?tab=sources`;
+
 /** What came of adding sources to an engagement: where they went, and what could not be added. */
 export function AddResultNote({
   result,
@@ -23,7 +25,7 @@ export function AddResultNote({
             ? `${result.added.length} source${result.added.length === 1 ? "" : "s"} added to ${projectName}.`
             : `Already in ${projectName}'s sources.`}
           {result.added.length && result.already.length ? ` ${result.already.length} already there.` : ""}{" "}
-          <Link href={`/engagements/${encodeURIComponent(projectId)}?tab=sources`} className="font-medium underline">
+          <Link href={engagementSourcesPath(projectId)} className="font-medium underline">
             View engagement sources
           </Link>
         </p>
