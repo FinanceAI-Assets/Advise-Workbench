@@ -35,8 +35,9 @@ class ConversationState:
     last_router: dict[str, Any]
     pending_questions: list[str]
     surfaced_wiki_refs: list[str]
-    history_summary: str
-    conversation_summary: str = ""  # 2-3 line summary of conversation (auto-generated on idle/session-end)
+    # [DEPRECATED: Removed history_summary - consolidated into conversation_summary]
+    # history_summary: str
+    conversation_summary: str = ""  # Unified summary: rolling (inline every 6 msgs) + session (idle/completion)
 
     def to_json(self) -> str:
         return json.dumps(
@@ -48,7 +49,8 @@ class ConversationState:
                 "last_router": self.last_router,
                 "pending_questions": self.pending_questions,
                 "surfaced_wiki_refs": self.surfaced_wiki_refs,
-                "history_summary": self.history_summary,
+                # [DEPRECATED: history_summary removed - consolidated into conversation_summary]
+                # "history_summary": self.history_summary,
                 "conversation_summary": self.conversation_summary,
             }
         )
@@ -62,7 +64,8 @@ class ConversationState:
             "last_router": self.last_router,
             "pending_questions": self.pending_questions,
             "surfaced_wiki_refs": self.surfaced_wiki_refs,
-            "history_summary": self.history_summary,
+            # [DEPRECATED: history_summary removed - consolidated into conversation_summary]
+            # "history_summary": self.history_summary,
             "conversation_summary": self.conversation_summary,
         }
 
@@ -87,7 +90,8 @@ class ConversationState:
             last_router=last_router if isinstance(last_router, dict) else {},
             pending_questions=[str(x).strip() for x in (pending_questions or []) if str(x).strip()],
             surfaced_wiki_refs=[str(x).strip() for x in (surfaced_wiki_refs or []) if str(x).strip()],
-            history_summary=str(data.get("history_summary") or "").strip(),
+            # [DEPRECATED: history_summary removed - consolidated into conversation_summary]
+            # history_summary=str(data.get("history_summary") or "").strip(),
             conversation_summary=str(data.get("conversation_summary") or "").strip(),
         )
 
@@ -101,7 +105,8 @@ def default_state() -> ConversationState:
         last_router={},
         pending_questions=[],
         surfaced_wiki_refs=[],
-        history_summary="",
+        # [DEPRECATED: history_summary removed - consolidated into conversation_summary]
+        # history_summary="",
         conversation_summary="",
     )
 
@@ -141,7 +146,8 @@ def load_state(conv: Conversation) -> ConversationState:
         last_router=last_router if isinstance(last_router, dict) else {},
         pending_questions=[str(x).strip() for x in (pending_questions or []) if str(x).strip()],
         surfaced_wiki_refs=[str(x).strip() for x in (surfaced_wiki_refs or []) if str(x).strip()],
-        history_summary=str(payload.get("history_summary") or "").strip(),
+        # [DEPRECATED: history_summary removed - consolidated into conversation_summary]
+        # history_summary=str(payload.get("history_summary") or "").strip(),
         conversation_summary=str(payload.get("conversation_summary") or "").strip(),
     )
 

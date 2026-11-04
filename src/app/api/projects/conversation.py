@@ -874,7 +874,9 @@ def _persist_conversational_response(
     router_intent: str | None = None,
     router_confidence: float | None = None,
     project_id: str | None = None,
-    history_summary: str = "",
+    # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+    # history_summary: str = "",
+    conversation_summary: str = "",  # [NEW: Unified summary context (rolling inline + session idle)]
 ) -> dict:
     """Generate a natural, colleague-like conversational response grounded in captured context.
 
@@ -972,9 +974,16 @@ def _persist_conversational_response(
                 if ref not in wiki_refs:
                     wiki_refs.append(ref)
             unsurfaced_refs = [x for x in wiki_refs if x not in already_surfaced_refs]
+    # [DEPRECATED: Using history_summary removed - consolidated into conversation_summary]
+    # summary_block = (
+    #     f"Conversation summary (prior turns):\n{history_summary}\n\n"
+    #     if history_summary.strip()
+    #     else ""
+    # )
+    # [NEW: Updated to use unified conversation_summary instead]
     summary_block = (
-        f"Conversation summary (prior turns):\n{history_summary}\n\n"
-        if history_summary.strip()
+        f"Conversation summary (prior turns):\n{conversation_summary}\n\n"
+        if conversation_summary.strip()
         else ""
     )
     user_prompt = (
@@ -1149,9 +1158,11 @@ def _update_conversation_summary(
 ) -> bool:
     """Generate and store a rolling summary of older conversation turns.
 
-    Triggers at 10 messages (first summary) and refreshes at every 10th message
-    thereafter (20, 30, …). Summarizes everything except the last 6 messages so
+    Triggers at 6 messages (first summary) and refreshes at every 6th message
+    thereafter (12, 18, …). Summarizes everything except the last 6 messages so
     the normal recent-history window remains verbatim.
+
+    Changed from 10-message to 6-message intervals for fresher context in routing decisions.
 
     Returns True if the summary was updated; caller must call save_state() afterward.
     Non-blocking: failures are swallowed and return False.
@@ -1160,9 +1171,18 @@ def _update_conversation_summary(
     # from src.llm.claude import claude_generate
 
     n = len(messages)
-    if n < 10:
+    # [DEPRECATED: Original 10-message minimum trigger]
+    # if n < 10:
+    #     return False
+    # [NEW: 6-message minimum trigger for fresher context]
+    if n < 6:
         return False
-    if state.history_summary and n % 10 != 0:
+    # [DEPRECATED: Original 10-message interval trigger]
+    # if state.history_summary and n % 10 != 0:
+    #     return False
+    # [NEW: 6-message interval trigger - generates summary more frequently]
+    # [CHANGED: Use conversation_summary instead of history_summary (consolidated field)]
+    if state.conversation_summary and n % 6 != 0:
         return False
 
     messages_to_summarize = messages[:-6]
@@ -1208,7 +1228,9 @@ def _update_conversation_summary(
     if not summary:
         return False
 
-    state.history_summary = summary
+    # [CHANGED: Use conversation_summary instead of history_summary (consolidated field)]
+    # [DEPRECATED: state.history_summary = summary]
+    state.conversation_summary = summary
     return True
 
 
@@ -2084,7 +2106,9 @@ def _handle_collaborative_building(
             router_intent=decision.intent,
             router_confidence=decision.confidence,
             project_id=pid,
-            history_summary=state.history_summary,
+            # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+            # history_summary=state.history_summary,
+            conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
         )
 
     # ── 3. Handle slide agreement / modification ─────────────────────────────
@@ -2626,7 +2650,9 @@ def _turn_route(turn: Turn) -> dict | None:
             recent_messages=prior_messages,
             project_context=project_context,
             available_output_types=available_output_types,
-            history_summary=state.history_summary,
+            # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+            # history_summary=state.history_summary,
+            # [CHANGED: Use unified conversation_summary instead]
             conversation_summary=state.conversation_summary,
             memory_profile=memory_profile,
         )
@@ -2832,7 +2858,9 @@ def _turn_respond(turn: Turn) -> dict | None:
                     router_intent=decision.intent,
                     router_confidence=decision.confidence,
                     project_id=pid,
-                    history_summary=state.history_summary,
+                    # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+                    # history_summary=state.history_summary,
+                    conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
                 )
 
         # ── Collaborative building flow ───────────────────────────────────────────────
@@ -2885,7 +2913,9 @@ def _turn_respond(turn: Turn) -> dict | None:
                 router_intent=decision.intent,
                 router_confidence=decision.confidence,
                 project_id=pid,
-                history_summary=state.history_summary,
+                # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+                # history_summary=state.history_summary,
+                conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
             )
 
         if not template_ids:
@@ -2910,7 +2940,9 @@ def _turn_respond(turn: Turn) -> dict | None:
                 router_intent=decision.intent,
                 router_confidence=decision.confidence,
                 project_id=pid,
-                history_summary=state.history_summary,
+                # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+                # history_summary=state.history_summary,
+                conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
             )
 
         with checkpoint_scope(

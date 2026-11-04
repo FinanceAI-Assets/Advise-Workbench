@@ -101,7 +101,8 @@ def route_turn(
     recent_messages: list[dict[str, Any]],
     project_context: str,
     available_output_types: list[dict[str, Any]],
-    history_summary: str = "",
+    # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+    # history_summary: str = "",
     conversation_summary: str = "",
     memory_profile: dict[str, Any] | None = None,
 ) -> RouterDecision:
@@ -137,12 +138,13 @@ def route_turn(
         "{client:{name,industry}, outcome:{primary,decision}, win_themes:[...], audience, narrative_arc, tone}.\n"
         "missing_slots values should come from: client, outcome, win_themes.\n"
     )
-    # Build context with both history summary (10-msg rolling) and conversation summary (idle checkpoint)
+    # [CHANGED: Build context with unified conversation_summary (rolling inline + session idle)]
     summary_parts = []
     if conversation_summary.strip():
         summary_parts.append(f"Session summary (auto-generated on idle/checkpoint):\n{conversation_summary}")
-    if history_summary.strip():
-        summary_parts.append(f"Rolling conversation summary (prior 20+ messages):\n{history_summary}")
+    # [DEPRECATED: history_summary block removed - consolidated into conversation_summary]
+    # if history_summary.strip():
+    #     summary_parts.append(f"Rolling conversation summary (prior 20+ messages):\n{history_summary}")
     summary_prefix = "\n\n".join(summary_parts) + "\n\n" if summary_parts else ""
 
     user = (

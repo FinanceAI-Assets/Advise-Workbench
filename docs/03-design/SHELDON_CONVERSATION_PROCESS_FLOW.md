@@ -107,7 +107,9 @@ class ConversationState:
     last_router: dict[str, Any]      # Last routing decision (intent, confidence)
     pending_questions: list[str]     # Questions Sheldon should ask next
     surfaced_wiki_refs: list[str]    # References from knowledge base
-    history_summary: str             # Compact summary for context
+    # [DEPRECATED: history_summary removed - consolidated into conversation_summary]
+    # history_summary: str             # Compact summary for context
+    conversation_summary: str        # Unified summary: rolling (inline every 6 msgs) + session (idle/completion)
 ```
 
 **FSM States:**
