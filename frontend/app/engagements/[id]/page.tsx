@@ -24,6 +24,7 @@ import {
   SourcesSection,
   TeamSection,
 } from "@/components/engagements/EngagementSections";
+import { DeliverablesOverview } from "@/components/deliverables";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -55,7 +56,7 @@ export default function EngagementDetailPage() {
     setHydrated(true);
     // Deep links such as ?tab=sources open that view.
     const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested && ["sources", "team", "activity", "brief", "draft", "review", "export"].includes(requested)) {
+    if (requested && ["sources", "deliverables", "team", "activity", "brief", "draft", "review", "export"].includes(requested)) {
       setTab(requested as EngagementTabKey | StepView);
     }
   }, []);
@@ -153,7 +154,7 @@ export default function EngagementDetailPage() {
       <EngagementTabs
         tabs={tabs}
         active={tab as EngagementTabKey}
-        onChange={(key) => (key === "deliverables" ? router.push(`/engagements/${id}/deliverables`) : setTab(key))}
+        onChange={setTab}
       />
 
       {tab === "overview" ? (
@@ -174,6 +175,7 @@ export default function EngagementDetailPage() {
         </section>
       ) : null}
       {tab === "sources" ? <SourcesSection id={id} detail={data} /> : null}
+      {tab === "deliverables" ? <DeliverablesOverview id={id} detail={data} /> : null}
       {tab === "team" ? <TeamSection id={id} detail={data} /> : null}
       {tab === "activity" ? <ActivitySection id={id} /> : null}
       {tab === "brief" ? <BriefSection id={id} detail={data} onContinue={() => setTab("sources")} /> : null}

@@ -13,7 +13,7 @@ DATABASE_URL = settings.database_url
 if DATABASE_URL.startswith("sqlite"):
     # SQLite can briefly lock on concurrent writes (API + background workers).
     # Increase busy timeout so transient contention does not fail requests.
-    _sqlite_args = {"check_same_thread": False, "timeout": 30}
+    _sqlite_args = {"check_same_thread": False, "timeout": 120}
     if ":memory:" in DATABASE_URL:
         engine = create_engine(
             DATABASE_URL,
@@ -31,7 +31,7 @@ if DATABASE_URL.startswith("sqlite"):
         try:
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
-            cursor.execute("PRAGMA busy_timeout=30000;")
+            cursor.execute("PRAGMA busy_timeout=120000;")
         finally:
             cursor.close()
 else:
@@ -59,11 +59,29 @@ def init_db() -> None:
         with engine.begin() as conn:
             conn.exec_driver_sql("SELECT pg_advisory_xact_lock(815001)")
             Base.metadata.create_all(bind=conn)
+            ensure_users_role_column(conn)
     else:
         Base.metadata.create_all(bind=engine)
+        with engine.begin() as conn:
+            ensure_users_role_column(conn)
     if engine.dialect.name == "sqlite":
         rebuild_sqlite_run_tasks_key(engine)
     _initialized = True
+
+
+def ensure_users_role_column(conn) -> bool:
+    """Add ``users.role`` when it is missing. Returns True if the column was added.
+
+    Databases built by ``create_all`` before the role column existed never gain it (create_all does
+    not alter existing tables), so every user lookup failed with "column users.role does not exist".
+    """
+    from sqlalchemy import inspect
+
+    if "role" in {column["name"] for column in inspect(conn).get_columns("users")}:
+        return False
+    conn.exec_driver_sql("ALTER TABLE users ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'user'")
+    conn.exec_driver_sql("UPDATE users SET role = 'admin' WHERE is_admin IS TRUE")
+    return True
 
 
 def rebuild_sqlite_run_tasks_key(bind) -> bool:

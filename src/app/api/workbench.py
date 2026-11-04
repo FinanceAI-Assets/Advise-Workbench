@@ -10,10 +10,28 @@ from src.app.api.engagements import _code, _metas, display_name, format_timestam
 from src.core.auth import get_current_user
 from src.core.db.models import LpPractice, Notification, Project, Review, User, utcnow
 from src.core.db.session import get_db
+from src.llm.config import PROVIDERS, load_llm_config
+from src.llm.gateway import is_enabled, provider_name
 
 router = APIRouter()
 
 _FILTERS = {"all", "unread", "mentions", "system"}
+
+
+@router.get("/settings/models")
+def model_settings(user: User = Depends(get_current_user)) -> dict:
+    """Expose non-secret model configuration status for the Settings screen."""
+    config = load_llm_config()
+    return {
+        "providers": list(PROVIDERS),
+        "provider": provider_name(),
+        "model": config.models.get("default", ""),
+        "planning_model": config.models.get("planning", ""),
+        "critique_model": config.models.get("critique", ""),
+        "base_url": config.base_url,
+        "api_key_configured": bool(config.api_key),
+        "enabled": is_enabled(),
+    }
 
 
 def _matches(notification: Notification, filter_: str) -> bool:

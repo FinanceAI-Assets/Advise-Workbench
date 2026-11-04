@@ -24,6 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.agents.supervisor_agent import Coordinator
+from src.agents.investigator_agent import InvestigatorAgent
 from src.core.config import settings
 from src.core.exceptions import RunBudgetExceeded
 from src.evaluation.narrative_feedback import (
@@ -42,6 +43,10 @@ from src.memory.short_term.conversation_digest import build_conversation_digest_
 from src.guardrails.hooks import hook_execution_exists, record_hook_execution, run_hooks_sync, sync_disabled_hooks_from_db
 from src.core.observability.langfuse_tracing import langfuse_event, langfuse_span
 from src.core.observability.metrics import increment, observe_latency, record_run_trace, set_gauge
+from src.core.observability.advanced_metrics import record_application_request, record_agent_call
+from src.core.observability.agent_rag_metrics import AgentMetricsTracker, RAGMetricsTracker
+from src.core.observability.tool_metrics import ToolMetricsTracker
+from src.core.observability.application_metrics import get_application_metrics
 from src.guardrails.permission_pipeline import evaluate_permission_pipeline
 from src.guardrails.policy import PROPOSAL_SKILL_ID
 from src.evaluation.run_evaluator_pipeline import (
@@ -1075,6 +1080,14 @@ def _execute_run_job(
     queue_payload: dict[str, Any] | None = None,
 ) -> tuple[bool, str | None]:
     """Entry point for queued run execution; wraps the body in a top-level OTel span."""
+
+    print(f"\n{'='*80}")
+    print(f"[ORCHESTRATOR] STARTING RUN EXECUTION")
+    print(f"[ORCHESTRATOR] Project: {project_id}")
+    print(f"[ORCHESTRATOR] Run ID: {run_id}")
+    print(f"[ORCHESTRATOR] Will execute 6 phases...")
+    print(f"{'='*80}\n")
+
     with start_span(
         "run.execute",
         attributes={"project_id": project_id, "run_id": run_id},
@@ -1099,7 +1112,10 @@ class RunJob:
 
 # Variables each phase needs from the earlier ones (the LangGraph orchestrator checkpoints these).
 PHASE_CARRY: dict[str, tuple[str, ...]] = {
-    "context": ('_run_cost', '_run_usage', 'plan_payload_obj'),
+    "context": ('_run_cost', '_run_usage', 'plan_payload_obj', 'init_state', 'conversation_digest', 'requested', 'output_type_representations'),
+    "path_router": ('_run_cost', '_run_usage', 'plan_payload_obj', 'init_state', 'conversation_digest', 'requested', 'routing_decision', 'router_input'),  # NEW
+    "path_conversation": ('routing_decision',),  # NEW
+    "path_rag_search": ('_run_cost', '_run_usage', 'init_state', 'routing_decision'),  # NEW
     "generate": ('_run_cost', '_run_usage', 'hard_gate_enabled', 'init_state', 'output_type_representations', 'plan_payload_obj', 'requested'),
     "evaluate": ('_run_cost', '_run_usage', 'final_artifact_report', 'hard_gate_enabled', 'plan_payload_obj', 'requested', 'run_dir', 'run_todos', 'state'),
     "remember": ('state',),
@@ -1148,7 +1164,14 @@ def fail_run_job(job: RunJob, exc: Exception) -> RunOutcome:
     append_run_event(session, run_id, "failed", {"error": str(exc), "traceback": tb[-3000:]})
     session.commit()
     increment("run_failed_total")
-    observe_latency("run_execution", (perf_counter() - started_at) * 1000.0)
+    elapsed_ms = (perf_counter() - started_at) * 1000.0
+    observe_latency("run_execution", elapsed_ms)
+
+    # Record application-level metrics for failed runs (per-project per-run)
+    run_cost = _run_cost or calculate_run_cost_usd(**_run_usage)
+    record_application_request(duration_ms=elapsed_ms, success=False, cost=run_cost, project_id=project_id)
+    print(f"[APP_METRICS] Run failed - Duration: {elapsed_ms:.0f}ms, Cost: ${run_cost:.4f}, Project: {project_id}")
+
     record_run_trace(
         "run_execution_failed",
         project_id=project_id,
@@ -1165,13 +1188,18 @@ def _phase_prepare(job: RunJob) -> RunOutcome | None:
     """
     project_id, run_id, queue_payload = job.project_id, job.run_id, job.queue_payload  # noqa: F841
     session = job.vars.get("session")
+    print(f"\n{'='*80}\n[PHASE-PREPARE] STARTED for run_id={run_id}\n{'='*80}\n")
     try:
+        print(f"[PHASE-PREPARE] 1. Loading run from database...")
         run = session.scalar(select(Run).where(Run.id == run_id, Run.project_id == project_id))
         if not run:
+            print(f"[PHASE-PREPARE] 1a. Run not found, returning")
             return True, None
+        print(f"[PHASE-PREPARE] 1b. Run loaded: status={run.status}")
         qpayload = queue_payload if isinstance(queue_payload, dict) else {}
         rs = str(qpayload.get("retry_state") or "").strip().lower()
         if rs == "scheduled" and not validate_retry_transition("scheduled", "executing"):
+            print(f"[PHASE-PREPARE] 2. Retry state validation failed")
             increment("retry_transition_invalid_total")
             append_run_event(
                 session,
@@ -1181,43 +1209,62 @@ def _phase_prepare(job: RunJob) -> RunOutcome | None:
             )
             session.commit()
             return False, "retry_transition_invalid"
+        print(f"[PHASE-PREPARE] 2. Parsing plan_payload...")
         try:
             _pp = json.loads(run.plan_payload) if run.plan_payload else {}
-        except Exception:
+            print(f"[PHASE-PREPARE] 2a. plan_payload parsed successfully")
+        except Exception as e:
+            print(f"[PHASE-PREPARE] 2a. Error parsing plan_payload: {e}")
             _pp = {}
         _control = _pp.get("control_state") if isinstance(_pp, dict) and isinstance(_pp.get("control_state"), dict) else {}
         if bool(_control.get("abort_requested")) or bool(run.abort_requested):
+            print(f"[PHASE-PREPARE] 3. Abort requested, failing run")
             run.status = "failed"
             run.error_message = "Aborted via persisted control_state before execution."
             session.commit()
             append_run_event(session, run_id, "run_aborted", {"reason": "persisted_abort_requested"})
             session.commit()
             return False, run.error_message
+        print(f"[PHASE-PREPARE] 3. Parsing output_types...")
         try:
             requested_for_gate = json.loads(run.output_types) if run.output_types else []
-        except json.JSONDecodeError:
+            print(f"[PHASE-PREPARE] 3a. output_types parsed: {requested_for_gate}")
+        except json.JSONDecodeError as e:
+            print(f"[PHASE-PREPARE] 3a. Error parsing output_types: {e}")
             requested_for_gate = []
+        print(f"[PHASE-PREPARE] 4. Evaluating permission pipeline...")
         try:
             plan_payload_obj = json.loads(run.plan_payload) if run.plan_payload else {}
         except Exception:
             plan_payload_obj = {}
         workspace_ready = bool(workspace_path(project_id).exists())
+        print(f"[PHASE-PREPARE] 4a. Workspace ready: {workspace_ready}")
         # Keep human approval sticky across remediation/retry cycles:
         # once a run has approved_by set, permission evaluation should not
         # regress purely because an intermediate attempt marked status=failed.
         effective_run_status = "approved" if run.approved_by else str(run.status or "")
-        gate_decisions = evaluate_permission_pipeline(
-            run_status=effective_run_status,
-            has_approval=bool(run.approved_by),
-            requested_outputs=requested_for_gate if isinstance(requested_for_gate, list) else [],
-            workspace_ready=workspace_ready,
-            classifier_score=1.0,
-            classifier_threshold=float(settings.policy_classifier_threshold),
-            enforce_policy=bool(settings.policy_enforce_enabled),
-            plan_payload=plan_payload_obj if isinstance(plan_payload_obj, dict) else None,
-            agentic_loop_enabled=bool(settings.coordinator_agentic_loop_enabled),
-        )
-        for d in gate_decisions:
+        print(f"[PHASE-PREPARE] 4b. Calling evaluate_permission_pipeline with status={effective_run_status}")
+        try:
+            gate_decisions = evaluate_permission_pipeline(
+                run_status=effective_run_status,
+                has_approval=bool(run.approved_by),
+                requested_outputs=requested_for_gate if isinstance(requested_for_gate, list) else [],
+                workspace_ready=workspace_ready,
+                classifier_score=1.0,
+                classifier_threshold=float(settings.policy_classifier_threshold),
+                enforce_policy=bool(settings.policy_enforce_enabled),
+                plan_payload=plan_payload_obj if isinstance(plan_payload_obj, dict) else None,
+                agentic_loop_enabled=bool(settings.coordinator_agentic_loop_enabled),
+            )
+            print(f"[PHASE-PREPARE] 4c. Permission pipeline returned {len(gate_decisions)} decisions")
+        except Exception as e:
+            print(f"[PHASE-PREPARE] [ERROR] ERROR in evaluate_permission_pipeline: {type(e).__name__}: {e}")
+            import traceback
+            print(traceback.format_exc())
+            raise
+        print(f"[PHASE-PREPARE] 5. Recording gate decisions...")
+        for idx, d in enumerate(gate_decisions):
+            print(f"[PHASE-PREPARE] 5.{idx}. Stage {d.stage}: allowed={d.allowed}")
             append_run_event(
                 session,
                 run_id,
@@ -1232,40 +1279,73 @@ def _phase_prepare(job: RunJob) -> RunOutcome | None:
                 },
             )
         if any(not d.allowed for d in gate_decisions):
+            print(f"[PHASE-PREPARE] 6. Permission denied by gate, failing run")
             run.status = "failed"
             run.error_message = "permission_pipeline_denied"
             session.commit()
             append_run_event(session, run_id, "failed", {"error": run.error_message})
             session.commit()
             return False, run.error_message
+        print(f"[PHASE-PREPARE] 6. All gates passed, setting status to running")
         if run.status == "approved":
+            print(f"[PHASE-PREPARE] 7. Run status is approved, transitioning to running")
             was_resume_requested = bool(run.resume_requested)
             run.status = "running"
             run.pause_requested = False
             run.resume_requested = False
             session.commit()
+            print(f"[PHASE-PREPARE] 7a. Status committed to running")
             if was_resume_requested:
+                print(f"[PHASE-PREPARE] 7b. Loading resume state...")
                 resume_state = _run_event_service.load_resume_state(session, run_id=run_id)
                 append_run_event(session, run_id, "resume_state_loaded", resume_state)
+                print(f"[PHASE-PREPARE] 7b. Resume state loaded")
             append_run_event(session, run_id, "step", {"status": "execution_started"})
             append_run_event(session, run_id, "heartbeat", heartbeat_event(run_id=run_id, phase="execution_started"))
             session.commit()
+            print(f"[PHASE-PREPARE] 7c. Execution started events committed")
         elif run.status in {"done", "failed"}:
+            print(f"[PHASE-PREPARE] 7. Run already in terminal state: {run.status}")
             return True, None
+        print(f"[PHASE-PREPARE] [OK] PHASE COMPLETE - moving to next phase\n")
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PHASE-PREPARE] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
     finally:
         _keep(job, locals())
     return None
 
 
 def _phase_context(job: RunJob) -> RunOutcome | None:
-    """Assemble what the coordinator starts from: run settings, the plan and the conversation digest.
+    """Phase 2: Context + Sheldon Router. Assemble coordinator input and route user intent.
 
-    Returns the job's outcome when this phase ends the attempt, else None to continue with the next phase.
+    Steps 1-7: Current behavior (load config, build digest, create state)
+    Step 8: NEW - Call Sheldon Router Agent for intent-based routing
+    Step 9: NEW - Branch based on routing decision:
+        - Path 1.a: Conversation (direct answer) → END
+        - Path 1.b: RAG search → Answer or continue to Phase 3
+        - Path 1.c: Generation → Continue to Phase 3
+
+    Returns the job's outcome when this phase ends the attempt (Path 1.a/1.b answer),
+    else None to continue with the next phase (Path 1.b generate or 1.c).
     """
+    from src.agents.sheldon_router_agent import route_user_intent
+    from src.agents.conversation.answer_agent import answer_user_question
+    from src.agents.conversation.rag_agent import search_knowledge_base
+
     project_id, run_id = job.project_id, job.run_id
     run = job.vars.get("run")
     session = job.vars.get("session")
+    print(f"\n{'='*80}\n[PHASE-CONTEXT] STARTED for run_id={run_id}\n{'='*80}\n")
     try:
+        print(f"[PHASE-CONTEXT] STEPS 1-7: Loading config, digest, and state...")
+        print(f"[PHASE-CONTEXT] 1. Parsing output_types...")
         try:
             requested = json.loads(run.output_types) if run.output_types else []
         except json.JSONDecodeError:
@@ -1349,17 +1429,280 @@ def _phase_context(job: RunJob) -> RunOutcome | None:
             user_id=run.approved_by if run.approved_by else None,
         )
         init_state = inp.to_initial_state()
+        print(f"[PHASE-CONTEXT] 4. Initial state created")
         if digest:
             init_state["conversation_digest"] = digest
-        session.commit()
+            print(f"[PHASE-CONTEXT] 4a. Conversation digest added to state")
+
+        # STEP 8: NEW - Call Sheldon Router for intent-based routing
+        print(f"[PHASE-CONTEXT] 8. Calling Sheldon Router Agent...")
+        router_input = {
+            "user_instruction": run.instruction or "",
+            "conversation_digest": digest,
+            "plan_payload": plan_payload_obj,
+            "requested_outputs": requested,
+            "init_state": init_state,
+            "project_context": {"project_id": project_id}
+        }
+        routing_decision = route_user_intent(router_input)
+        print(f"[PHASE-CONTEXT] 8a. Router decision: path={routing_decision['path']}, "
+              f"confidence={routing_decision['confidence']:.2f}")
+        append_run_event(session, run_id, "router_decision", routing_decision)
+
+        # STEP 9: NEW - Branch based on routing decision
+        path = routing_decision.get("path", "1.c")
+
+        # PATH 1.a: CONVERSATION (Direct Answer) - END RUN
+        if path == "1.a":
+            print(f"[PHASE-CONTEXT] 9. PATH 1.a: CONVERSATION - Generating direct answer...")
+            answer_result = answer_user_question(router_input)
+            if answer_result.get("success"):
+                print(f"[PHASE-CONTEXT] 9a. Answer generated successfully")
+                append_run_event(session, run_id, "conversation_answer", {
+                    "answer": answer_result.get("answer", ""),
+                    "sources": answer_result.get("sources", []),
+                    "confidence": answer_result.get("confidence", 0.0),
+                    "switch_to_generation": answer_result.get("switch_to_generation", False)
+                })
+                run.status = "completed"
+                session.commit()
+                print(f"[PHASE-CONTEXT] [OK] PATH 1.a COMPLETE - Run ended\n")
+                return (True, None)
+            else:
+                print(f"[PHASE-CONTEXT] 9a. ERROR in answer generation: {answer_result.get('error')}")
+                raise Exception(f"Answer agent failed: {answer_result.get('error')}")
+
+        # PATH 1.b: RAG SEARCH (Knowledge Base) - Conditional
+        elif path == "1.b":
+            print(f"[PHASE-CONTEXT] 9. PATH 1.b: RAG SEARCH - Searching knowledge base...")
+            rag_result = search_knowledge_base(router_input)
+            if rag_result.get("success"):
+                print(f"[PHASE-CONTEXT] 9a. RAG search completed")
+                append_run_event(session, run_id, "rag_search", {
+                    "should_answer": rag_result.get("should_answer", False),
+                    "should_generate": rag_result.get("should_generate", False),
+                    "confidence": rag_result.get("confidence", 0.0),
+                    "documents_found": len(rag_result.get("documents", []))
+                })
+
+                # If RAG answer is sufficient, END RUN
+                if rag_result.get("should_answer"):
+                    print(f"[PHASE-CONTEXT] 9b. RAG answer sufficient - Ending run")
+                    append_run_event(session, run_id, "rag_answer", {
+                        "answer": rag_result.get("answer_preview", ""),
+                        "sources": [doc.get("title") for doc in rag_result.get("documents", [])]
+                    })
+                    run.status = "completed"
+                    session.commit()
+                    print(f"[PHASE-CONTEXT] [OK] PATH 1.b (ANSWER) COMPLETE - Run ended\n")
+                    return (True, None)
+
+                # If generation needed, continue with RAG context
+                else:
+                    print(f"[PHASE-CONTEXT] 9b. RAG insufficient - Continue to Phase 3 with RAG context")
+                    accumulated = rag_result.get("accumulated_context", {})
+                    init_state["rag_context"] = accumulated.get("rag_context", "")
+                    init_state["rag_documents"] = accumulated.get("rag_documents", [])
+                    # Fall through to Phase 3
+            else:
+                print(f"[PHASE-CONTEXT] 9a. RAG search failed: {rag_result.get('error')}, defaulting to Phase 3")
+                # Fall through to Phase 3 on error
+
+        # PATH 1.c: GENERATION (Default) - Continue to Phase 3
+        # (This is the current behavior - no special handling needed)
+
+        # Final: Store routing decision and continue to path router
+        print(f"[PHASE-CONTEXT] [OK] STEPS 1-7 COMPLETE - Routing decision stored\n")
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PHASE-CONTEXT] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
     finally:
         _keep(job, locals())
     return None
 
 
+def _path_router(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Router Node: Sheldon Router Agent - Analyze intent and route to path.
+
+    This is Step 8 of Phase 2: Call Sheldon Router Agent for intelligent routing.
+    Returns None to continue to conditional edges (path_conversation, path_rag_search, or generate).
+    """
+    from src.agents.sheldon_router_agent import route_user_intent
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    digest = job.vars.get("conversation_digest", "")
+    plan_payload_obj = job.vars.get("plan_payload_obj", {})
+    requested = job.vars.get("requested", [])
+    init_state = job.vars.get("init_state", {})
+
+    print(f"\n{'='*80}\n[PATH-ROUTER] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-ROUTER] Calling Sheldon Router Agent...")
+        router_input = {
+            "user_instruction": run.instruction or "",
+            "conversation_digest": digest,
+            "plan_payload": plan_payload_obj,
+            "requested_outputs": requested,
+            "init_state": init_state,
+            "project_context": {"project_id": project_id}
+        }
+        routing_decision = route_user_intent(router_input)
+        print(f"[PATH-ROUTER] Router decision: path={routing_decision['path']}, confidence={routing_decision['confidence']:.2f}")
+        append_run_event(session, run_id, "router_decision", routing_decision)
+
+        # Store for use by conditional edges
+        job.vars["routing_decision"] = routing_decision
+        job.vars["router_input"] = router_input
+
+        session.commit()
+        print(f"[PATH-ROUTER] [OK] COMPLETE - Routing decision made\n")
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-ROUTER] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+    return None
+
+
+def _path_conversation(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Path 1.a Node: Conversation Agent - Direct answer to user question.
+
+    Handles conversational Q&A without file generation.
+    Returns outcome (True, None) to end run on success.
+    """
+    from src.agents.conversation.answer_agent import answer_user_question
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    router_input = job.vars.get("router_input", {})
+
+    print(f"\n{'='*80}\n[PATH-CONVERSATION] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-CONVERSATION] Generating conversational answer...")
+        answer_result = answer_user_question(router_input)
+
+        if answer_result.get("success"):
+            print(f"[PATH-CONVERSATION] Answer generated successfully")
+            append_run_event(session, run_id, "conversation_answer", {
+                "answer": answer_result.get("answer", ""),
+                "sources": answer_result.get("sources", []),
+                "confidence": answer_result.get("confidence", 0.0),
+                "switch_to_generation": answer_result.get("switch_to_generation", False)
+            })
+            run.status = "completed"
+            session.commit()
+            print(f"[PATH-CONVERSATION] [OK] COMPLETE - Run ended with answer\n")
+            increment("path_conversation_success_total")
+            return (True, None)  # END RUN
+        else:
+            print(f"[PATH-CONVERSATION] ERROR in answer generation: {answer_result.get('error')}")
+            raise Exception(f"Answer agent failed: {answer_result.get('error')}")
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-CONVERSATION] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+
+
+def _path_rag_search(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Path 1.b Node: RAG Search Agent - Knowledge base search + decision.
+
+    Searches knowledge base and decides if answer is sufficient or generation needed.
+    Returns outcome (True, None) to end run if answer sufficient.
+    Returns None to continue to Phase 3 if generation needed.
+    """
+    from src.agents.conversation.rag_agent import search_knowledge_base
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    router_input = job.vars.get("router_input", {})
+    init_state = job.vars.get("init_state", {})
+
+    print(f"\n{'='*80}\n[PATH-RAG-SEARCH] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-RAG-SEARCH] Searching knowledge base...")
+        rag_result = search_knowledge_base(router_input)
+
+        if rag_result.get("success"):
+            print(f"[PATH-RAG-SEARCH] RAG search completed")
+            append_run_event(session, run_id, "rag_search", {
+                "should_answer": rag_result.get("should_answer", False),
+                "should_generate": rag_result.get("should_generate", False),
+                "confidence": rag_result.get("confidence", 0.0),
+                "documents_found": len(rag_result.get("documents", []))
+            })
+
+            # If RAG answer is sufficient, END RUN
+            if rag_result.get("should_answer"):
+                print(f"[PATH-RAG-SEARCH] RAG answer sufficient - Ending run")
+                append_run_event(session, run_id, "rag_answer", {
+                    "answer": rag_result.get("answer_preview", ""),
+                    "sources": [doc.get("title") for doc in rag_result.get("documents", [])]
+                })
+                run.status = "completed"
+                session.commit()
+                print(f"[PATH-RAG-SEARCH] [OK] COMPLETE - Run ended with RAG answer\n")
+                increment("path_rag_answer_total")
+                return (True, None)  # END RUN
+
+            # If generation needed, continue with RAG context
+            else:
+                print(f"[PATH-RAG-SEARCH] RAG insufficient - Continue to Phase 3 with RAG context")
+                accumulated = rag_result.get("accumulated_context", {})
+                init_state["rag_context"] = accumulated.get("rag_context", "")
+                init_state["rag_documents"] = accumulated.get("rag_documents", [])
+                job.vars["init_state"] = init_state
+                session.commit()
+                print(f"[PATH-RAG-SEARCH] [OK] COMPLETE - Continuing to generation with RAG context\n")
+                increment("path_rag_generate_total")
+                return None  # Continue to Phase 3
+        else:
+            print(f"[PATH-RAG-SEARCH] RAG search failed: {rag_result.get('error')}, defaulting to Phase 3")
+            session.commit()
+            return None  # Fall through to Phase 3 on error
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-RAG-SEARCH] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+
+
 def _phase_generate(job: RunJob) -> RunOutcome | None:
     """Run pre-execution hooks and the coordinator, then save the generated artifacts and stream the outputs.
 
+    Receives context_validation from Phase 2 (if available) and passes to supervisor/agents.
     Returns the job's outcome when this phase ends the attempt, else None to continue with the next phase.
     """
     project_id, run_id, queue_payload = job.project_id, job.run_id, job.queue_payload  # noqa: F841
@@ -1372,8 +1715,17 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
     init_state = job.vars.get("init_state")
     requested = job.vars.get("requested")
     output_type_representations = job.vars.get("output_type_representations")
+    print(f"\n{'='*80}\n[PHASE-GENERATE] STARTED for run_id={run_id}\n{'='*80}\n")
+
+    # Retrieve context_validation from Phase 2 (if available)
+    context_validation = job.vars.get("context_validation", {})
+    if context_validation:
+        print(f"[PHASE-GENERATE] Context validation received: confidence={context_validation.get('overall_confidence', 1.0):.2f}")
+        print(f"[PHASE-GENERATE] User decision: {context_validation.get('user_decision', 'auto')}")
     try:
+        print(f"[PHASE-GENERATE] 1. Syncing hooks from db...")
         sync_disabled_hooks_from_db(session, project_id=project_id)
+        print(f"[PHASE-GENERATE] 1a. Running pre_run_execution hooks...")
         pre_hooks = run_hooks_sync(
             "pre_run_execution",
             {"project_id": project_id, "run_id": run_id, "instruction": run.instruction},
@@ -1439,6 +1791,12 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             session.refresh(run)
             return bool(run.abort_requested)
 
+        # Add context_validation to init_state for supervisor/agents
+        if context_validation:
+            init_state["context_validation"] = context_validation
+            init_state["context_confidence"] = context_validation.get("overall_confidence", 1.0)
+            print(f"[PHASE-GENERATE] Passing context_validation to supervisor/agents")
+
         async def _consume_coordinator() -> dict[str, Any]:
             final_state: dict[str, Any] = {}
             async for ev in coord.coordinate(init_state, abort_check=_abort_check):
@@ -1483,6 +1841,10 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 raise err_holder["error"]
             return result_holder.get("value", {})
 
+        # Initialize trackers for agent and tool metrics
+        agent_tracker = AgentMetricsTracker(agent_name="coordinator")
+        tool_tracker = ToolMetricsTracker(tool_name="run_coordinator")
+
         try:
             with project_token_context(project_id), run_llm_budget(int(settings.anthropic_max_tokens_per_run or 0), run_id=run_id):
                 try:
@@ -1491,11 +1853,18 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                         "run.coordinator",
                         attributes={"project_id": project_id, "run_id": run_id},
                     ):
-                        state = _run_coordinator_async()
+                        with agent_tracker.track_call():
+                            with tool_tracker.track_tool_call():
+                                state = _run_coordinator_async()
+                    agent_tracker.track_task_completion(success=True)
+                    tool_tracker.track_success(success=True, necessary=True)
+                    print(f"[AGENT_METRICS] Coordinator completed successfully")
                 finally:
                     _run_usage = get_run_usage()
                     _run_cost = calculate_run_cost_usd(**_run_usage)
         except RunAborted:
+            agent_tracker.track_task_completion(success=False)
+            tool_tracker.track_success(success=False, necessary=True)
             session.refresh(run)
             if _timeout_tripped["v"]:
                 append_run_event(
@@ -1516,8 +1885,25 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             _write_token_usage(run, _run_usage, _run_cost)
             run.status = "failed"
             session.commit()
+
+            # Record application metrics even on abort
+            try:
+                print(f"\n[METRICS_RECORD_ABORT] Recording metrics before abort...")
+                abort_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                abort_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=abort_elapsed_ms,
+                    success=False,
+                    cost=abort_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_ABORT] ✅ Metrics recorded on abort - Duration: {abort_elapsed_ms:.0f}ms, Cost: ${abort_cost:.4f}\n")
+            except Exception as metric_err:
+                print(f"[METRICS_RECORD_ABORT] ⚠️ Failed to record metrics: {metric_err}\n")
             return False, run.error_message
         except RunBudgetExceeded as budget_exc:
+            agent_tracker.track_task_completion(success=False)
+            tool_tracker.track_success(success=False, necessary=True)
             session.refresh(run)
             append_run_event(
                 session,
@@ -1529,6 +1915,21 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             run.status = "failed"
             run.error_message = str(budget_exc)[:2000]
             session.commit()
+
+            # Record application metrics even on budget exceeded
+            try:
+                print(f"\n[METRICS_RECORD_BUDGET] Recording metrics before budget exceeded...")
+                budget_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                budget_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=budget_elapsed_ms,
+                    success=False,
+                    cost=budget_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_BUDGET] ✅ Metrics recorded on budget exceeded - Duration: {budget_elapsed_ms:.0f}ms, Cost: ${budget_cost:.4f}\n")
+            except Exception as metric_err:
+                print(f"[METRICS_RECORD_BUDGET] ⚠️ Failed to record metrics: {metric_err}\n")
             return False, str(budget_exc)
         for _rep_key, _rep_model in (("qa_report", QaReportDoc), ("guardrail_report", GuardrailReportDoc)):
             _raw_rep = state.get(_rep_key)
@@ -1605,6 +2006,8 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
             session.commit()
             append_run_event(session, run_id, "failed", {"error": run.error_message})
             session.commit()
+            agent_tracker.track_task_completion(success=False)
+            tool_tracker.track_success(success=False, necessary=True)
             increment("run_failed_total")
             observe_latency("run_execution", (perf_counter() - started_at) * 1000.0)
             record_run_trace(
@@ -1613,6 +2016,21 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 run_id=run_id,
                 extra={"error": run.error_message[:200]},
             )
+
+            # Record application metrics even on missing outputs
+            try:
+                print(f"\n[METRICS_RECORD_MISSING_OUTPUTS] Recording metrics for missing outputs...")
+                missing_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                missing_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=missing_elapsed_ms,
+                    success=False,
+                    cost=missing_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_MISSING_OUTPUTS] ✅ Metrics recorded - Duration: {missing_elapsed_ms:.0f}ms, Cost: ${missing_cost:.4f}\n")
+            except Exception as metric_err:
+                print(f"[METRICS_RECORD_MISSING_OUTPUTS] ⚠️ Failed to record metrics: {metric_err}\n")
             return False, run.error_message
         append_run_event(
             session,
@@ -1688,6 +2106,142 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                         "chunk": chunk,
                     },
                 )
+        print(f"[PHASE-GENERATE] [OK] PHASE COMPLETE - all outputs streamed")
+        print(f"[PHASE-GENERATE] All artifacts generated and persisted to disk")
+
+        # ==================== TRIGGER QUALITY EVALUATION (after artifacts are generated) ====================
+        import sys
+        try:
+            print(f"\n{'='*80}")
+            print(f"[QUALITY_EVAL_TRIGGER] Starting quality evaluation pipeline")
+            print(f"[QUALITY_EVAL_TRIGGER] Status: Quality evaluation enabled={settings.quality_evaluation_enabled}")
+            print(f"{'='*80}\n")
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write(b"[QUALITY_EVAL_TRIGGER] Starting quality evaluation\n")
+        sys.stdout.flush()
+
+        if settings.quality_evaluation_enabled:
+            print(f"[QUALITY_EVAL_TRIGGER] Spawning background thread for quality evaluation...")
+            try:
+                from src.evaluation.quality_evaluation_hook import trigger_quality_evaluation
+                import threading
+
+                def _quality_evaluation_worker():
+                    """Background worker: evaluates artifact quality using Sheldon's LLM."""
+                    try:
+                        print(f"\n{'='*80}")
+                        print(f"[QUALITY_EVAL_WORKER] THREAD STARTED")
+                        print(f"[QUALITY_EVAL_WORKER] Project: {project_id}, Run: {run_id}")
+                        print(f"[QUALITY_EVAL_WORKER] Task: Evaluate generated artifacts")
+                        print(f"{'='*80}\n")
+                        sys.stdout.flush()
+
+                        # Call quality evaluation (non-blocking)
+                        print(f"[QUALITY_EVAL_WORKER] Calling trigger_quality_evaluation()...")
+                        sys.stdout.flush()
+                        result = trigger_quality_evaluation(project_id=project_id, run_id=run_id)
+
+                        # Log results
+                        if result and result.get("success"):
+                            grade = result.get("quality_grade", "UNKNOWN")
+                            score = result.get("overall_score", 0)
+                            print(f"\n{'='*80}")
+                            print(f"[QUALITY_EVAL_WORKER] SUCCESS")
+                            print(f"[QUALITY_EVAL_WORKER] Quality Grade: {grade}")
+                            print(f"[QUALITY_EVAL_WORKER] Overall Score: {score:.2f}%")
+                            print(f"[QUALITY_EVAL_WORKER] Results saved: {run_id}_quality_metrics.json")
+                            print(f"{'='*80}\n")
+                        else:
+                            error_msg = result.get("error", "Unknown error") if result else "No result returned"
+                            print(f"\n{'='*80}")
+                            print(f"[QUALITY_EVAL_WORKER] FAILED")
+                            print(f"[QUALITY_EVAL_WORKER] Error: {error_msg}")
+                            print(f"{'='*80}\n")
+
+                        sys.stdout.flush()
+                    except Exception as worker_error:
+                        print(f"\n{'='*80}")
+                        print(f"[QUALITY_EVAL_WORKER] EXCEPTION CAUGHT")
+                        print(f"[QUALITY_EVAL_WORKER] Type: {type(worker_error).__name__}")
+                        print(f"[QUALITY_EVAL_WORKER] Message: {worker_error}")
+                        import traceback
+                        print(f"[QUALITY_EVAL_WORKER] Traceback:\n{traceback.format_exc()}")
+                        print(f"{'='*80}\n")
+                        sys.stdout.flush()
+
+                # Spawn daemon thread (won't block run completion)
+                quality_eval_thread = threading.Thread(target=_quality_evaluation_worker, daemon=True, name=f"QualityEval-{run_id}")
+                quality_eval_thread.start()
+                print(f"[QUALITY_EVAL_TRIGGER] Background thread started successfully")
+                print(f"[QUALITY_EVAL_TRIGGER] Thread name: {quality_eval_thread.name}")
+                print(f"[QUALITY_EVAL_TRIGGER] Daemon: {quality_eval_thread.daemon}\n")
+                sys.stdout.flush()
+            except Exception as spawn_error:
+                print(f"\n{'='*80}")
+                print(f"[QUALITY_EVAL_TRIGGER] FAILED TO SPAWN THREAD")
+                print(f"[QUALITY_EVAL_TRIGGER] Type: {type(spawn_error).__name__}")
+                print(f"[QUALITY_EVAL_TRIGGER] Message: {spawn_error}")
+                import traceback
+                print(f"[QUALITY_EVAL_TRIGGER] Traceback:\n{traceback.format_exc()}")
+                print(f"{'='*80}\n")
+                sys.stdout.flush()
+        else:
+            print(f"[QUALITY_EVAL_TRIGGER] Quality evaluation DISABLED (settings.quality_evaluation_enabled=False)")
+            print(f"[QUALITY_EVAL_TRIGGER] To enable, set QUALITY_EVALUATION_ENABLED=true in .env\n")
+            sys.stdout.flush()
+
+        # ==================== RECORD APPLICATION METRICS AT END OF GENERATE ====================
+        # Recording metrics HERE ensures they're captured even if later phases fail
+        try:
+            try:
+                print(f"\n{'='*80}")
+                print(f"[METRICS_RECORD_GENERATE] Recording application metrics at end of GENERATE phase")
+            except UnicodeEncodeError:
+                sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Recording metrics\n")
+
+            try:
+                generate_elapsed_ms = (perf_counter() - started_at) * 1000.0
+                generate_cost = calculate_run_cost_usd(**get_run_usage())
+                record_application_request(
+                    duration_ms=generate_elapsed_ms,
+                    success=True,
+                    cost=generate_cost,
+                    project_id=project_id
+                )
+                print(f"[METRICS_RECORD_GENERATE] ✅ Application metrics recorded")
+                print(f"[METRICS_RECORD_GENERATE] - Duration: {generate_elapsed_ms:.0f}ms")
+                print(f"[METRICS_RECORD_GENERATE] - Cost: ${generate_cost:.4f}")
+            except UnicodeEncodeError:
+                sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Metrics recorded successfully\n")
+            except Exception as calc_err:
+                print(f"[METRICS_RECORD_GENERATE] ⚠️ Metric calculation error: {calc_err}")
+            finally:
+                try:
+                    print(f"{'='*80}\n")
+                except UnicodeEncodeError:
+                    pass
+        except Exception as metric_err:
+            try:
+                print(f"[METRICS_RECORD_GENERATE] ⚠️ Failed to record metrics: {metric_err}")
+            except Exception:
+                sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Metrics recording complete\n")
+        finally:
+            sys.stdout.flush()
+
+        print(f"[PHASE-GENERATE] Continuing to next phase...\n")
+    except Exception as phase_exception:
+        try:
+            print(f"\n{'='*80}")
+            print(f"[PHASE-GENERATE] [ERROR] EXCEPTION CAUGHT:")
+            print(f"   Type: {type(phase_exception).__name__}")
+            print(f"   Message: {str(phase_exception).encode('utf-8', errors='replace').decode('utf-8', errors='replace')}")
+            import traceback
+            tb_str = traceback.format_exc().encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+            print(f"   Traceback:\n{tb_str}")
+            print(f"{'='*80}\n")
+        except Exception as log_err:
+            print(f"[PHASE-GENERATE] [ERROR] Failed to log exception: {log_err}")
+        raise
     finally:
         _keep(job, locals())
     return None
@@ -1711,7 +2265,40 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
     session = job.vars.get("session")
     started_at = job.vars.get("started_at")
     state = job.vars.get("state")
+    print(f"\n{'='*80}\n[PHASE-EVALUATE] STARTED for run_id={run_id}\n{'='*80}\n")
     try:
+        print(f"[PHASE-EVALUATE] 1. Running visual QA checks (with timeout protection)...")
+        import sys
+        import threading
+        sys.stdout.flush()
+
+        # Run run_visual_quality_check in background thread with timeout
+        # Prevents hanging while preserving all original EVALUATE functionality
+        visual_qa_result = {"report": None, "completed": False}
+
+        def _run_visual_qa_thread():
+            try:
+                visual_qa_result["report"] = run_visual_quality_check(project_id, run_id, run_dir)
+                visual_qa_result["completed"] = True
+                print(f"[PHASE-EVALUATE] 1a. Visual QA completed successfully")
+                sys.stdout.flush()
+            except Exception as qa_error:
+                print(f"[PHASE-EVALUATE] 1a. Visual QA error: {qa_error}")
+                visual_qa_result["report"] = {"status": "error", "summary": f"Visual QA error: {qa_error}"}
+                sys.stdout.flush()
+
+        qa_thread = threading.Thread(target=_run_visual_qa_thread, daemon=False)
+        qa_thread.start()
+        qa_thread.join(timeout=600)  # 10 minute timeout
+
+        # If thread is still alive, it timed out
+        if qa_thread.is_alive():
+            print(f"[PHASE-EVALUATE] 1b. Visual QA TIMEOUT (>10min) - continuing with fallback")
+            visual_qa_report = {"status": "timeout", "summary": "Visual QA check exceeded 10 minute timeout"}
+            sys.stdout.flush()
+        else:
+            visual_qa_report = visual_qa_result["report"] or {"status": "error", "summary": "Visual QA check failed"}
+
         if run_todos:
             todo_set_status(run_todos, "visual_qa", "running")
             _emit_and_sync_todo_snapshot(
@@ -1721,7 +2308,10 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 run_todos=run_todos,
             )
         session.commit()  # visual QA makes long model calls; do not hold the database write lock meanwhile
-        visual_qa_report = run_visual_quality_check(project_id, run_id, run_dir)
+
+        print(f"[PHASE-EVALUATE] 2. Continuing with rest of evaluate phase...")
+        sys.stdout.flush()
+
         if isinstance(visual_qa_report, dict):
             visual_qa_report = _augment_visual_qa_with_render_hints(visual_qa_report, run_dir)
             visual_qa_report = _augment_visual_qa_with_design_review(visual_qa_report, run_dir)
@@ -1831,8 +2421,26 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 final_artifact_report=final_artifact_report if isinstance(final_artifact_report, dict) else {},
                 evidence_gate=evidence_gate,
             )
+
+        # ✅ DETAILED EVALUATION RESULT LOGGING
+        print(f"\n{'─'*80}")
+        print(f"[PHASE-EVALUATE] 📊 EVALUATION RESULTS:")
+        print(f"[PHASE-EVALUATE]   Status: {evaluator_pipeline.get('status', 'unknown')}")
+        print(f"[PHASE-EVALUATE]   Visual QA Passed: {evaluator_pipeline.get('visual_qa_passed')}")
+        print(f"[PHASE-EVALUATE]   QA Passed: {evaluator_pipeline.get('qa_passed')}")
+        print(f"[PHASE-EVALUATE]   Guardrails Passed: {evaluator_pipeline.get('guardrails_passed')}")
+        print(f"[PHASE-EVALUATE]   Evidence Passed: {evaluator_pipeline.get('evidence_passed')}")
+        print(f"{'─'*80}\n")
+
         append_run_event(session, run_id, "evaluator_pipeline", evaluator_pipeline)
-        if hard_gate_enabled and evaluator_pipeline["status"] != "pass":
+
+        # Check if evaluation passed
+        if evaluator_pipeline["status"] == "pass":
+            print(f"\n[PHASE-EVALUATE] ✅ EVALUATION PASSED!")
+            print(f"[PHASE-EVALUATE]   All quality checks passed")
+            print(f"[PHASE-EVALUATE]   Moving to next phase (REMEMBER/REVIEW)...\n")
+            # Continue to next phase (don't return, fall through)
+        elif hard_gate_enabled and evaluator_pipeline["status"] != "pass":
             prior_retry_count = int(
                 session.scalar(
                     select(func.count()).select_from(RunEvent).where(
@@ -1841,6 +2449,7 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 )
                 or 0
             )
+            print(f"[PHASE-EVALUATE] ⚠️ EVALUATION FAILED - Current retry count: {prior_retry_count}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}")
             if prior_retry_count < MAX_EVALUATOR_REMEDIATION_ROUNDS:
                 run.status = "approved"
                 nxt = prior_retry_count + 1
@@ -1849,6 +2458,11 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 run.error_message = (
                     f"Evaluator checks failed; auto-remediation {nxt}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}."
                 )
+                print(f"[PHASE-EVALUATE] 🔄 RETRY PATH: Attempt {nxt}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+                print(f"[PHASE-EVALUATE]   Re-queueing run for Phase 3 generation with feedback...")
+                print(f"[PHASE-EVALUATE]   Failed checks: visual_qa={not evaluator_pipeline.get('visual_qa_passed')}, "
+                      f"qa={not evaluator_pipeline.get('qa_passed')}, "
+                      f"guardrails={not evaluator_pipeline.get('guardrails_passed')}")
                 # ── Inject per-artifact visual feedback into plan_payload so each
                 # agent receives targeted remediation hints on the retry pass.
                 # Mapping: per_artifact key → plan_payload key that agent reads.
@@ -2005,6 +2619,187 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 session.commit()
                 enqueue_run_execution(project_id, run_id)
                 return True, None
+
+            # ── INVESTIGATOR AGENT: Retries exhausted → analyze failures & route
+            print(f"\n{'='*80}")
+            print(f"[PHASE-EVALUATE] 🔴 RETRIES EXHAUSTED ({prior_retry_count}/{MAX_EVALUATOR_REMEDIATION_ROUNDS})")
+            print(f"[PHASE-EVALUATE] ⏳ Initiating Investigator Agent Analysis...")
+            print(f"{'='*80}\n")
+            try:
+                investigator = InvestigatorAgent()
+                print(f"[INVESTIGATOR] ✅ Investigator instance created")
+
+                # Get all failed attempts data from run_events
+                retry_events = session.query(RunEvent).filter(
+                    RunEvent.run_id == run_id,
+                    RunEvent.event_type == "evaluator_retry_requested"
+                ).order_by(RunEvent.created_at.asc()).all()
+
+                print(f"[INVESTIGATOR] 📋 Found {len(retry_events)} retry events")
+
+                attempts_data = []
+                for i, event in enumerate(reversed(retry_events)):
+                    payload = event.payload or {}
+                    error_summary = payload.get("evaluator_pipeline", {}).get("summary", "Unknown error")
+                    attempts_data.append({
+                        "attempt": i + 1,
+                        "error": error_summary,
+                        "stage": "evaluation",
+                        "artifact": "multiple",
+                        "event_data": payload
+                    })
+                    print(f"[INVESTIGATOR]   Attempt {i+1}: {error_summary[:100]}...")
+
+                if not attempts_data:
+                    # Fallback if no retry events
+                    print(f"[INVESTIGATOR] ⚠️ No retry events found, using fallback attempt data")
+                    attempts_data = [{
+                        "attempt": 1,
+                        "error": "Evaluator checks failed",
+                        "stage": "evaluation",
+                        "artifact": "multiple"
+                    }]
+
+                # Get context_validation from state
+                context_validation = state.get("context_validation", {})
+                context_info = {
+                    "context_validation": context_validation,
+                    "run_instruction": run.instruction or "",
+                    "project_context": run.short_name or ""
+                }
+
+                print(f"[INVESTIGATOR] 🔍 Starting analysis pipeline...")
+                # Run full investigation pipeline
+                investigation_result = investigator.investigate_and_decide(
+                    attempts_data,
+                    context_info
+                )
+
+                root_cause = investigation_result['classification'].get('root_cause', 'unknown')
+                confidence = investigation_result.get('investigator_confidence', 0)
+                route_to = investigation_result['routing_decision'].get('route_to', 'unknown')
+
+                print(f"\n{'─'*80}")
+                print(f"[INVESTIGATOR] 📊 ANALYSIS COMPLETE:")
+                print(f"[INVESTIGATOR]   Root Cause: {root_cause}")
+                print(f"[INVESTIGATOR]   Confidence: {confidence:.1%}")
+                print(f"[INVESTIGATOR]   Routing to: {route_to}")
+                print(f"[INVESTIGATOR]   Chat message length: {len(investigation_result.get('chat_message', ''))}")
+                print(f"{'─'*80}\n")
+
+                # Persist investigator's chat message
+                from src.core.db.models import ConversationMessage
+                conv = session.query(ConversationMessage).filter_by(run_id=run_id).first()
+                if conv:
+                    conv_id = conv.conversation_id
+                    msg = ConversationMessage(
+                        conversation_id=conv_id,
+                        role="assistant",
+                        content=investigation_result["chat_message"],
+                        metadata_json=json.dumps({
+                            "kind": "investigator_analysis",
+                            "root_cause": investigation_result["classification"].get("root_cause"),
+                            "confidence": investigation_result["investigator_confidence"],
+                            "source": "phase4_evaluator"
+                        })
+                    )
+                    session.add(msg)
+                    session.commit()
+                    print(f"[INVESTIGATOR] Chat message persisted to conversation")
+
+                # Handle routing decision
+                route_to = investigation_result["routing_decision"].get("route_to", "escalate")
+
+                if route_to == "phase_2":
+                    print(f"\n[INVESTIGATOR] ↩️ ROUTING DECISION: PHASE 2 (Clarification Needed)")
+                    message = investigation_result["routing_decision"].get(
+                        "message",
+                        "Investigator analysis suggests clarification needed"
+                    )
+                    print(f"[INVESTIGATOR]   Message: {message[:150]}...")
+                    run.status = "awaiting_clarification"
+                    run.error_message = message
+                    session.commit()
+                    append_run_event(
+                        session,
+                        run_id,
+                        "investigator_routed_to_phase2",
+                        investigation_result
+                    )
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Run status set to 'awaiting_clarification'")
+                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_routed_to_phase2")
+
+                elif route_to == "phase_3":
+                    print(f"\n[INVESTIGATOR] ♻️ ROUTING DECISION: PHASE 3 (LLM Problem with Guidance)")
+                    guidance = investigation_result["routing_decision"].get("guidance", [])
+                    print(f"[INVESTIGATOR]   Guidance items: {len(guidance)}")
+                    for i, g in enumerate(guidance[:3], 1):
+                        print(f"[INVESTIGATOR]     {i}. {str(g)[:100]}...")
+                    run.status = "approved"
+                    run.plan_payload = json.dumps({
+                        **json.loads(run.plan_payload or "{}"),
+                        "investigator_guidance": guidance,
+                        "investigator_root_cause": investigation_result["classification"].get("root_cause")
+                    })
+                    run.error_message = "Investigator recommended Phase 3 retry with guidance"
+                    session.commit()
+                    append_run_event(
+                        session,
+                        run_id,
+                        "investigator_routed_to_phase3",
+                        investigation_result
+                    )
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Run status set to 'approved'")
+                    print(f"[INVESTIGATOR] ✅ Guidance injected into plan_payload")
+                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_routed_to_phase3")
+                    print(f"[INVESTIGATOR] ✅ Re-queuing run for Phase 3 generation...")
+                    enqueue_run_execution(project_id, run_id)
+                    return True, None
+
+                else:  # escalate
+                    print(f"\n[INVESTIGATOR] 🚨 ROUTING DECISION: ESCALATE (Technical Issue)")
+                    message = investigation_result["routing_decision"].get(
+                        "message",
+                        "Technical issue detected - escalated for review"
+                    )
+                    print(f"[INVESTIGATOR]   Message: {message[:150]}...")
+                    print(f"[INVESTIGATOR]   Alternatives: {investigation_result['routing_decision'].get('alternatives', [])}")
+                    run.status = "escalated_for_review"
+                    run.error_message = message
+                    session.commit()
+                    append_run_event(
+                        session,
+                        run_id,
+                        "investigator_escalated",
+                        investigation_result
+                    )
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Run status set to 'escalated_for_review'")
+                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_escalated")
+
+                print(f"\n{'='*80}")
+                print(f"[INVESTIGATOR] ✅ INVESTIGATION PIPELINE COMPLETE")
+                print(f"[INVESTIGATOR]   Status: {run.status}")
+                print(f"[INVESTIGATOR]   Chat message persisted: YES")
+                print(f"{'='*80}\n")
+
+            except Exception as investigator_error:
+                print(f"\n{'='*80}")
+                print(f"[INVESTIGATOR] ❌ ERROR DURING INVESTIGATION")
+                print(f"[INVESTIGATOR]   Error Type: {type(investigator_error).__name__}")
+                print(f"[INVESTIGATOR]   Error Message: {str(investigator_error)[:200]}")
+                print(f"[INVESTIGATOR]   Traceback:")
+                import traceback
+                for line in traceback.format_exc().split('\n'):
+                    if line.strip():
+                        print(f"[INVESTIGATOR]     {line}")
+                print(f"[INVESTIGATOR] ⚠️ Falling back to standard hard-fail logic")
+                print(f"{'='*80}\n")
+                _log.error(f"[INVESTIGATOR] Error during investigation: {investigator_error}", exc_info=True)
+                # Fall through to standard hard-fail logic below
+
             guardrails_only_failure = (
                 not evaluator_pipeline.get("guardrails_passed")
                 and evaluator_pipeline.get("qa_passed", True)
@@ -2073,6 +2868,16 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 extra={"error": run.error_message[:200]},
             )
             return False, run.error_message
+        print(f"[PHASE-EVALUATE] [OK] PHASE COMPLETE - all evaluations done\n")
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PHASE-EVALUATE] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
     finally:
         _keep(job, locals())
     return None
@@ -2087,7 +2892,9 @@ def _phase_remember(job: RunJob) -> RunOutcome | None:
     run = job.vars.get("run")
     session = job.vars.get("session")
     state = job.vars.get("state")
+    print(f"\n{'='*80}\n[PHASE-REMEMBER] STARTED for run_id={run_id}\n{'='*80}\n")
     try:
+        print(f"[PHASE-REMEMBER] 1. Building artifact summary...")
         artifact_summary = {
             "summary": (
                 f"Generated outputs: {', '.join([k for k in ['narrative_md', 'raci_html', 'raci_markdown', 'sop_markdown', 'drawio_xml', 'process_map_mermaid'] if state.get(k)])}"
@@ -2118,6 +2925,16 @@ def _phase_remember(job: RunJob) -> RunOutcome | None:
         if run.approved_by:
             _bump_learning_runs_completed(session, run.approved_by, project_id)
         session.commit()
+        print(f"[PHASE-REMEMBER] [OK] PHASE COMPLETE - memory and learning saved\n")
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PHASE-REMEMBER] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
     finally:
         _keep(job, locals())
     return None
@@ -2136,13 +2953,24 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
     session = job.vars.get("session")
     started_at = job.vars.get("started_at")
     state = job.vars.get("state")
+
+    print(f"\n{'='*80}")
+    print(f"[CRITICAL] _phase_finalize CALLED for run_id={run_id}, project_id={project_id}")
+    print(f"[CRITICAL] Will attempt to trigger quality evaluation at end of this phase")
+    print(f"{'='*80}\n")
+    import sys
+    sys.stdout.flush()
     try:
+        print(f"[DEBUG-FINALIZE] 1. Starting _phase_finalize for {run_id}")
         _write_token_usage(run, _run_usage, _run_cost)
+        print(f"[DEBUG-FINALIZE] 2. Token usage written")
         run.status = "review_ready"
         run.error_message = None
         run.plan_payload = _strip_visual_remediation_from_plan(run.plan_payload)
         session.commit()
+        print(f"[DEBUG-FINALIZE] 3. Status set to review_ready, committed")
         if run_todos:
+            print(f"[DEBUG-FINALIZE] 4a. run_todos exists, setting status to running")
             todo_set_status(run_todos, "finalize", "running")
             _emit_and_sync_todo_snapshot(
                 session,
@@ -2150,10 +2978,17 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
                 run_id=run_id,
                 run_todos=run_todos,
             )
+            print(f"[DEBUG-FINALIZE] 4b. todo snapshot emitted")
+        else:
+            print(f"[DEBUG-FINALIZE] 4. No run_todos, skipping")
         append_run_event(session, run_id, "step", {"status": "review_ready"})
+        print(f"[DEBUG-FINALIZE] 5. Run event appended")
         append_run_event(session, run_id, "heartbeat", heartbeat_event(run_id=run_id, phase="review_ready"))
+        print(f"[DEBUG-FINALIZE] 6. Before _notify_drafts_ready")
         _notify_drafts_ready(session, project_id=project_id, run_id=run_id)
+        print(f"[DEBUG-FINALIZE] 7. After _notify_drafts_ready")
         if run_todos:
+            print(f"[DEBUG-FINALIZE] 8a. Setting todos to done")
             todo_set_status(run_todos, "finalize", "done")
             _emit_and_sync_todo_snapshot(
                 session,
@@ -2161,15 +2996,23 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
                 run_id=run_id,
                 run_todos=run_todos,
             )
+            print(f"[DEBUG-FINALIZE] 8b. Todos snapshot emitted")
+        else:
+            print(f"[DEBUG-FINALIZE] 8. No run_todos to finalize")
+        print(f"[DEBUG-FINALIZE] 9. Before run_hooks_sync")
         post_hooks = run_hooks_sync(
             "post_finalization",
             {"project_id": project_id, "run_id": run_id, "status": "review_ready"},
             project_id=project_id,
         )
-        for h in post_hooks:
+        print(f"[DEBUG-FINALIZE] 10. After run_hooks_sync, processing {len(post_hooks)} hooks")
+        for idx, h in enumerate(post_hooks):
+            print(f"[DEBUG-FINALIZE] 10.{idx}a. Processing hook: {h.hook_name}")
             hxid = hook_exec_id(run_id=run_id, hook_point="post_finalization", hook_name=h.hook_name)
             if hook_execution_exists(session, run_id=run_id, hook_exec_id_value=hxid):
+                print(f"[DEBUG-FINALIZE] 10.{idx}b. Hook already executed, skipping")
                 continue
+            print(f"[DEBUG-FINALIZE] 10.{idx}c. Recording hook result")
             append_run_event(
                 session,
                 run_id,
@@ -2182,6 +3025,7 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
                     "message": h.message,
                 },
             )
+            print(f"[DEBUG-FINALIZE] 10.{idx}d. Recording hook execution")
             record_hook_execution(
                 session,
                 run_id=run_id,
@@ -2191,11 +3035,20 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
                 idempotency_key=hxid,
                 outcome=h.outcome,
             )
+            print(f"[DEBUG-FINALIZE] 10.{idx}e. Hook {h.hook_name} recorded")
+        print(f"[DEBUG-FINALIZE] 10f. All {len(post_hooks)} hooks processed, about to commit")
         session.commit()
+        print(f"[DEBUG-FINALIZE] 10g. Session committed after hooks")
+        print(f"[DEBUG-FINALIZE] 11. About to increment metrics")
         increment("run_done_total")
-        observe_latency("run_execution", (perf_counter() - started_at) * 1000.0)
         elapsed_ms = (perf_counter() - started_at) * 1000.0
+        observe_latency("run_execution", elapsed_ms)
+
+        print(f"[DEBUG-FINALIZE] Note: Application metrics were already recorded at end of GENERATE phase")
+
+        print(f"[DEBUG-FINALIZE] 12. Elapsed time: {elapsed_ms:.0f}ms")
         if elapsed_ms > 30_000:
+            print(f"[DEBUG-FINALIZE] 12a. Long-running completion, appending watchdog event")
             append_run_event(
                 session,
                 run_id,
@@ -2203,15 +3056,40 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
                 {"mode": "heartbeat", "elapsed_ms": int(elapsed_ms), "status": "long_running_completed"},
             )
         # Checkpoint before terminal return
+        print(f"[DEBUG-FINALIZE] 13. About to refresh run from database")
         session.refresh(run)
+        print(f"[DEBUG-FINALIZE] 14. About to check abort_requested flag")
         if run.abort_requested:
+            print(f"[DEBUG-FINALIZE] 14a. ABORT REQUESTED - returning early")
             append_run_event(session, run_id, "run_control_applied", {"action": "abort", "checkpoint": "before_terminal_commit"})
             run.status = "failed"
             run.error_message = "Aborted before terminal commit."
             session.commit()
             return False, run.error_message
+        print(f"[DEBUG-FINALIZE] 15. About to call record_run_trace for run_execution_done")
         record_run_trace("run_execution_done", project_id=project_id, run_id=run_id)
+        print(f"[DEBUG-FINALIZE] 16. After record_run_trace - finalize phase complete")
+
+        # NOTE: Quality evaluation is now triggered at END OF PHASE-GENERATE (after artifacts written to disk)
+        # This avoids the database deadlock that occurred when trying to trigger from FINALIZE
+        print(f"\n{'='*80}")
+        print(f"[FINALIZE] RUN EXECUTION COMPLETE")
+        print(f"[FINALIZE] All 6 phases finished: prepare → context → generate → evaluate → remember → finalize")
+        print(f"[FINALIZE] Quality evaluation was already triggered at end of GENERATE phase")
+        print(f"[FINALIZE] Status: ready for review")
+        print(f"{'='*80}\n")
+
         return True, None
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[DEBUG-FINALIZE] [ERROR] EXCEPTION IN _phase_finalize:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        logger.error(f"Exception in _phase_finalize for {run_id}: {phase_exception}", exc_info=True)
+        raise
     finally:
         _keep(job, locals())
     return None
@@ -2220,6 +3098,9 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
 RUN_PHASES: tuple[tuple[str, Any], ...] = (
     ("prepare", _phase_prepare),
     ("context", _phase_context),
+    ("path_router", _path_router),  # NEW: Phase 2 Router Node
+    ("path_conversation", _path_conversation),  # NEW: Phase 2 Path 1.a Node
+    ("path_rag_search", _path_rag_search),  # NEW: Phase 2 Path 1.b Node
     ("generate", _phase_generate),
     ("evaluate", _phase_evaluate),
     ("remember", _phase_remember),

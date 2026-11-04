@@ -1,7 +1,9 @@
 import importlib.util
 import json
 import logging
+import os
 import shutil
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,14 +19,25 @@ from src.core.exceptions import AdviseWorkbenchHTTPException
 
 _repo_root = Path(__file__).resolve().parents[2]
 # Repo-root `.env` wins over variables already in the environment so RUN_QUEUE_BACKEND / DATABASE_URL match what you edit there.
-load_dotenv(_repo_root / ".env", override=True)
+# The test suites set ADVISE_WORKBENCH_SKIP_DOTENV (tests/*/conftest.py): importing the app must never point them at
+# the real (shared) database and services from a developer's `.env`.
+if not os.environ.get("ADVISE_WORKBENCH_SKIP_DOTENV"):
+    load_dotenv(_repo_root / ".env", override=True)
 
 # All app-level imports MUST follow the load_dotenv() call above so that
 # Settings() and other modules observe the final env-var state. Suppress E402
 # for this file only (see [tool.ruff.lint.per-file-ignores] in pyproject.toml).
 from src.app.api.routes import router
 from src.app.api.wiki import router as wiki_router
-from src.core.config import log_memory_config_warnings, log_run_queue_startup_config, log_wiki_config_warnings, settings
+from src.app.api.failure_tracking import router as failure_tracking_router
+from src.app.api.quality_evaluation import router as quality_evaluation_router
+from src.core.config import (
+    log_document_pipeline_config,
+    log_memory_config_warnings,
+    log_run_queue_startup_config,
+    log_wiki_config_warnings,
+    settings,
+)
 from src.deliverables.deliverable import DeliverableRegistry
 from src.deliverables.docx.deliverable_docx import DOCXDeliverable
 from src.deliverables.pdf.deliverable_pdf import PDFDeliverable
@@ -38,6 +51,7 @@ from src.core.db.session import engine, init_db
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
 from src.core.observability.metrics import snapshot as observability_snapshot
+from src.core.observability.advanced_metrics import get_all_advanced_metrics
 from src.core.observability.otel_tracing import flush_telemetry, init_otel_if_enabled
 from src.workflows.orchestrator import (
     admission_status,
@@ -64,6 +78,22 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=True)
 
 
+for _stream in {sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__} - {None}:
+    # Some modules print status lines with emoji; on a console or log file that cannot encode them (Windows cp1252
+    # when output is redirected) print() would raise and fail the request. Escape such characters instead.
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="backslashreplace")
+
+if not logging.getLogger().handlers:
+    # Application logs on the console (uvicorn only configures its own loggers); LOG_LEVEL sets how much.
+    logging.basicConfig(
+        level=getattr(logging, str(settings.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    for _noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3", "s3transfer", "multipart"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 if settings.structured_logging_enabled:
     root = logging.getLogger()
     if root.handlers:
@@ -79,6 +109,7 @@ async def lifespan(_app: FastAPI):
     log_run_queue_startup_config(
         repo_env_present=(_repo_root / ".env").is_file(),
     )
+    log_document_pipeline_config("backend")
     init_otel_if_enabled()
     init_db()
     if settings.enable_deliverable_registry:
@@ -165,6 +196,10 @@ app.add_middleware(CORSMiddleware, **_cors_kw)
 app.include_router(router, prefix="/api")
 
 app.include_router(wiki_router)
+
+app.include_router(failure_tracking_router)
+
+app.include_router(quality_evaluation_router)
 
 
 @app.get("/health")
@@ -258,14 +293,24 @@ def _visual_qa_health_payload() -> dict:
 
 
 @app.get("/metrics")
-def metrics() -> dict:
+def metrics(project_id: str | None = None) -> dict:
+    """Get all observability metrics. Optionally scoped to a project.
+
+    Args:
+        project_id: Optional project ID to get per-project aggregated metrics
+
+    Returns:
+        Metrics dict with observability, advanced_metrics, run_queue, etc.
+    """
     return {
         "service": "advise-workbench-backend",
         "observability": observability_snapshot(),
+        "advanced_metrics": get_all_advanced_metrics(project_id),
         "run_queue": queue_runtime_stats(),
         "visual_qa": _visual_qa_health_payload(),
         "bash_tool": bash_tool_health(),
         "text_editor_tool": text_editor_tool_health(),
+        "scope": {"project_id": project_id} if project_id else {"scope": "global"},
     }
 
 

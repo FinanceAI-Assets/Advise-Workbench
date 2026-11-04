@@ -35,7 +35,7 @@ export function ApprovalPanel({
       </div>
       <ul className="space-y-3">
         {timeline.map((event) => {
-          const Icon = ICONS[event.icon];
+          const Icon = ICONS[event.icon] ?? ICONS.edit;
           return (
             <li key={event.id} className="flex items-start gap-3">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--text-muted)]">

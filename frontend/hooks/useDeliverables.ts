@@ -50,6 +50,7 @@ type RawEvidenceClaim = {
   slide_title?: string;
   claim?: string;
   claim_type?: string;
+  context?: string;
   status?: "unsupported" | "grounded";
   citation?: string | null;
 };
@@ -65,8 +66,23 @@ function statusFromQuality(quality: string | undefined): ArtifactStatus {
 // shows real content, not just the initially-active one), and per-slide
 // evidence links (so the "Evidence linked to this slide" panel reflects
 // whichever slide is currently selected, not just slide 0).
+/** One claim of the run's evidence register, as the register and citation panels show it. */
+export type RegisterClaim = {
+  id: string;
+  slide: number;
+  slideTitle: string;
+  claim: string;
+  claimType: string;
+  context: string;
+  citation: string;
+  grounded: boolean;
+};
+
 export type DeliverablesWithRaw = DeliverablesDetail & {
   runId: string;
+  run: { id: string; status: string; createdAt: string | null; instruction: string };
+  claims: RegisterClaim[];
+  narrative: string;
   rawSlides: RawPptxSlide[];
   slideBreadcrumb: string;
   slideSourcesSummary: string;
@@ -168,6 +184,18 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
       return {
         engagementId: pid,
         runId: run.id,
+        run: { id: run.id, status: run.status, createdAt: run.created_at, instruction: run.instruction ?? "" },
+        claims: claims.map((claim, i) => ({
+          id: claim.id ?? `claim-${i}`,
+          slide: claim.slide_index ?? 1,
+          slideTitle: claim.slide_title ?? `Slide ${claim.slide_index ?? 1}`,
+          claim: claim.claim ?? "Untitled claim",
+          claimType: claim.claim_type ?? "",
+          context: claim.context ?? "",
+          citation: claim.citation ?? "",
+          grounded: claim.status === "grounded",
+        })),
+        narrative,
         engagementName,
         title: "Deliverables & artifacts",
         subtitle: "Review the actual output, trace its sources and export the approved version—not just the conversation.",

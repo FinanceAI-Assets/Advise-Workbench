@@ -26,6 +26,8 @@ type AuthContextValue = {
   setUser: (user: AuthUser | null) => void;
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
+  loginWithMicrosoftCode: (code: string) => Promise<string>;
+  register: (email: string, password: string, fullName: string) => Promise<void>;
   logout: () => void;
   api: (path: string, init?: RequestInit) => Promise<Response>;
 };
@@ -99,6 +101,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setEmail(userEmail);
   }, []);
 
+  const loginWithMicrosoftCode = useCallback(async (code: string) => {
+    const res = await apiFetch(`${getApiBase()}/api/auth/microsoft/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+    const data = (parsed && typeof parsed === "object" ? parsed : {}) as {
+      access_token?: string;
+      refresh_token?: string;
+      email?: string;
+      next?: string;
+      detail?: string;
+    };
+    if (!res.ok) {
+      throw new Error(extractApiErrorMessage(data, rawText || `Microsoft sign-in failed (${res.status})`));
+    }
+    if (!data.access_token || !data.email) throw new Error("Microsoft sign-in did not return a valid session");
+    localStorage.setItem(TOKEN_KEY, data.access_token);
+    if (data.refresh_token) localStorage.setItem(REFRESH_KEY, data.refresh_token);
+    localStorage.setItem(EMAIL_KEY, data.email);
+    setToken(data.access_token);
+    setEmail(data.email);
+    return data.next || "/engagements";
+  }, []);
+
+  const register = useCallback(
+    async (
+      userEmail: string,
+      password: string,
+      fullName: string,
+    ) => {
+      await login(userEmail, password);
+      const accessToken = localStorage.getItem(TOKEN_KEY);
+      if (!accessToken) throw new Error("Account created, but the session could not be started.");
+
+      const res = await apiFetch(`${getApiBase()}/api/auth/me`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ full_name: fullName }),
+      });
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      if (!res.ok) {
+        throw new Error(extractApiErrorMessage(parsed, rawText || "Unable to save your profile."));
+      }
+      setUser((parsed && typeof parsed === "object" ? parsed : null) as AuthUser | null);
+    },
+    [login]
+  );
+
   const api = useCallback(
     async (path: string, init?: RequestInit) => {
       const base = getApiBase();
@@ -142,8 +197,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token]);
 
   const value = useMemo(
-    () => ({ token, email, user, setUser, ready, login, logout, api }),
-    [token, email, user, ready, login, logout, api]
+    () => ({ token, email, user, setUser, ready, login, loginWithMicrosoftCode, register, logout, api }),
+    [token, email, user, ready, login, loginWithMicrosoftCode, register, logout, api]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

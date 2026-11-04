@@ -27,7 +27,9 @@ from langgraph.graph import END, START, StateGraph
 
 from src.core.config import settings
 from src.core.observability.otel_tracing import start_span
+from src.core.observability.advanced_metrics import record_rag_retrieval
 from src.llm.claude import claude_generate
+import time
 from src.memory.knowledge import lp_index
 from src.memory.retrieval import _tokenize
 from src.prompts.registry import get_prompt
@@ -46,6 +48,7 @@ class LPState(TypedDict, total=False):
     query: str
     max_results: int
     want_answer: bool
+    practice_ids: list[str]
     search_text: str
     passages: int
     keyword_hits: list[tuple[int, float]]
@@ -67,15 +70,20 @@ def _prepare_query(state: LPState) -> LPState:
     return {"search_text": query}
 
 
+def _candidates(state: LPState) -> int:
+    # A practice filter drops most hits in select, so look deeper to still find passages of those practices.
+    return CANDIDATES * 10 if state.get("practice_ids") else CANDIDATES
+
+
 def _keyword(state: LPState) -> LPState:
-    return {"keyword_hits": lp_index.keyword_search(lp_index.load_index(), state["search_text"], CANDIDATES)}
+    return {"keyword_hits": lp_index.keyword_search(lp_index.load_index(), state["search_text"], _candidates(state))}
 
 
 def _semantic(state: LPState) -> LPState:
     if not settings.lp_rag_semantic_enabled:
         return {"semantic_hits": []}
     try:
-        return {"semantic_hits": lp_index.semantic_search(lp_index.load_index(), state["search_text"], CANDIDATES)}
+        return {"semantic_hits": lp_index.semantic_search(lp_index.load_index(), state["search_text"], _candidates(state))}
     except Exception as exc:  # noqa: BLE001 — the embedding model may be missing; keyword search still answers
         _LOG.warning("leading practice library: semantic search unavailable: %s", exc)
         return {"semantic_hits": []}
@@ -94,10 +102,13 @@ def _fuse(state: LPState) -> LPState:
 
 def _select(state: LPState) -> LPState:
     chunks = lp_index.load_index().chunks
+    only = set(state.get("practice_ids") or [])
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for position, score in state["fused"]:
         chunk = chunks[position]
+        if only and chunk.get("practice_id") not in only:
+            continue
         key = " ".join(chunk["text"].split())[:200]
         if key in seen:
             continue
@@ -157,9 +168,42 @@ def build_lp_rag_graph() -> Any:
     return graph.compile()
 
 
-def run_lp_rag(query: str, *, max_results: int = 5, want_answer: bool = False) -> LPState:
-    """Search the library; with ``want_answer`` also write an answer that cites the passages found."""
+def run_lp_rag(
+    query: str, *, max_results: int = 5, want_answer: bool = False, practice_ids: list[str] | None = None
+) -> LPState:
+    """Search the library; with ``want_answer`` also write an answer that cites the passages found.
+
+    ``practice_ids`` keeps only passages of those published practices (the "selected sources only" scope).
+    Retrieval quality and latency are recorded for OpenObserve (``record_rag_retrieval``).
+    """
+    start_time = time.perf_counter()
     with start_span("rag.lp", attributes={"rag.query_chars": len(query), "rag.want_answer": want_answer}) as span:
-        final = build_lp_rag_graph().invoke({"query": query, "max_results": max_results, "want_answer": want_answer})
-        span.set_attribute("rag.results", len(final.get("results") or []))
+        final = build_lp_rag_graph().invoke(
+            {"query": query, "max_results": max_results, "want_answer": want_answer, "practice_ids": practice_ids or []}
+        )
+        retrieval_latency_ms = (time.perf_counter() - start_time) * 1000
+
+        # Extract metrics from RAG results
+        results = final.get("results") or []
+        relevant_chunks = len([r for r in results if r.get("relevance_score", 0) > 0.7])
+        total_chunks = len(results)
+        utilized_chunks = total_chunks if want_answer else 0
+        # supported_facts and total_facts: for now use result count as proxy
+        # In production, would extract from LLM-evaluated answer
+        supported_facts = total_chunks
+        total_facts = total_chunks if total_chunks > 0 else 1
+
+        # Record metrics for OpenObserve
+        if total_chunks > 0:  # Only record if retrieval happened
+            record_rag_retrieval(
+                relevant_chunks=relevant_chunks,
+                total_chunks=total_chunks,
+                supported_facts=supported_facts,
+                total_facts=total_facts,
+                utilized_chunks=utilized_chunks,
+                retrieval_latency_ms=retrieval_latency_ms,
+            )
+            _LOG.info(f"[RAG_METRICS] Relevance: {relevant_chunks}/{total_chunks}, Latency: {retrieval_latency_ms:.0f}ms")
+
+        span.set_attribute("rag.results", len(results))
         return final

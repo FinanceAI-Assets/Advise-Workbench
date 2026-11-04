@@ -351,7 +351,7 @@ class RelationshipGraph:
         """Save relationships to storage."""
         try:
             meta_dir = self.wiki_dir / ".meta"
-            meta_dir.mkdir(exist_ok=True)
+            meta_dir.mkdir(parents=True, exist_ok=True)
 
             relationships_file = meta_dir / "relationships.json"
             relationships_file.write_text(

@@ -258,6 +258,29 @@ def load_agreed_slides(db: Session, *, project_id: str) -> list[dict[str, Any]]:
     return slides
 
 
+
+def _extract_bullets_from_slide(slide: dict[str, Any]) -> list[str]:
+    """Extract bullet points from slide metadata (key_message, evidence_source)."""
+    bullets = []
+
+    # Add key message as first bullet
+    key_msg = str(slide.get("key_message") or "").strip()
+    if key_msg:
+        bullets.append(key_msg)
+
+    # Add evidence as second bullet if present and different
+    evidence = str(slide.get("evidence_source") or "").strip()
+    if evidence and evidence != key_msg:
+        bullets.append(evidence)
+
+    # Fallback: use title if no bullets
+    if not bullets:
+        title = str(slide.get("title") or "").strip()
+        if title:
+            bullets.append(title)
+
+    return bullets
+
 def assemble_outline_from_decisions(db: Session, *, project_id: str) -> list[dict[str, str]]:
     """Convert agreed slide MemoryItems into the deck_outline_preview format expected by the PPTX agent."""
     agreed = load_agreed_slides(db, project_id=project_id)
