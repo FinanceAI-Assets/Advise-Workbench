@@ -2109,89 +2109,9 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
         print(f"[PHASE-GENERATE] [OK] PHASE COMPLETE - all outputs streamed")
         print(f"[PHASE-GENERATE] All artifacts generated and persisted to disk")
 
-        # ==================== TRIGGER QUALITY EVALUATION (after artifacts are generated) ====================
-        import sys
-        try:
-            print(f"\n{'='*80}")
-            print(f"[QUALITY_EVAL_TRIGGER] Starting quality evaluation pipeline")
-            print(f"[QUALITY_EVAL_TRIGGER] Status: Quality evaluation enabled={settings.quality_evaluation_enabled}")
-            print(f"{'='*80}\n")
-        except UnicodeEncodeError:
-            sys.stdout.buffer.write(b"[QUALITY_EVAL_TRIGGER] Starting quality evaluation\n")
-        sys.stdout.flush()
-
-        if settings.quality_evaluation_enabled:
-            print(f"[QUALITY_EVAL_TRIGGER] Spawning background thread for quality evaluation...")
-            try:
-                from src.evaluation.quality_evaluation_hook import trigger_quality_evaluation
-                import threading
-
-                def _quality_evaluation_worker():
-                    """Background worker: evaluates artifact quality using Sheldon's LLM."""
-                    try:
-                        print(f"\n{'='*80}")
-                        print(f"[QUALITY_EVAL_WORKER] THREAD STARTED")
-                        print(f"[QUALITY_EVAL_WORKER] Project: {project_id}, Run: {run_id}")
-                        print(f"[QUALITY_EVAL_WORKER] Task: Evaluate generated artifacts")
-                        print(f"{'='*80}\n")
-                        sys.stdout.flush()
-
-                        # Call quality evaluation (non-blocking)
-                        print(f"[QUALITY_EVAL_WORKER] Calling trigger_quality_evaluation()...")
-                        sys.stdout.flush()
-                        result = trigger_quality_evaluation(project_id=project_id, run_id=run_id)
-
-                        # Log results
-                        if result and result.get("success"):
-                            grade = result.get("quality_grade", "UNKNOWN")
-                            score = result.get("overall_score", 0)
-                            print(f"\n{'='*80}")
-                            print(f"[QUALITY_EVAL_WORKER] SUCCESS")
-                            print(f"[QUALITY_EVAL_WORKER] Quality Grade: {grade}")
-                            print(f"[QUALITY_EVAL_WORKER] Overall Score: {score:.2f}%")
-                            print(f"[QUALITY_EVAL_WORKER] Results saved: {run_id}_quality_metrics.json")
-                            print(f"{'='*80}\n")
-                        else:
-                            error_msg = result.get("error", "Unknown error") if result else "No result returned"
-                            print(f"\n{'='*80}")
-                            print(f"[QUALITY_EVAL_WORKER] FAILED")
-                            print(f"[QUALITY_EVAL_WORKER] Error: {error_msg}")
-                            print(f"{'='*80}\n")
-
-                        sys.stdout.flush()
-                    except Exception as worker_error:
-                        print(f"\n{'='*80}")
-                        print(f"[QUALITY_EVAL_WORKER] EXCEPTION CAUGHT")
-                        print(f"[QUALITY_EVAL_WORKER] Type: {type(worker_error).__name__}")
-                        print(f"[QUALITY_EVAL_WORKER] Message: {worker_error}")
-                        import traceback
-                        print(f"[QUALITY_EVAL_WORKER] Traceback:\n{traceback.format_exc()}")
-                        print(f"{'='*80}\n")
-                        sys.stdout.flush()
-
-                # Spawn daemon thread (won't block run completion)
-                quality_eval_thread = threading.Thread(target=_quality_evaluation_worker, daemon=True, name=f"QualityEval-{run_id}")
-                quality_eval_thread.start()
-                print(f"[QUALITY_EVAL_TRIGGER] Background thread started successfully")
-                print(f"[QUALITY_EVAL_TRIGGER] Thread name: {quality_eval_thread.name}")
-                print(f"[QUALITY_EVAL_TRIGGER] Daemon: {quality_eval_thread.daemon}\n")
-                sys.stdout.flush()
-            except Exception as spawn_error:
-                print(f"\n{'='*80}")
-                print(f"[QUALITY_EVAL_TRIGGER] FAILED TO SPAWN THREAD")
-                print(f"[QUALITY_EVAL_TRIGGER] Type: {type(spawn_error).__name__}")
-                print(f"[QUALITY_EVAL_TRIGGER] Message: {spawn_error}")
-                import traceback
-                print(f"[QUALITY_EVAL_TRIGGER] Traceback:\n{traceback.format_exc()}")
-                print(f"{'='*80}\n")
-                sys.stdout.flush()
-        else:
-            print(f"[QUALITY_EVAL_TRIGGER] Quality evaluation DISABLED (settings.quality_evaluation_enabled=False)")
-            print(f"[QUALITY_EVAL_TRIGGER] To enable, set QUALITY_EVALUATION_ENABLED=true in .env\n")
-            sys.stdout.flush()
-
         # ==================== RECORD APPLICATION METRICS AT END OF GENERATE ====================
         # Recording metrics HERE ensures they're captured even if later phases fail
+        import sys
         try:
             try:
                 print(f"\n{'='*80}")
@@ -2227,6 +2147,64 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Metrics recording complete\n")
         finally:
             sys.stdout.flush()
+
+        # ==================== SPAWN BACKGROUND QUALITY EVALUATION (after ALL writes complete) ====================
+        # PRODUCTION FIX: Serialize writes by spawning thread AFTER all Phase 3 operations finish
+        if settings.quality_evaluation_enabled:
+            print(f"\n{'='*80}")
+            print(f"[QUALITY_EVAL_TRIGGER] Spawning background quality evaluation thread...")
+            print(f"[QUALITY_EVAL_TRIGGER] (After all Phase 3 writes completed)")
+            print(f"{'='*80}\n")
+            sys.stdout.flush()
+            try:
+                from src.evaluation.quality_evaluation_hook import trigger_quality_evaluation
+                import threading
+                # sys already imported at line 2113
+
+                def _quality_evaluation_worker():
+                    """Background worker: evaluates artifact quality using Sheldon's LLM."""
+                    try:
+                        print(f"\n{'='*80}")
+                        print(f"[QUALITY_EVAL_WORKER] THREAD STARTED")
+                        print(f"[QUALITY_EVAL_WORKER] Project: {project_id}, Run: {run_id}")
+                        print(f"[QUALITY_EVAL_WORKER] Task: Evaluate generated artifacts")
+                        print(f"{'='*80}\n")
+                        sys.stdout.flush()
+
+                        print(f"[QUALITY_EVAL_WORKER] Calling trigger_quality_evaluation()...")
+                        sys.stdout.flush()
+                        result = trigger_quality_evaluation(project_id=project_id, run_id=run_id)
+
+                        if result and result.get("success"):
+                            grade = result.get("quality_grade", "UNKNOWN")
+                            score = result.get("overall_score", 0)
+                            print(f"\n{'='*80}")
+                            print(f"[QUALITY_EVAL_WORKER] ✅ SUCCESS")
+                            print(f"[QUALITY_EVAL_WORKER] Quality Grade: {grade}")
+                            print(f"[QUALITY_EVAL_WORKER] Overall Score: {score:.2f}%")
+                            print(f"{'='*80}\n")
+                        else:
+                            error_msg = result.get("error", "Unknown error") if result else "No result returned"
+                            print(f"\n{'='*80}")
+                            print(f"[QUALITY_EVAL_WORKER] ❌ FAILED")
+                            print(f"[QUALITY_EVAL_WORKER] Error: {error_msg}")
+                            print(f"{'='*80}\n")
+                        sys.stdout.flush()
+                    except Exception as worker_error:
+                        print(f"\n{'='*80}")
+                        print(f"[QUALITY_EVAL_WORKER] ❌ EXCEPTION CAUGHT")
+                        print(f"[QUALITY_EVAL_WORKER] Type: {type(worker_error).__name__}")
+                        print(f"[QUALITY_EVAL_WORKER] Message: {worker_error}")
+                        sys.stdout.flush()
+
+                quality_eval_thread = threading.Thread(target=_quality_evaluation_worker, daemon=True, name=f"QualityEval-{run_id}")
+                quality_eval_thread.start()
+                print(f"[QUALITY_EVAL_TRIGGER] ✅ Background thread started")
+                print(f"[QUALITY_EVAL_TRIGGER] Thread: {quality_eval_thread.name} (daemon={quality_eval_thread.daemon})\n")
+                sys.stdout.flush()
+            except Exception as spawn_error:
+                print(f"[QUALITY_EVAL_TRIGGER] ⚠️ Failed to spawn thread: {spawn_error}\n")
+                sys.stdout.flush()
 
         print(f"[PHASE-GENERATE] Continuing to next phase...\n")
     except Exception as phase_exception:
@@ -2434,13 +2412,27 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
 
         append_run_event(session, run_id, "evaluator_pipeline", evaluator_pipeline)
 
-        # Check if evaluation passed
+        # CRITICAL: Check if evaluation passed
+        print(f"\n{'='*80}")
+        print(f"[PHASE-EVALUATE] ⚙️ PHASE-EVALUATE DECISION LOGIC")
+        print(f"[PHASE-EVALUATE]   MAX_EVALUATOR_REMEDIATION_ROUNDS: {MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+        print(f"[PHASE-EVALUATE]   hard_gate_enabled: {hard_gate_enabled}")
+        print(f"[PHASE-EVALUATE]   evaluator_pipeline['status']: {evaluator_pipeline.get('status')}")
+        print(f"{'='*80}\n")
+
         if evaluator_pipeline["status"] == "pass":
-            print(f"\n[PHASE-EVALUATE] ✅ EVALUATION PASSED!")
-            print(f"[PHASE-EVALUATE]   All quality checks passed")
-            print(f"[PHASE-EVALUATE]   Moving to next phase (REMEMBER/REVIEW)...\n")
+            print(f"\n{'='*80}")
+            print(f"[PHASE-EVALUATE] ✅✅✅ EVALUATION PASSED! ✅✅✅")
+            print(f"[PHASE-EVALUATE]   All quality checks PASSED")
+            print(f"[PHASE-EVALUATE]   Moving to PHASE-REMEMBER (next phase)")
+            print(f"{'='*80}\n")
+            run.evaluation_passed = True
+            session.commit()
+            print(f"[PHASE-EVALUATE] 📊 Set evaluation_passed=True in database")
+            sys.stdout.flush()
             # Continue to next phase (don't return, fall through)
         elif hard_gate_enabled and evaluator_pipeline["status"] != "pass":
+            run.evaluation_passed = False
             prior_retry_count = int(
                 session.scalar(
                     select(func.count()).select_from(RunEvent).where(
@@ -2449,7 +2441,15 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 )
                 or 0
             )
-            print(f"[PHASE-EVALUATE] ⚠️ EVALUATION FAILED - Current retry count: {prior_retry_count}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+            print(f"\n{'='*80}")
+            print(f"[PHASE-EVALUATE] 🔴 EVALUATION FAILED")
+            print(f"[PHASE-EVALUATE] RETRY COUNT CHECK:")
+            print(f"[PHASE-EVALUATE]   prior_retry_count: {prior_retry_count}")
+            print(f"[PHASE-EVALUATE]   MAX_EVALUATOR_REMEDIATION_ROUNDS: {MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+            print(f"[PHASE-EVALUATE]   prior_retry_count < MAX?: {prior_retry_count < MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+            print(f"[PHASE-EVALUATE] 📊 Set evaluation_passed=False in database")
+            print(f"{'='*80}\n")
+
             if prior_retry_count < MAX_EVALUATOR_REMEDIATION_ROUNDS:
                 run.status = "approved"
                 nxt = prior_retry_count + 1
@@ -2617,7 +2617,11 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                     },
                 )
                 session.commit()
-                enqueue_run_execution(project_id, run_id)
+                print(f"\n[PHASE-EVALUATE] ⏳ ENQUEUING RUN FOR RETRY...")
+                enqueue_result = enqueue_run_execution(project_id, run_id)
+                print(f"[PHASE-EVALUATE] ✅ ENQUEUE RESULT: {enqueue_result}")
+                print(f"[PHASE-EVALUATE] 🔁 RUN WILL RE-START FROM PHASE-PREPARE WITH FEEDBACK")
+                print(f"[PHASE-EVALUATE] ✅ RETURNING from Phase 4 (run re-queued)\n")
                 return True, None
 
             # ── INVESTIGATOR AGENT: Retries exhausted → analyze failures & route
@@ -2625,180 +2629,133 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
             print(f"[PHASE-EVALUATE] 🔴 RETRIES EXHAUSTED ({prior_retry_count}/{MAX_EVALUATOR_REMEDIATION_ROUNDS})")
             print(f"[PHASE-EVALUATE] ⏳ Initiating Investigator Agent Analysis...")
             print(f"{'='*80}\n")
-            try:
-                investigator = InvestigatorAgent()
-                print(f"[INVESTIGATOR] ✅ Investigator instance created")
 
-                # Get all failed attempts data from run_events
+            _investigator_success = False
+            try:
+                # Import ConversationMessage here to keep imports clean
+                from src.core.db.models import ConversationMessage, Conversation
+
+                # 1. Build attempts data from retry events
                 retry_events = session.query(RunEvent).filter(
                     RunEvent.run_id == run_id,
                     RunEvent.event_type == "evaluator_retry_requested"
                 ).order_by(RunEvent.created_at.asc()).all()
 
-                print(f"[INVESTIGATOR] 📋 Found {len(retry_events)} retry events")
-
                 attempts_data = []
                 for i, event in enumerate(reversed(retry_events)):
-                    payload = event.payload or {}
-                    error_summary = payload.get("evaluator_pipeline", {}).get("summary", "Unknown error")
+                    payload_raw = event.payload_json if hasattr(event, 'payload_json') else event.payload
+                    if isinstance(payload_raw, str):
+                        try:
+                            payload_raw = json.loads(payload_raw)
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            payload_raw = {}
+
+                    eval_pipeline = payload_raw.get("evaluator_pipeline", {}) if isinstance(payload_raw, dict) else {}
+                    error_msg = eval_pipeline.get("summary", "Unknown") if isinstance(eval_pipeline, dict) else str(eval_pipeline)[:100]
+
                     attempts_data.append({
                         "attempt": i + 1,
-                        "error": error_summary,
-                        "stage": "evaluation",
-                        "artifact": "multiple",
-                        "event_data": payload
-                    })
-                    print(f"[INVESTIGATOR]   Attempt {i+1}: {error_summary[:100]}...")
-
-                if not attempts_data:
-                    # Fallback if no retry events
-                    print(f"[INVESTIGATOR] ⚠️ No retry events found, using fallback attempt data")
-                    attempts_data = [{
-                        "attempt": 1,
-                        "error": "Evaluator checks failed",
+                        "error": error_msg,
                         "stage": "evaluation",
                         "artifact": "multiple"
-                    }]
+                    })
 
-                # Get context_validation from state
-                context_validation = state.get("context_validation", {})
+                if not attempts_data:
+                    attempts_data = [{"attempt": 1, "error": "Evaluator checks failed", "stage": "evaluation", "artifact": "multiple"}]
+
+                # 2. Build context for investigator
                 context_info = {
-                    "context_validation": context_validation,
+                    "context_validation": state.get("context_validation", {}),
                     "run_instruction": run.instruction or "",
-                    "project_context": run.short_name or ""
+                    "project_context": ""
                 }
 
-                print(f"[INVESTIGATOR] 🔍 Starting analysis pipeline...")
-                # Run full investigation pipeline
-                investigation_result = investigator.investigate_and_decide(
-                    attempts_data,
-                    context_info
-                )
+                # 3. Run investigator
+                print(f"[INVESTIGATOR] 🤖 Running InvestigatorAgent with {len(attempts_data)} attempts...")
+                investigator = InvestigatorAgent()
+                inv_result = investigator.investigate_and_decide(attempts_data, context_info)
+                _investigator_success = True
 
-                root_cause = investigation_result['classification'].get('root_cause', 'unknown')
-                confidence = investigation_result.get('investigator_confidence', 0)
-                route_to = investigation_result['routing_decision'].get('route_to', 'unknown')
+                # 4. Extract results safely
+                classification = inv_result.get("classification", {}) or {}
+                routing_dec = inv_result.get("routing_decision", {}) or {}
+                root_cause = classification.get("root_cause", "unknown")
+                confidence = float(inv_result.get("investigator_confidence", 0))
+                route_to = routing_dec.get("route_to", "escalate")
+                chat_msg = inv_result.get("chat_message", "")
 
-                print(f"\n{'─'*80}")
-                print(f"[INVESTIGATOR] 📊 ANALYSIS COMPLETE:")
-                print(f"[INVESTIGATOR]   Root Cause: {root_cause}")
-                print(f"[INVESTIGATOR]   Confidence: {confidence:.1%}")
-                print(f"[INVESTIGATOR]   Routing to: {route_to}")
-                print(f"[INVESTIGATOR]   Chat message length: {len(investigation_result.get('chat_message', ''))}")
-                print(f"{'─'*80}\n")
+                print(f"[INVESTIGATOR] ✅ Analysis complete: {root_cause} (confidence: {confidence:.0%})")
 
-                # Persist investigator's chat message
-                from src.core.db.models import ConversationMessage
-                conv = session.query(ConversationMessage).filter_by(run_id=run_id).first()
-                if conv:
-                    conv_id = conv.conversation_id
-                    msg = ConversationMessage(
-                        conversation_id=conv_id,
+                # 5. Persist chat message if conversation exists
+                conv = session.query(Conversation).filter(
+                    Conversation.project_id == project_id
+                ).order_by(Conversation.created_at.desc()).first()
+
+                if conv and chat_msg:
+                    msg_rec = ConversationMessage(
+                        conversation_id=conv.id,
                         role="assistant",
-                        content=investigation_result["chat_message"],
+                        content=chat_msg,
                         metadata_json=json.dumps({
                             "kind": "investigator_analysis",
-                            "root_cause": investigation_result["classification"].get("root_cause"),
-                            "confidence": investigation_result["investigator_confidence"],
+                            "root_cause": root_cause,
+                            "confidence": confidence,
                             "source": "phase4_evaluator"
                         })
                     )
-                    session.add(msg)
+                    session.add(msg_rec)
                     session.commit()
-                    print(f"[INVESTIGATOR] Chat message persisted to conversation")
+                    print(f"[INVESTIGATOR] ✅ Chat message saved to conversation")
 
-                # Handle routing decision
-                route_to = investigation_result["routing_decision"].get("route_to", "escalate")
+                # 6. Execute routing decision
+                print(f"[INVESTIGATOR] 🚦 Routing: {route_to}")
 
                 if route_to == "phase_2":
-                    print(f"\n[INVESTIGATOR] ↩️ ROUTING DECISION: PHASE 2 (Clarification Needed)")
-                    message = investigation_result["routing_decision"].get(
-                        "message",
-                        "Investigator analysis suggests clarification needed"
-                    )
-                    print(f"[INVESTIGATOR]   Message: {message[:150]}...")
+                    message = routing_dec.get("message", "Please clarify the requirements")
                     run.status = "awaiting_clarification"
                     run.error_message = message
                     session.commit()
-                    append_run_event(
-                        session,
-                        run_id,
-                        "investigator_routed_to_phase2",
-                        investigation_result
-                    )
+                    append_run_event(session, run_id, "investigator_routed_to_phase2", inv_result)
                     session.commit()
-                    print(f"[INVESTIGATOR] ✅ Run status set to 'awaiting_clarification'")
-                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_routed_to_phase2")
+                    print(f"[INVESTIGATOR] ✅ Routed to Phase 2 (clarification needed)")
 
                 elif route_to == "phase_3":
-                    print(f"\n[INVESTIGATOR] ♻️ ROUTING DECISION: PHASE 3 (LLM Problem with Guidance)")
-                    guidance = investigation_result["routing_decision"].get("guidance", [])
-                    print(f"[INVESTIGATOR]   Guidance items: {len(guidance)}")
-                    for i, g in enumerate(guidance[:3], 1):
-                        print(f"[INVESTIGATOR]     {i}. {str(g)[:100]}...")
+                    guidance = routing_dec.get("guidance", [])
                     run.status = "approved"
-                    run.plan_payload = json.dumps({
-                        **json.loads(run.plan_payload or "{}"),
-                        "investigator_guidance": guidance,
-                        "investigator_root_cause": investigation_result["classification"].get("root_cause")
-                    })
-                    run.error_message = "Investigator recommended Phase 3 retry with guidance"
+                    plan_dict = {}
+                    try:
+                        plan_dict = json.loads(run.plan_payload or "{}")
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        pass
+                    plan_dict["investigator_guidance"] = guidance
+                    plan_dict["investigator_root_cause"] = root_cause
+                    run.plan_payload = json.dumps(plan_dict)
+                    run.error_message = "Investigator recommends Phase 3 retry"
                     session.commit()
-                    append_run_event(
-                        session,
-                        run_id,
-                        "investigator_routed_to_phase3",
-                        investigation_result
-                    )
+                    append_run_event(session, run_id, "investigator_routed_to_phase3", inv_result)
                     session.commit()
-                    print(f"[INVESTIGATOR] ✅ Run status set to 'approved'")
-                    print(f"[INVESTIGATOR] ✅ Guidance injected into plan_payload")
-                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_routed_to_phase3")
-                    print(f"[INVESTIGATOR] ✅ Re-queuing run for Phase 3 generation...")
+                    print(f"[INVESTIGATOR] ✅ Routed to Phase 3 (retry with guidance)")
                     enqueue_run_execution(project_id, run_id)
                     return True, None
 
                 else:  # escalate
-                    print(f"\n[INVESTIGATOR] 🚨 ROUTING DECISION: ESCALATE (Technical Issue)")
-                    message = investigation_result["routing_decision"].get(
-                        "message",
-                        "Technical issue detected - escalated for review"
-                    )
-                    print(f"[INVESTIGATOR]   Message: {message[:150]}...")
-                    print(f"[INVESTIGATOR]   Alternatives: {investigation_result['routing_decision'].get('alternatives', [])}")
+                    message = routing_dec.get("message", "Issue requires escalation")
                     run.status = "escalated_for_review"
                     run.error_message = message
                     session.commit()
-                    append_run_event(
-                        session,
-                        run_id,
-                        "investigator_escalated",
-                        investigation_result
-                    )
+                    append_run_event(session, run_id, "investigator_escalated", inv_result)
                     session.commit()
-                    print(f"[INVESTIGATOR] ✅ Run status set to 'escalated_for_review'")
-                    print(f"[INVESTIGATOR] ✅ Event recorded: investigator_escalated")
+                    print(f"[INVESTIGATOR] ✅ Escalated for review")
 
                 print(f"\n{'='*80}")
-                print(f"[INVESTIGATOR] ✅ INVESTIGATION PIPELINE COMPLETE")
+                print(f"[INVESTIGATOR] ✅ INVESTIGATION COMPLETE")
                 print(f"[INVESTIGATOR]   Status: {run.status}")
-                print(f"[INVESTIGATOR]   Chat message persisted: YES")
                 print(f"{'='*80}\n")
 
-            except Exception as investigator_error:
-                print(f"\n{'='*80}")
-                print(f"[INVESTIGATOR] ❌ ERROR DURING INVESTIGATION")
-                print(f"[INVESTIGATOR]   Error Type: {type(investigator_error).__name__}")
-                print(f"[INVESTIGATOR]   Error Message: {str(investigator_error)[:200]}")
-                print(f"[INVESTIGATOR]   Traceback:")
-                import traceback
-                for line in traceback.format_exc().split('\n'):
-                    if line.strip():
-                        print(f"[INVESTIGATOR]     {line}")
-                print(f"[INVESTIGATOR] ⚠️ Falling back to standard hard-fail logic")
-                print(f"{'='*80}\n")
-                _log.error(f"[INVESTIGATOR] Error during investigation: {investigator_error}", exc_info=True)
-                # Fall through to standard hard-fail logic below
+            except Exception as e:
+                _log.error(f"[INVESTIGATOR] Failed: {e}", exc_info=True)
+                print(f"[INVESTIGATOR] ❌ Error: {str(e)[:100]}")
+                # Fall through to hard-fail logic
 
             guardrails_only_failure = (
                 not evaluator_pipeline.get("guardrails_passed")

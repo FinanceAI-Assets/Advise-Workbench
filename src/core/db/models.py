@@ -128,6 +128,7 @@ class Run(Base):
     pause_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     resume_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     abort_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    evaluation_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     tokens_input: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_output: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_cache_read: Mapped[int | None] = mapped_column(Integer, nullable=True)

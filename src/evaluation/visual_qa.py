@@ -298,9 +298,26 @@ def _evaluate_pptx(path: Path, project_id: str, run_id: str) -> dict[str, Any]:
             temperature=0.1,
             max_tokens=1400,
         )
-    except Exception:
+    except Exception as e:
+        import traceback
+        error_type = type(e).__name__
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+
+        print(f"[VQA-ERROR] Claude API error during PPTX evaluation")
+        print(f"[VQA-ERROR]   Error type: {error_type}")
+        print(f"[VQA-ERROR]   Error message: {error_msg}")
+
         # Fail-open: visual critic issues should not block pipeline progression.
-        return {**_empty, "summary": "PPTX visual critic call failed; continuing without critic output"}
+        return {
+            **_empty,
+            "summary": "PPTX visual critic call failed; continuing without critic output",
+            "error_details": {
+                "error_type": error_type,
+                "error_message": error_msg,
+                "full_trace": error_trace[:500],  # First 500 chars of traceback
+            }
+        }
 
     if not isinstance(result, dict):
         return {**_empty, "summary": "Invalid response from PPTX evaluation"}
