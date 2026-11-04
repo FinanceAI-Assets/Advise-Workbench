@@ -162,8 +162,10 @@ def test_monitoring_api_is_admin_only_and_old_entry_points_are_gone(env, monkeyp
                        files={"file": ("x.md", b"# x", "text/markdown")}).status_code in (404, 405)
 
 
-def test_engagement_uploads_do_not_queue_the_pipeline():
-    from src.app.api import documents
+def test_engagement_uploads_run_without_the_library_stages():
+    """Engagement uploads use the pipeline too (tests/unit/test_query_api.py), but never become library content."""
+    from src.workers.pipeline import ENGAGEMENT_STAGES, SEARCH_STAGES
 
-    assert not hasattr(documents, "queue_document")
     assert LIBRARY_SCOPE == "library"
+    assert "intake" not in ENGAGEMENT_STAGES and "library_validation" not in ENGAGEMENT_STAGES
+    assert set(ENGAGEMENT_STAGES) < set(SEARCH_STAGES)

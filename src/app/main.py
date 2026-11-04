@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import logging
+import os
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,7 +18,10 @@ from src.core.exceptions import AdviseWorkbenchHTTPException
 
 _repo_root = Path(__file__).resolve().parents[2]
 # Repo-root `.env` wins over variables already in the environment so RUN_QUEUE_BACKEND / DATABASE_URL match what you edit there.
-load_dotenv(_repo_root / ".env", override=True)
+# The test suites set ADVISE_WORKBENCH_SKIP_DOTENV (tests/*/conftest.py): importing the app must never point them at
+# the real (shared) database and services from a developer's `.env`.
+if not os.environ.get("ADVISE_WORKBENCH_SKIP_DOTENV"):
+    load_dotenv(_repo_root / ".env", override=True)
 
 # All app-level imports MUST follow the load_dotenv() call above so that
 # Settings() and other modules observe the final env-var state. Suppress E402
@@ -64,6 +68,16 @@ class JsonLogFormatter(logging.Formatter):
             payload["correlation_id"] = cid
         return json.dumps(payload, ensure_ascii=True)
 
+
+if not logging.getLogger().handlers:
+    # Application logs on the console (uvicorn only configures its own loggers); LOG_LEVEL sets how much.
+    logging.basicConfig(
+        level=getattr(logging, str(settings.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    for _noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3", "s3transfer", "multipart"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 if settings.structured_logging_enabled:
     root = logging.getLogger()

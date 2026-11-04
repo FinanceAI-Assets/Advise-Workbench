@@ -34,6 +34,7 @@ from src.core.db.models import (
 )
 from src.core.db.session import get_db
 from src.app.api.projects._engagement_context import engagement_brief_text, engagement_discovery
+from src.agents.conversation import rag_agent, sheldon_router_agent
 from src.workflows.conversation_graph import run_turn
 from src.workflows.task_router.conversation_router import fallback_decision, route_turn
 from src.memory.short_term.conversation_state import ConversationState, load_state, save_state, stamp_router
@@ -782,6 +783,35 @@ def _persist_conversational_response(
     return {
         "conversation_id": conv.id,
         "messages": messages,
+        "open_questions": [],
+        "ready_for_confirmation": False,
+        "plan_hash": None,
+    }
+
+
+def _persist_rag_response(db: Session, conv: Conversation, pid: str, user: User, content: str, prior_messages: list[dict]) -> dict:
+    """Sheldon's rag_agent: answer from the engagement's uploaded documents and the Leading Practice Library
+    through the query pipeline, with citations stored on the message (``metadata.kind == "rag_answer"``)."""
+    history = list(prior_messages or [])
+    if history and history[-1].get("role") == "user" and str(history[-1].get("content") or "").strip() == content:
+        history = history[:-1]  # the question itself, already stored
+    try:
+        reply = rag_agent.answer(db, user_id=user.id, question=content, engagement_id=pid, history=history)
+    except Exception:
+        _LOG.exception("[SHELDON] project=%s rag_agent could not answer (search unavailable)", pid)
+        reply = rag_agent.unavailable_reply(pid)
+    db.add(ConversationMessage(
+        conversation_id=conv.id,
+        role="assistant",
+        content=reply.text,
+        metadata_json=json.dumps(reply.metadata, ensure_ascii=False, default=str),
+    ))
+    db.commit()
+    _LOG.info("[SHELDON] project=%s reply stored (kind=rag_answer, status=%s, %d chars)", pid,
+              reply.metadata.get("status"), len(reply.text))
+    return {
+        "conversation_id": conv.id,
+        "messages": _serialize_messages(db, conv.id),
         "open_questions": [],
         "ready_for_confirmation": False,
         "plan_hash": None,
@@ -2396,6 +2426,19 @@ def _turn_respond(turn: Turn) -> dict | None:
     template_ids = turn.vars.get("template_ids")
     wiki_prefilled_slots = turn.vars.get("wiki_prefilled_slots")
     try:
+        # Sheldon's router agent: rag_agent for document questions; otherwise the conversational reply or the
+        # supervisor path (discovery -> plan -> run) below.
+        agent = sheldon_router_agent.route(
+            intent=decision.intent, rationale=decision.rationale or "", message=content, state=state.state
+        )
+        _LOG.info("[SHELDON] project=%s agent=%s router_intent=%s confidence=%.2f state=%s",
+                  pid, agent, decision.intent, decision.confidence, state.state)
+        if agent == sheldon_router_agent.RAG:
+            stamp_router(state, intent="knowledge_question", confidence=decision.confidence, rationale=rationale)
+            save_state(conv, state)
+            db.flush()
+            return _persist_rag_response(db, conv, pid, user, content, prior_messages)
+
         proposal_detected = (
             _is_proposal_instruction(combined_instruction, template_ids)
             or _has_proposal_slot_signal(merged_discovery)

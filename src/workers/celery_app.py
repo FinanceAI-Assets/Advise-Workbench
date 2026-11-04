@@ -1,9 +1,10 @@
 """Celery application for the document ingestion pipeline."""
 
+import logging
 import ssl
 
 from celery import Celery
-from celery.signals import worker_init
+from celery.signals import after_setup_logger, worker_init
 
 from src.core.config import settings
 
@@ -48,6 +49,14 @@ if settings.celery_broker_url.startswith("amqps://"):
 if settings.celery_result_backend.startswith("rediss://"):
     app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED, **(
         {"ssl_ca_certs": settings.ssl_ca_file} if settings.ssl_ca_file else {})}
+
+
+@after_setup_logger.connect
+def _quiet_http_clients(**_kwargs) -> None:
+    # Keep the worker console to the pipeline's stage lines ([S3], [PARSE], [CHUNK], [EMBED], [PIPELINE]): the S3,
+    # Qdrant and embedding clients would otherwise log every HTTP request.
+    for name in ("httpx", "httpcore", "botocore", "boto3", "urllib3", "s3transfer"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 @worker_init.connect

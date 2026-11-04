@@ -1,5 +1,10 @@
 """Query pipeline: the one path every question takes to a cited answer.
 
+Callers: ``src.query.service.ask`` (used by ``POST /api/query``, Sheldon's rag_agent and Talk to data). A
+``QueryScope`` says what is searched: the indexed Leading Practice Library (released content only) and/or one
+engagement's uploaded documents. Both are indexed by the ingestion pipeline (``src.workers.pipeline``) into Postgres and
+Qdrant, under ``project_id`` = ``LIBRARY_SCOPE`` or the engagement id.
+
 1. Understanding
    - Analysis (no model call): intent, question type, entities, keywords, language; the conversation's earlier
      turns are loaded by the caller and passed as ``history``.
@@ -10,7 +15,8 @@
    - Embedding: every variant is embedded in one batch and scored by similarity to the main question; variants
      that drift below ``query_variant_min_similarity`` are dropped; the best ``query_max_variants`` are searched.
 2. Retrieval
-   - Vector search over the scope's chunks and wiki pages (``query_candidates`` per variant and collection).
+   - Vector search over the library's chunks and wiki pages (``query_candidates`` per variant and collection) and
+     over the engagement's document chunks.
    - Validation against Postgres: only current, existing, released content, with full text from the source of
      truth. Every wiki page in the rerank pool is scored 0-1 against the source chunks it was written from
      (details kept on the source) and dropped below ``query_min_verification``.
@@ -29,6 +35,10 @@
 
 Verification reads chunk text from ``chunk_archive`` rather than SeaweedFS: S3 holds the original binary
 (PDF/DOCX), and ``chunk_archive`` is the text extracted from exactly those bytes (hash-pinned at intake).
+The same holds for engagement uploads; their passages are stored per engagement, never shared with another scope.
+
+Concurrency: every request has its own session and state; answer calls run on one bounded pool
+(``query_max_concurrent_answers``), so calls that overrun their limit cannot pile up threads or model processes.
 """
 
 from __future__ import annotations
@@ -39,6 +49,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,14 +64,13 @@ from src.core.observability import metrics
 from src.core.vector_db.qdrant_client import get_qdrant_client
 from src.llm import gateway
 from src.llm.claude import claude_generate
-from src.memory.knowledge.library_release import released_document_ids
-from src.workers.pipeline import LIBRARY_SCOPE
+from src.memory.knowledge.library_release import LIBRARY_SCOPE, released_document_ids
 
 logger = logging.getLogger(__name__)
 
 INSUFFICIENT = "insufficient_evidence"
 LLM_UNAVAILABLE = "llm_unavailable"
-_INSUFFICIENT_TEXT = "Insufficient evidence: the library does not contain information that answers this question."
+_INSUFFICIENT_TEXT = "Insufficient evidence: the available documents do not contain information that answers this question."
 _UNAVAILABLE_TEXT = "Unable to process question now. The most relevant sources are listed below."
 
 _STOPWORDS = set(
@@ -99,6 +109,19 @@ _VARIANT_PRIORITY = ("standalone", "original", "translated", "clarified", "parap
 _RETRYABLE = {"timeout", "rate_limit", "api_error"}
 
 
+@dataclass(frozen=True)
+class QueryScope:
+    """What a question searches.
+
+    ``index``: the project id of indexed content (Qdrant + Postgres); the Leading Practice Library is
+    ``LIBRARY_SCOPE`` (released versions only), None searches no library content. ``engagement_id``: also search
+    that engagement's uploaded documents (indexed under its own id). ``practice_ids``: only these library practices."""
+
+    index: str | None = LIBRARY_SCOPE
+    engagement_id: str | None = None
+    practice_ids: tuple[str, ...] = ()
+
+
 @dataclass
 class Source:
     kind: str  # chunk | wiki
@@ -118,6 +141,11 @@ class Source:
     evidence: list[dict[str, Any]] = field(default_factory=list)  # wiki: the source chunks that support it
     evidence_sources: list[Source] = field(default_factory=list)  # the same chunks, for the model's context
     supports: str | None = None  # chunk added as the evidence of this wiki page
+    engagement_id: str | None = None  # set for content of an engagement's uploads
+
+    @property
+    def scope(self) -> str:
+        return "engagement" if self.engagement_id else "library"
 
     def label(self) -> str:
         if self.kind == "wiki":
@@ -132,7 +160,8 @@ class Source:
         return f"{name}, page {self.page_number}" if self.page_number else name
 
     def link(self) -> str:
-        return f"/api/query/sources/{self.kind}/{self.key}"
+        link = f"/api/query/sources/{self.kind}/{self.key}"
+        return f"{link}?engagement_id={self.engagement_id}" if self.engagement_id else link
 
 
 @dataclass
@@ -310,6 +339,15 @@ def search(project_id: str, vectors: list[list[float]]) -> list[Source]:
     return list(hits.values())
 
 
+def search_engagement(db: Session, engagement_id: str, vectors: list[list[float]]) -> list[Source]:
+    """The engagement's uploaded passages closest to the query: the pipeline's index under the engagement's id,
+    validated against Postgres like the library (current versions of documents that were not deleted)."""
+    found = verify(db, engagement_id, search(engagement_id, vectors))
+    for s in found:
+        s.engagement_id = engagement_id
+    return found
+
+
 def _split_key(name: str) -> tuple[str | None, str]:
     """Library document keys are ``<practice>/<JOB-n>/<file>``; other keys are just the file name."""
     parts = name.split("/", 2)
@@ -438,20 +476,22 @@ def verify_wiki_pages(db: Session, sources: list[Source]) -> None:
 
 
 _cross_encoder: Any = None  # loaded on first use; False once loading failed
+_cross_encoder_lock = threading.Lock()
 
 
 def _get_cross_encoder() -> Any:
     global _cross_encoder
     if not settings.query_reranker_model or settings.query_reranker_base_url:
         return None
-    if _cross_encoder is None:
-        try:
-            from sentence_transformers import CrossEncoder
+    with _cross_encoder_lock:  # concurrent first questions load the model once
+        if _cross_encoder is None:
+            try:
+                from sentence_transformers import CrossEncoder
 
-            _cross_encoder = CrossEncoder(settings.query_reranker_model)
-        except Exception as e:
-            logger.warning("[QUERY] cross-encoder %s unavailable, using keyword rerank: %s", settings.query_reranker_model, e)
-            _cross_encoder = False
+                _cross_encoder = CrossEncoder(settings.query_reranker_model)
+            except Exception as e:
+                logger.warning("[QUERY] cross-encoder %s unavailable, using keyword rerank: %s", settings.query_reranker_model, e)
+                _cross_encoder = False
     return _cross_encoder or None
 
 
@@ -502,7 +542,7 @@ def rerank(question: str, sources: list[Source], top_k: int) -> list[Source]:
             s.rank_score = scores[i]
         else:
             overlap = len(q_terms & set(terms(s.text))) / len(q_terms) if q_terms else 0.0
-            s.rank_score = 0.75 * s.score + 0.25 * overlap + (0.02 if s.kind == "chunk" else 0.0)
+            s.rank_score = 0.75 * s.score + 0.25 * overlap + (0.02 if s.kind != "wiki" else 0.0)
     picked: list[Source] = []
     seen: list[set[str]] = []
     for s in sorted(sources, key=lambda x: x.rank_score, reverse=True):
@@ -520,17 +560,21 @@ def _near_duplicate(words: set[str], seen: list[set[str]]) -> bool:
     return any(words and len(words & w) / max(len(words | w), 1) > 0.8 for w in seen)
 
 
-def retrieve(db: Session, project_id: str, question: str, vectors: list[list[float]], top_k: int) -> tuple[list[Source], dict[str, Any]]:
-    """Search, validate, score wiki pages against their sources, rerank. Returns the sources and their counts."""
-    hits = search(project_id, vectors)
-    existing = verify(db, project_id, hits)
-    pool = sorted(existing, key=lambda s: s.score, reverse=True)[: settings.query_rerank_pool]
+def retrieve(db: Session, scope: QueryScope, question: str, vectors: list[list[float]], top_k: int) -> tuple[list[Source], dict[str, Any]]:
+    """Search the scope, validate, score wiki pages against their sources, rerank. Returns the sources and counts."""
+    hits = search(scope.index, vectors) if scope.index else []
+    existing = verify(db, scope.index, hits) if hits else []
+    documents = search_engagement(db, scope.engagement_id, vectors) if scope.engagement_id else []
+    pool = sorted(existing + documents, key=lambda s: s.score, reverse=True)[: settings.query_rerank_pool]
     verify_wiki_pages(db, pool)
+    if scope.practice_ids:  # "ask selected sources only": library content of those practices (wiki pages via evidence)
+        pool = [s for s in pool if s.engagement_id or s.practice_id in scope.practice_ids]
     faithful = [s for s in pool if s.verification >= settings.query_min_verification]
     ranked = rerank(question, faithful, top_k)
     stats = {
-        "candidates": len(hits),
-        "verified": len(existing),
+        "candidates": len(hits) + len(documents),
+        "engagement_candidates": len(documents),
+        "verified": len(existing) + len(documents),
         "dropped_low_verification": len(pool) - len(faithful),
         "top_score": round(max((s.score for s in faithful), default=0.0), 3),
         "reranker": reranker_name(),
@@ -572,7 +616,8 @@ def build_context(sources: list[Source], max_chars: int) -> tuple[str, list[Sour
 
 
 _ANSWER_SYSTEM = (
-    "You answer questions about the Leading Practice Library using only the numbered sources provided. "
+    "You answer questions using only the numbered sources provided: passages from the engagement's uploaded "
+    "documents and from the Leading Practice Library. "
     "Do not use outside knowledge. Cite every claim with its source number in square brackets, e.g. [S1] or "
     "[S2][S3]. Be concise. If the sources do not contain the answer, reply exactly: INSUFFICIENT_EVIDENCE"
 )
@@ -600,21 +645,35 @@ def classify_error(exc: BaseException) -> str:
     return "api_error"
 
 
+_answer_pool: concurrent.futures.ThreadPoolExecutor | None = None
+_answer_pool_lock = threading.Lock()
+
+
+def _get_answer_pool() -> concurrent.futures.ThreadPoolExecutor:
+    """One bounded pool for every answer call in this process (``query_max_concurrent_answers``)."""
+    global _answer_pool
+    with _answer_pool_lock:
+        if _answer_pool is None:
+            _answer_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(1, settings.query_max_concurrent_answers), thread_name_prefix="query-answer"
+            )
+        return _answer_pool
+
+
 def _call_with_timeout(context: str, question: str) -> str:
-    """The answer call under ``query_llm_timeout_sec``. A call that overruns is abandoned, not cancelled."""
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="query-answer")
+    """The answer call under ``query_llm_timeout_sec``, which is also passed to the provider so the model call
+    itself stops at the limit (the Claude CLI process is killed). Waiting for a free slot counts toward it."""
+    limit = settings.query_llm_timeout_sec
+    future = _get_answer_pool().submit(
+        contextvars.copy_context().run, claude_generate,
+        system=_ANSWER_SYSTEM, user=f"SOURCES:\n{context}\n\nQUESTION: {question}",
+        temperature=0.0, max_tokens=settings.query_max_answer_tokens, timeout_sec=limit,
+    )
     try:
-        future = pool.submit(
-            contextvars.copy_context().run, claude_generate,
-            system=_ANSWER_SYSTEM, user=f"SOURCES:\n{context}\n\nQUESTION: {question}",
-            temperature=0.0, max_tokens=settings.query_max_answer_tokens,
-        )
-        try:
-            return future.result(timeout=settings.query_llm_timeout_sec)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError(f"answer took longer than {settings.query_llm_timeout_sec:.0f}s") from None
-    finally:
-        pool.shutdown(wait=False)
+        return future.result(timeout=limit)
+    except concurrent.futures.TimeoutError:
+        future.cancel()  # still queued: never runs
+        raise TimeoutError(f"answer took longer than {limit:.0f}s") from None
 
 
 def generate_answer(context: str, question: str) -> tuple[str, int, list[dict[str, Any]]]:
@@ -657,6 +716,7 @@ def citations_for(answer: str, used: list[Source]) -> list[dict[str, Any]]:
                 {
                     "ref": f"S{n}",
                     "type": s.kind,
+                    "scope": s.scope,
                     "id": s.key,
                     "title": s.display_title(),
                     "filename": s.filename,
@@ -710,6 +770,7 @@ def claim_coverage(answer: str, used_count: int) -> dict[str, Any]:
 def _source_view(s: Source) -> dict[str, Any]:
     return {
         "type": s.kind,
+        "scope": s.scope,
         "id": s.key,
         "label": s.label(),
         "title": s.display_title(),
@@ -726,9 +787,13 @@ def _source_view(s: Source) -> dict[str, Any]:
     }
 
 
-def source_detail(db: Session, project_id: str, kind: str, key: str) -> dict[str, Any] | None:
-    """A cited source in full, with the same visibility rules as retrieval (None when the caller may not see it)."""
-    found = verify(db, project_id, [Source(kind=kind, key=key, score=0.0)])
+def source_detail(
+    db: Session, kind: str, key: str, *, index: str = LIBRARY_SCOPE, engagement_id: str | None = None
+) -> dict[str, Any] | None:
+    """A cited source in full, with the same visibility rules as retrieval (None when the caller may not see it).
+
+    With ``engagement_id`` the source is looked up in that engagement's uploads; the caller checks access to it."""
+    found = verify(db, engagement_id or index, [Source(kind=kind, key=key, score=0.0, engagement_id=engagement_id)])
     if not found:
         return None
     s = found[0]
@@ -743,6 +808,7 @@ def format_answer(result: QueryResult) -> str:
         lines = [
             f"[{c['ref']}] " + (f"Wiki: {c['title']}" if c["type"] == "wiki" else f"{c['filename']}"
                                 + (f", page {c['page_number']}" if c.get("page_number") else ""))
+            + (" (engagement document)" if c.get("scope") == "engagement" else " (Leading Practice Library)")
             for c in result.citations
         ]
         return result.answer + ("\n\nSources:\n" + "\n".join(lines) if lines else "")
@@ -761,19 +827,31 @@ def _finish(result: QueryResult, started: float) -> QueryResult:
     metrics.observe_latency("query_total", result.timings_ms["total"])
     if result.status == INSUFFICIENT and result.reason in {"no_results", "low_confidence", "low_verification"}:
         logger.warning("[QUERY] retrieval failure (%s) for %r: %s", result.reason, result.standalone_question, result.retrieval)
-    else:
-        logger.info("[QUERY] %s (%s) in %d ms, %d model call(s)", result.status, result.reason or "-",
-                    result.timings_ms["total"], result.model_calls)
+    cited = ", ".join(f"{c['ref']}={c['filename'] or c['title']} ({c['scope']})" for c in result.citations) or "-"
+    logger.info("[QUERY] done: status=%s reason=%s citations=[%s] coverage=%s timings=%s, %d model call(s)",
+                result.status, result.reason or "-", cited, result.coverage.get("ratio", "-"), result.timings_ms,
+                result.model_calls)
     return result
 
 
+def _short(text: str, limit: int = 120) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def answer_question(
-    db: Session, project_id: str, question: str, history: list[dict[str, str]] | None = None, top_k: int | None = None
+    db: Session, scope: QueryScope, question: str, history: list[dict[str, str]] | None = None, top_k: int | None = None
 ) -> QueryResult:
+    """Answer one question from ``scope``. ``history``: earlier turns as ``{role, content}``, for follow-ups.
+
+    Callers check access first (``src.query.service.ask``)."""
     history = history or []
     timings: dict[str, int] = {}
     calls = 0
     started = t = time.monotonic()
+    logger.info("[QUERY] start: engagement=%s library=%s practices=%s history=%d question=%r",
+                scope.engagement_id or "-", scope.index == LIBRARY_SCOPE, list(scope.practice_ids) or "all",
+                len(history), _short(question))
 
     # 1. understanding: analysis, expansion, embedding
     original = question.strip()
@@ -797,11 +875,23 @@ def answer_question(
     vectors = select_variants(variants, get_embedding_service().embed_batch([v["text"] for v in variants]))
     queries = [v["text"] for v in variants if v["embedded"]]
     timings["understanding"] = int((time.monotonic() - t) * 1000)
+    logger.info("[QUERY] 1/3 understanding: intent=%s type=%s language=%s follow_up=%s standalone=%r; %d variants, "
+                "%d embedded and searched %s (%d ms)", understanding["intent"], understanding["question_type"],
+                understanding["language"], understanding["is_follow_up"], _short(standalone), len(variants),
+                len(queries), [_short(q, 60) for q in queries], timings["understanding"])
 
     # 2. retrieval: search, validation, reranking
     t = time.monotonic()
-    ranked, stats = retrieve(db, project_id, standalone, vectors, top_k or settings.query_top_k)
+    ranked, stats = retrieve(db, scope, standalone, vectors, top_k or settings.query_top_k)
     timings["retrieval"] = int((time.monotonic() - t) * 1000)
+    logger.info("[QUERY] 2/3 retrieval: Qdrant hits library=%d engagement=%d -> verified in Postgres=%d, dropped "
+                "(low verification)=%d, reranker=%s, top_score=%.3f, kept=%d (%d ms)",
+                stats["candidates"] - stats["engagement_candidates"], stats["engagement_candidates"], stats["verified"],
+                stats["dropped_low_verification"], stats["reranker"], stats["top_score"], stats["final"],
+                timings["retrieval"])
+    for n, s in enumerate(ranked[:5], start=1):
+        logger.info("[QUERY]     #%d %s score=%.3f rank=%.3f %s: %s", n, s.scope, s.score, s.rank_score, s.label(),
+                    _short(s.text, 80))
     result = QueryResult(
         status=INSUFFICIENT, answer=_INSUFFICIENT_TEXT, answer_markdown=_INSUFFICIENT_TEXT, question=original,
         standalone_question=standalone, queries=queries, understanding=understanding, variants=variants,
@@ -835,6 +925,9 @@ def answer_question(
     timings["answer"] = int((time.monotonic() - t) * 1000)
     result.model_calls += attempts
     meta.update({"attempts": attempts, "errors": errors, "latency_ms": timings["answer"], "answer_chars": len(text)})
+    logger.info("[QUERY] 3/3 answer: %s/%s, context %d sources ~%d tokens, %d attempt(s), %d chars (%d ms)",
+                meta.get("provider"), meta.get("model"), len(used), len(context) // 4, attempts, len(text),
+                timings["answer"])
 
     if "INSUFFICIENT_EVIDENCE" in text:
         result.reason = "model_declined"

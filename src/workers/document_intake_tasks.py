@@ -38,5 +38,6 @@ def upload_to_seaweedfs(ctx: dict[str, Any]) -> dict[str, Any]:
         doc_file.seaweedfs_file_id = key
         doc_file.upload_source = "api_upload"
         db.commit()
-        logger.info("[INTAKE] job=%s recorded s3://%s/%s as %s", job_id, settings.s3_bucket, key, doc_file.id)
+        logger.info("[S3] job=%s project=%s file=%s stored in SeaweedFS s3://%s/%s (%d bytes); Postgres document_files id=%s",
+                    job_id, project_id, filename, settings.s3_bucket, key, stored["size"], doc_file.id)
         return {**ctx, "document_file_id": doc_file.id, "s3_bucket": settings.s3_bucket}

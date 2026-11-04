@@ -40,7 +40,6 @@ router.include_router(admin_library.router, prefix="/admin", tags=["admin-librar
 router.include_router(documents.router, prefix="/documents", tags=["documents"])
 router.include_router(documents_async.router, prefix="/admin/library/documents", tags=["library-documents"])
 router.include_router(query.router, prefix="/query", tags=["query"])
-router.include_router(query.admin_router, prefix="/admin/library/query", tags=["admin-library"])
 router.include_router(runs.router, prefix="/runs", tags=["runs"])
 router.include_router(swarm.router, prefix="/runs", tags=["swarm"])
 router.include_router(run_artifacts.router, prefix="/runs", tags=["run-artifacts"])

@@ -139,7 +139,8 @@ class Settings(BaseSettings):
     query_llm_timeout_sec: float = 90.0  # per answer attempt
     query_llm_retries: int = 2  # extra attempts after a timeout or API error
     query_llm_retry_backoff_sec: float = 1.0  # wait before retry n is n x this (doubled when rate limited)
-    query_event_retention_days: int = 90  # question log behind /api/admin/library/query/metrics
+    query_max_concurrent_answers: int = 8  # answer calls running at once per process; others wait (counted in the timeout)
+    query_rate_limit: str = "30/minute"  # POST /api/query per user
 
     anthropic_api_key: str = ""
 
@@ -407,6 +408,9 @@ class Settings(BaseSettings):
     advise_workbench_runs_debug_log: str = ""
     observability_snapshot_path: str = ""
     structured_logging_enabled: bool = False
+    # Console log level of the API process (DEBUG, INFO, WARNING). INFO shows the [UPLOAD], [SHELDON], [RAG_AGENT] and
+    # [QUERY] lines; the Celery worker prints its stage lines ([S3], [PARSE], [CHUNK], [EMBED]) with --loglevel=INFO.
+    log_level: str = "INFO"
 
     model_realtime_redis_channel_prefix: str = "advise-workbench:model-events"
     drawio_collab_channel_prefix: str = "advise-workbench:drawio-collab"

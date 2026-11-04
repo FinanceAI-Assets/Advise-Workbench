@@ -37,13 +37,17 @@ function formatTimestamp(iso: string | null): string {
  * ConversationThread already renders. Assistant replies render as a single
  * `body` paragraph (no synthetic phases, since the backend doesn't persist
  * a phase/citation-index structure) with a trailing citation line built
- * from metadata.wiki_context_refs (title-only references — see
- * _persist_assistant_plan_message in conversation.py).
+ * from metadata.wiki_context_refs (plan messages) or metadata.wiki_refs
+ * (conversational replies): title-only references, see conversation.py.
+ * Answers from the rag_agent (metadata.kind === "rag_answer") already end
+ * with their numbered source list; metadata.citations holds the details.
  */
 export function toConversationMessage(raw: RawConversationMessage): ConversationMessage {
-  const refs = Array.isArray(raw.metadata?.wiki_context_refs)
-    ? (raw.metadata.wiki_context_refs as unknown[]).filter((x): x is string => typeof x === "string")
-    : [];
+  const listed = raw.metadata?.wiki_context_refs ?? raw.metadata?.wiki_refs;
+  const refs =
+    raw.metadata?.kind !== "rag_answer" && Array.isArray(listed)
+      ? (listed as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
   const body = refs.length ? `${raw.content}\n\nSources: ${refs.join(" · ")}` : raw.content;
   return {
     id: String(raw.id),

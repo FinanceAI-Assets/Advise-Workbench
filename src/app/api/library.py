@@ -1,14 +1,16 @@
 """Catalog APIs for the workbench UI: the Leading Practice Library and the skills catalog.
 
 The practice catalog (`lp_practices`) carries the taxonomy, maturity, version
-and approval state the UI browses. Full-text retrieval over practice documents
-stays in `lp_library.py`. Skills come from the built-in skill definitions under
+and approval state the UI browses. Talk to data (`POST /library/ask`) answers
+catalog questions here and content questions through Sheldon's rag_agent (the
+query pipeline, `src/query`). Skills come from the built-in skill definitions under
 `config/skills`, enriched with catalog metadata from `workbench_records`.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +32,7 @@ from src.core.db.models import Conversation, LpPractice, Project, Run, SavedPrac
 from src.core.db.session import get_db
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _slug(label: str) -> str:
@@ -283,31 +286,52 @@ def ask_library(body: AskLibrary, user: User = Depends(get_current_user), db: Se
             scope,
         )
 
-    # A question about what the practices say: answer from the library passages, citing them.
+    # A question about what the practices say: Sheldon's rag_agent (the query pipeline), library only, cited.
     try:
-        from src.memory.knowledge.leading_practices import leading_practice_library_service
+        from src.agents.conversation import rag_agent
 
-        found = leading_practice_library_service.answer(
-            question, max_results=body.max_results, practice_ids=only or None
-        )
-    except Exception:  # noqa: BLE001 — retrieval or the model may be unavailable; the catalog match still helps
-        found = {}
-    sources = [
-        {
-            "heading": s.get("heading", ""),
-            "source": s.get("source", ""),
-            "text": (s.get("text") or "")[:280],
-            # The approved practice a passage belongs to; empty for library files outside the catalog.
-            "practiceId": s.get("practice_id") if s.get("practice_id") in by_id else "",
-        }
-        for s in found.get("sources") or []
-    ]
-    if found.get("answer") and sources:
-        return {**reply(found["answer"], matched), "sources": sources}
+        result = rag_agent.answer(
+            db, user_id=user.id, question=question, practice_ids=only or None, top_k=body.max_results
+        ).result
+    except Exception:  # noqa: BLE001 — search or the model may be unavailable; the catalog match still helps
+        logger.exception("Talk to data: query pipeline unavailable")
+        result = None
+    if result is not None and result.status == "answered" and result.citations:
+        return _cited_answer(result, by_id, matched)
+    outcome = {"status": result.status if result else "search_unavailable", "reason": result.reason if result else None}
     if matched:
         listed = ", ".join(p.title for p in matched[:5])
-        return reply(f"These approved practices match your question: {listed}. Open one to read its guidance.", matched)
-    return reply("Nothing in the approved library matches that question. Try a practice name, category or topic.", [])
+        return {**reply(f"These approved practices match your question: {listed}. Open one to read its guidance.", matched),
+                **outcome}
+    return {**reply("Nothing in the approved library supports an answer to that question. Try a practice name, "
+                    "category or topic.", []), **outcome}
+
+
+def _cited_answer(result, by_id: dict[str, LpPractice], matched: list[LpPractice]) -> dict:
+    """The pipeline's answer in Talk to data's shape: citations renumbered [1], [2] ... in the order they are first
+    cited, ``sources[i]`` being [i+1]; the full citations are kept under ``citations``."""
+    order = {c["ref"]: n for n, c in enumerate(result.citations, start=1)}
+    answer = re.sub(r"\[(S\d+)\]", lambda m: f"[{order[m.group(1)]}]" if m.group(1) in order else "", result.answer)
+    sources = [
+        {
+            "heading": c["title"],
+            "source": f"Wiki: {c['title']}" if c["type"] == "wiki" else (c.get("filename") or ""),
+            "text": (c.get("snippet") or "")[:280],
+            # The approved practice a passage belongs to; empty for library files outside the catalog.
+            "practiceId": c["practice_id"] if c.get("practice_id") in by_id else "",
+        }
+        for c in result.citations
+    ]
+    cited = [by_id[pid] for pid in dict.fromkeys(c.get("practice_id") for c in result.citations) if pid in by_id]
+    return {
+        "answer": answer,
+        "practices": [_ref(p) for p in (cited or matched)[:8]],
+        "documents": [],
+        "sources": sources,
+        "status": result.status,
+        "reason": None,
+        "citations": [{**c, "ref": str(order[c["ref"]])} for c in result.citations],
+    }
 
 
 class EngagementTarget(BaseModel):
