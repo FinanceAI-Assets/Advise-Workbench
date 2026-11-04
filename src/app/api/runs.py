@@ -28,6 +28,7 @@ from src.core.db.session import SessionLocal, get_db
 from src.app.schemas.common import RunSummary
 # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
 from src.llm import gateway
+from src.workflows.conversation_summary_worker import _generate_engagement_summary, _upsert_conversation_summary
 from src.llm.claude import claude_generate_json
 # is_claude_enabled
 from src.workflows.task_router.output_format_detection import (
@@ -1407,8 +1408,68 @@ def reset_queue_dead_letter_attempts(
     return {"project_id": project_id, "item": item}
 
 
+async def _handle_process_completion(db: Session, project_id: str) -> None:
+    """Handle process completion - generate and save summary when deliverable is finalized.
+
+    Triggers when a run/deliverable is approved and marked as complete.
+    Generates engagement summary with trigger="engagement_completed".
+    Saves to JSON file first (source of truth), then database.
+    """
+    try:
+        logger.info(f"[Process Completion] Generating summary for project {project_id}")
+
+        # Generate summary with completion trigger
+        summary = await _generate_engagement_summary(
+            db,
+            project_id,
+            trigger="engagement_completed",
+            idle_duration_sec=0
+        )
+
+        if summary:
+            # STEP 1: Save to conversation state JSON file FIRST (source of truth)
+            json_saved = False
+            try:
+                from src.memory.short_term.conversation_state import load_state, save_state
+
+                conversation = db.query(Conversation).filter(
+                    Conversation.project_id == project_id
+                ).order_by(Conversation.updated_at.desc()).first()
+
+                if conversation:
+                    logger.debug(f"[Process Completion] Loading state for {conversation.id}")
+                    conv_state = load_state(conversation)
+
+                    # Set the summary
+                    conv_state.conversation_summary = summary.summary_text
+
+                    # Save to JSON
+                    save_state(conversation, conv_state)
+                    json_saved = True
+
+                    logger.info(f"[Process Completion] Saved summary to JSON for {project_id}")
+                else:
+                    logger.warning(f"[Process Completion] No conversation found for {project_id}")
+
+            except Exception as json_e:
+                logger.error(f"[Process Completion] Failed to save to JSON: {json_e}", exc_info=True)
+
+            # STEP 2: Save to database SECOND - only if JSON save succeeded
+            if json_saved:
+                try:
+                    await _upsert_conversation_summary(db, summary)
+                    logger.info(f"[Process Completion] Saved summary to database for {project_id}")
+                except Exception as db_e:
+                    logger.error(f"[Process Completion] Failed to save to database: {db_e}", exc_info=True)
+        else:
+            logger.warning(f"[Process Completion] No summary generated for {project_id}")
+
+    except Exception as e:
+        logger.error(f"[Process Completion] Error handling completion for {project_id}: {e}", exc_info=True)
+
+
 @router.post("/{project_id}/{run_id}/final-approve")
-def final_approve_run_deliverable(
+async def final_approve_run_deliverable(
     project_id: str,
     run_id: str,
     body: FinalApproveRequest,
@@ -1508,6 +1569,9 @@ def final_approve_run_deliverable(
         run.status = "done"
         run.error_message = None
         append_run_event(db, run_id, "done", {"status": "done"})
+
+        # CHANGED: Trigger process completion summary when deliverable is finalized
+        await _handle_process_completion(db, project_id)
     else:
         run.status = "review_ready"
     db.commit()

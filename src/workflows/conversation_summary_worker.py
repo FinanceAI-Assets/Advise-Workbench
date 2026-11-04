@@ -54,10 +54,77 @@ async def check_idle_engagements_and_summarize(db: Session) -> dict:
             )
 
             if summary:
-                # UPSERT: Save or update summary
-                await _upsert_conversation_summary(db, summary)
-                summary_count += 1
-                logger.info(f"Summary saved for engagement {project_id} (idle {session.get_idle_duration_seconds()}s)")
+                # STEP 1: Save summary to conversation state JSON file FIRST (source of truth)
+                json_saved = False
+                try:
+                    from src.memory.short_term.conversation_state import load_state, save_state
+
+                    # LOGGING: Check what we're about to set
+                    logger.debug(f"[TRACE] summary.summary_text value: '{summary.summary_text}' (length={len(summary.summary_text) if summary.summary_text else 0})")
+                    logger.debug(f"[TRACE] summary.summary_text is None: {summary.summary_text is None}")
+                    logger.debug(f"[TRACE] summary.summary_text is empty: {summary.summary_text == ''}")
+
+                    conversation = db.query(Conversation).filter(
+                        Conversation.project_id == project_id
+                    ).order_by(Conversation.updated_at.desc()).first()
+
+                    if conversation:
+                        # LOGGING: Before loading
+                        logger.debug(f"[TRACE] Loading conversation state for {conversation.id}")
+                        conv_state = load_state(conversation)
+                        logger.debug(f"[TRACE] Loaded conv_state.conversation_summary BEFORE set: '{conv_state.conversation_summary}'")
+
+                        # LOGGING: Set the value
+                        logger.debug(f"[TRACE] Setting conv_state.conversation_summary = '{summary.summary_text}'")
+                        conv_state.conversation_summary = summary.summary_text
+                        logger.debug(f"[TRACE] Loaded conv_state.conversation_summary AFTER set: '{conv_state.conversation_summary}'")
+
+                        # LOGGING: Before saving
+                        json_output = conv_state.to_json()
+                        logger.debug(f"[TRACE] to_json() output length: {len(json_output)} chars")
+                        logger.debug(f"[TRACE] conversation_summary in JSON: {json_output.count('conversation_summary')}")
+
+                        import json as json_lib
+                        json_parsed = json_lib.loads(json_output)
+                        logger.debug(f"[TRACE] ACTUAL conversation_summary value in JSON: '{json_parsed.get('conversation_summary')}'")
+                        logger.debug(f"[TRACE] Is conversation_summary empty in JSON: {json_parsed.get('conversation_summary') == ''}")
+
+                        # Actually save to JSON (source of truth)
+                        save_state(conversation, conv_state)
+
+                        # VERIFY: Read back from JSON file to ensure it was actually saved
+                        from src.core.storage import workspace_path
+                        json_path = workspace_path(project_id) / "conversation_state" / f"{conversation.id}.json"
+
+                        if json_path.exists():
+                            verify_json = json.loads(json_path.read_text(encoding='utf-8'))
+                            saved_summary = verify_json.get('conversation_summary', '')
+
+                            if saved_summary == summary.summary_text:
+                                json_saved = True
+                                logger.info(f"[1/2] VERIFIED: Saved conversation_summary to JSON file for {project_id}")
+                            else:
+                                logger.warning(f"[1/2] JSON MISMATCH: Saved '{saved_summary[:50]}' but expected '{summary.summary_text[:50]}'")
+                                json_saved = False
+                        else:
+                            logger.error(f"[1/2] JSON FILE NOT FOUND after save: {json_path}")
+                            json_saved = False
+                    else:
+                        logger.warning(f"No conversation found to save JSON state for {project_id}")
+                except Exception as json_e:
+                    logger.error(f"[1/2] CRITICAL: Failed to save conversation_summary to JSON file: {json_e}", exc_info=True)
+
+                # STEP 2: Save to database SECOND (persistent storage) - only if JSON save succeeded
+                if json_saved:
+                    try:
+                        await _upsert_conversation_summary(db, summary)
+                        summary_count += 1
+                        logger.debug(f"[2/2] Saved summary to database for {project_id}")
+                        logger.info(f"Summary saved for engagement {project_id} (idle {session.get_idle_duration_seconds()}s) - JSON→DB sequence complete")
+                    except Exception as db_e:
+                        logger.error(f"[2/2] Failed to save summary to database: {db_e}", exc_info=True)
+                else:
+                    logger.error(f"Skipping database save because JSON save failed for {project_id}")
 
             # Close session after summarizing
             await EngagementSessionRegistry.close_session(project_id)
@@ -102,21 +169,79 @@ async def _generate_engagement_summary(
     # 2. Load current conversation state from JSON file
     conv_state = await _load_conversation_state_json(project_id, conversation.id)
 
-    # 3. Fetch recent messages (limit 50 to avoid token overflow)
+    # 3. Fetch ALL messages from conversation (entire history, not limited)
+    # CHANGED: Was limit(50), now fetch entire conversation history
+    # This ensures summary captures complete context regardless of conversation length
     messages = db.query(ConversationMessage).filter(
         ConversationMessage.conversation_id == conversation.id
     ).order_by(
-        ConversationMessage.created_at.desc()
-    ).limit(50).all()
+        ConversationMessage.created_at.asc()  # Chronological order (oldest first)
+    ).all()
 
     if not messages:
         logger.warning(f"No messages found in conversation {conversation.id}")
-        return None
+        # Don't return None - even empty conversation should get a summary
+        return ConversationSummary(
+            id=f"summary_{project_id}",
+            project_id=project_id,
+            summary_text="No conversation messages yet.",
+            summary_metadata_json=json.dumps({
+                "message_count": 0,
+                "generated_at": ist_now().isoformat()
+            }),
+            state_snapshot_json=json.dumps(conv_state.to_dict() if conv_state else {}),
+            discovery_slots_snapshot=json.dumps({}),
+            decision_answers_snapshot=json.dumps({}),
+            conversation_fsm_state=conv_state.state if conv_state else "unknown",
+            summary_trigger=trigger,
+            idle_duration_seconds=idle_duration_sec if trigger == "idle_10min" else None,
+            created_at=ist_now(),
+            updated_at=ist_now(),
+            expires_at=ist_now() + timedelta(days=30)
+        )
 
-    # 4. Extract discovery slots and decisions from message metadata
+    # 4. Build conversation transcript for LLM summarization (CHANGED: was metadata extraction)
+    # DEPRECATED:
+    # discovery_slots = {}
+    # decision_answers = {}
+    # for msg in reversed(messages):  # Chronological order
+    #     if msg.metadata_json:
+    #         try:
+    #             meta = json.loads(msg.metadata_json)
+    #             if "discovery" in meta:
+    #                 discovery_slots.update(meta["discovery"])
+    #             if "decision_answers" in meta:
+    #                 decision_answers.update(meta["decision_answers"])
+    #         except json.JSONDecodeError:
+    #             logger.warning(f"Failed to parse metadata for message {msg.id}")
+
+    # Build full conversation transcript in chronological order (oldest to newest)
+    # CHANGED: Use all messages (already in asc order), not reversed
+    # This preserves complete conversation flow for LLM summarization
+    transcript_lines = []
+    for msg in messages:  # Already chronological (asc from line 157)
+        role = msg.role.upper() if msg.role else "UNKNOWN"
+        content = msg.content or ""
+        # Truncate individual messages to ~500 chars to avoid token overflow
+        # But include ALL messages to preserve full conversation context
+        if len(content) > 500:
+            content = content[:500] + "..."
+        transcript_lines.append(f"{role}: {content}")
+
+    transcript = "\n".join(transcript_lines)
+
+    if not transcript.strip():
+        # Empty transcript - still generate summary
+        logger.debug(f"Empty conversation content for {conversation.id}")
+        summary_text = "Conversation started but no messages exchanged yet."
+    else:
+        # Generate LLM-based summary of ENTIRE conversation
+        summary_text = await _generate_conversation_summary_llm(transcript)
+
+    # 5. Extract metadata for analytics (optional)
     discovery_slots = {}
     decision_answers = {}
-    for msg in reversed(messages):  # Chronological order
+    for msg in reversed(messages):
         if msg.metadata_json:
             try:
                 meta = json.loads(msg.metadata_json)
@@ -125,18 +250,7 @@ async def _generate_engagement_summary(
                 if "decision_answers" in meta:
                     decision_answers.update(meta["decision_answers"])
             except json.JSONDecodeError:
-                logger.warning(f"Failed to parse metadata for message {msg.id}")
-
-    # 5. Generate hybrid summary
-    # Extract key points
-    key_points = {
-        "discovery_slots": list(discovery_slots.keys()),
-        "decisions_made": list(decision_answers.keys()),
-        "current_state": conv_state.state if conv_state else "unknown"
-    }
-
-    # Generate 2-3 line narrative (hybrid: structured + LLM)
-    summary_text = _generate_summary_text(key_points, discovery_slots, decision_answers)
+                logger.debug(f"Skipped metadata parse for message {msg.id}")
 
     # 6. Create summary record
     summary = ConversationSummary(
@@ -145,7 +259,6 @@ async def _generate_engagement_summary(
         summary_text=summary_text,
         summary_metadata_json=json.dumps({
             "message_count": len(messages),
-            "key_points": key_points,
             "generated_at": ist_now().isoformat()
         }),
         state_snapshot_json=json.dumps(conv_state.to_dict() if conv_state else {}),
@@ -163,41 +276,80 @@ async def _generate_engagement_summary(
     return summary
 
 
-def _generate_summary_text(
-    key_points: dict,
-    discovery_slots: dict,
-    decision_answers: dict
-) -> str:
-    """Generate 2-3 line summary from key points.
+# DEPRECATED: Old metadata-based summary generation
+# def _generate_summary_text(
+#     key_points: dict,
+#     discovery_slots: dict,
+#     decision_answers: dict
+# ) -> str:
+#     """Generate 2-3 line summary from key points.
+#     Extracts major conversation points into concise narrative.
+#     """
+#     lines = []
+#     if key_points.get("discovery_slots"):
+#         discovery_str = ", ".join(key_points["discovery_slots"][:3])
+#         lines.append(f"Discovered: {discovery_str}")
+#     if key_points.get("decisions_made"):
+#         decision_str = ", ".join(key_points["decisions_made"][:3])
+#         lines.append(f"Decided: {decision_str}")
+#     state = key_points.get("current_state", "in progress")
+#     lines.append(f"Status: {state}")
+#     return " | ".join(lines)
 
-    Extracts major conversation points into concise narrative.
+
+async def _generate_conversation_summary_llm(transcript: str) -> str:
+    """Generate 2-4 line natural language summary of conversation using LLM.
+
+    Summarizes actual conversation between user and assistant into concise narrative
+    that captures what was discussed, decisions made, and next steps.
 
     Args:
-        key_points: Dict of extracted key points
-        discovery_slots: Dict of discovery answers
-        decision_answers: Dict of decisions made
+        transcript: Full conversation transcript (USER: ... ASSISTANT: ...)
 
     Returns:
-        2-3 line summary text
+        2-4 line summary text from LLM
     """
+    from src.llm import gateway
 
-    lines = []
+    prompt = f"""Summarize the following conversation in 2-4 lines.
+Focus on: what was discussed, key decisions made, and any agreements or next steps.
+Keep it concise and actionable.
 
-    # Line 1: Current state + discovery
-    if key_points.get("discovery_slots"):
-        discovery_str = ", ".join(key_points["discovery_slots"][:3])  # First 3
-        lines.append(f"Discovered: {discovery_str}")
+Conversation:
+{transcript}
 
-    # Line 2: Decisions made
-    if key_points.get("decisions_made"):
-        decision_str = ", ".join(key_points["decisions_made"][:3])  # First 3
-        lines.append(f"Decided: {decision_str}")
+Summary:"""
 
-    # Line 3: Current conversation state
-    state = key_points.get("current_state", "in progress")
-    lines.append(f"Status: {state}")
+    # DEPRECATED: Old async gateway API
+    # try:
+    #     response = await gateway.agenerate(
+    #         model="claude-opus-5",
+    #         messages=[{"role": "user", "content": prompt}],
+    #         max_tokens=200,
+    #         temperature=0.3,
+    #     )
+    #     summary = response.content.strip() if response.content else ""
 
-    return " | ".join(lines)
+    # NEW: Use gateway.create_message() with proper API
+    try:
+        from src.agents.tool_agent import _extract_final_text_from_message
+
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=200,
+            temperature=0.3,
+            system="You are a concise conversation summarizer. Generate a 2-4 line summary.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        summary = _extract_final_text_from_message(msg).strip()
+        if not summary:
+            logger.warning("LLM returned empty summary")
+            return "Conversation was held. Details to be documented."
+        logger.debug(f"Generated LLM summary: {summary[:100]}...")
+        return summary
+    except Exception as e:
+        logger.error(f"Failed to generate LLM summary: {e}", exc_info=True)
+        return "Conversation summary could not be generated. Manual review recommended."
 
 
 async def _upsert_conversation_summary(

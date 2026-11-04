@@ -34,7 +34,7 @@ from src.core.db.models import (
     Run,
     User,
 )
-from src.core.db.session import get_db
+from src.core.db.session import get_db, SessionLocal
 from src.app.api.projects._engagement_context import engagement_brief_text, engagement_discovery
 from src.workflows.conversation_graph import run_turn
 from src.workflows.task_router.conversation_router import fallback_decision, route_turn
@@ -121,6 +121,7 @@ def _record_activity_sync(project_id: str) -> None:
 	"""Sync wrapper for recording engagement activity.
 
 	Called from background tasks to avoid event loop issues in sync routes.
+	Updates both in-memory registry and database engagement_meta.
 	"""
 	try:
 		import asyncio
@@ -130,14 +131,33 @@ def _record_activity_sync(project_id: str) -> None:
 			loop.run_until_complete(EngagementSessionRegistry.record_activity(project_id))
 		finally:
 			loop.close()
+
+		# Also update database last_activity_at for idle detection
+		db = SessionLocal()
+		try:
+			engagement = db.query(EngagementMeta).filter(
+				EngagementMeta.project_id == project_id
+			).first()
+			if engagement:
+				engagement.last_activity_at = ist_now()
+				db.commit()
+				_LOG.debug(f"Updated last_activity_at for project {project_id}")
+			else:
+				_LOG.warning(f"No engagement found for project {project_id}")
+		except Exception as db_e:
+			db.rollback()
+			_LOG.error(f"Failed to update last_activity_at in DB: {db_e}", exc_info=True)
+		finally:
+			db.close()
 	except Exception as e:
-		_LOG.debug(f"Failed to record activity: {e}")
+		_LOG.error(f"Failed to record activity: {e}", exc_info=True)
 
 
-def _start_session_sync(project_id: str, idle_timeout: int = 600) -> None:
+def _start_session_sync(project_id: str, idle_timeout: int = 120) -> None:
 	"""Sync wrapper for starting engagement session.
 
 	Called from background tasks to avoid event loop issues in sync routes.
+	Updates both in-memory registry and database engagement_meta.
 	"""
 	try:
 		import asyncio
@@ -147,8 +167,127 @@ def _start_session_sync(project_id: str, idle_timeout: int = 600) -> None:
 			loop.run_until_complete(EngagementSessionRegistry.start_session(project_id, idle_timeout))
 		finally:
 			loop.close()
+
+		# Also update database last_activity_at when session starts
+		db = SessionLocal()
+		try:
+			engagement = db.query(EngagementMeta).filter(
+				EngagementMeta.project_id == project_id
+			).first()
+			if engagement:
+				engagement.last_activity_at = ist_now()
+				db.commit()
+				_LOG.debug(f"Updated last_activity_at for project {project_id}")
+		except Exception as db_e:
+			db.rollback()
+			_LOG.error(f"Failed to update last_activity_at in DB: {db_e}", exc_info=True)
+		finally:
+			db.close()
 	except Exception as e:
-		_LOG.debug(f"Failed to start engagement session: {e}")
+		_LOG.error(f"Failed to start engagement session: {e}", exc_info=True)
+
+
+async def _handle_fsm_state_transition_to_done(
+	db: Session,
+	project_id: str,
+	user_id: str,
+	new_state: str
+) -> None:
+	"""Detect and handle FSM state transition to 'done'.
+
+	When conversation FSM transitions to 'done' state, trigger summary generation.
+	This captures completions driven by natural FSM progression (not just explicit
+	completion endpoint or deliverable finalization).
+
+	Args:
+		db: Database session
+		project_id: Project/engagement ID
+		user_id: User ID
+		new_state: The new state being transitioned to
+	"""
+	if new_state != "done":
+		return  # Only handle transitions to "done" state
+
+	try:
+		_LOG.info(f"[FSM State Transition] Detected transition to 'done' state for {project_id}")
+
+		# Generate summary with fsm_done trigger
+		from src.workflows.conversation_summary_worker import _generate_engagement_summary, _upsert_conversation_summary
+
+		summary = await _generate_engagement_summary(
+			db,
+			project_id,
+			trigger="engagement_completed",  # Use same trigger as explicit completion
+			idle_duration_sec=0
+		)
+
+		if summary:
+			# STEP 1: Save to JSON file FIRST (source of truth)
+			json_saved = False
+			try:
+				from src.memory.short_term.conversation_state import load_state, save_state
+
+				conv = db.query(Conversation).filter(
+					Conversation.project_id == project_id,
+					Conversation.user_id == user_id
+				).order_by(Conversation.created_at.desc()).first()
+
+				if conv:
+					conv_state = load_state(conv)
+					conv_state.conversation_summary = summary.summary_text
+					save_state(conv, conv_state)
+					json_saved = True
+
+					_LOG.info(f"[FSM State Transition] Saved summary to JSON for {project_id}")
+			except Exception as json_e:
+				_LOG.error(f"[FSM State Transition] Failed to save to JSON: {json_e}", exc_info=True)
+
+			# STEP 2: Save to database SECOND - only if JSON save succeeded
+			if json_saved:
+				try:
+					await _upsert_conversation_summary(db, summary)
+					_LOG.info(f"[FSM State Transition] Saved summary to database for {project_id}")
+				except Exception as db_e:
+					_LOG.error(f"[FSM State Transition] Failed to save to database: {db_e}", exc_info=True)
+
+	except Exception as e:
+		_LOG.error(f"[FSM State Transition] Error handling done state for {project_id}: {e}", exc_info=True)
+
+
+# Track previous state to detect transitions (for FSM state change detection)
+_previous_state_cache: dict[str, str] = {}
+
+
+async def save_state_with_fsm_check(
+	conv: Conversation,
+	state: ConversationState,
+	db: Session,
+	user_id: str
+) -> None:
+	"""Wrapper around save_state that detects FSM transitions to 'done' state.
+
+	When conversation state transitions from any state to 'done', this triggers
+	summary generation to capture engagement completion driven by FSM progression.
+
+	Args:
+		conv: Conversation object
+		state: ConversationState to save
+		db: Database session
+		user_id: User ID for summary generation
+	"""
+	old_state = _previous_state_cache.get(conv.project_id, "unknown")
+	new_state = state.state
+
+	# Save state to JSON file
+	save_state(conv, state)
+
+	# Detect transition to "done" and trigger summary if it's a real transition
+	if old_state != new_state and new_state == "done":
+		_LOG.info(f"[FSM Transition] {conv.project_id}: {old_state} → {new_state}")
+		await _handle_fsm_state_transition_to_done(db, conv.project_id, user_id, new_state)
+
+	# Update cache for next time
+	_previous_state_cache[conv.project_id] = new_state
 
 
 def _generate_and_execute_plan(
@@ -1655,7 +1794,7 @@ def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: Us
                 state_dict = json.loads(summary.state_snapshot_json)
                 conv_state = ConversationState.from_dict(state_dict)
                 # Save restored state to JSON file
-                save_state(pid, conv.id, conv_state)
+                save_state(conv, conv_state)
                 # Mark as restored
                 summary.restored_at = ist_now()
                 db.commit()
@@ -1702,14 +1841,14 @@ def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: Us
             engagement = EngagementMeta(
                 id=f"em_{uuid.uuid4().hex[:10]}",
                 project_id=pid,
-                idle_timeout_seconds=600,
+                idle_timeout_seconds=120,
                 enable_idle_detection=True,
             )
             db.add(engagement)
             db.commit()
             _LOG.debug(f"Created engagement metadata for project {pid}")
 
-        idle_timeout = engagement.idle_timeout_seconds if engagement else 600
+        idle_timeout = engagement.idle_timeout_seconds if engagement else 120
         if background_tasks:
             background_tasks.add_task(_start_session_sync, pid, idle_timeout)
     except Exception as e:
@@ -2187,7 +2326,30 @@ def _post_project_conversation_message_impl(
     try:
         conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
         state = load_state(conv)
+        old_state = _previous_state_cache.get(pid, "unknown")
+        new_state = state.state
+
         save_state(conv, state)
+
+        # CHANGED: Trigger process completion summary when FSM transitions to "done"
+        if old_state != new_state and new_state == "done":
+            _LOG.info(f"[FSM Transition] Detected transition to 'done': {pid} ({old_state} → {new_state})")
+            # Run FSM transition handler asynchronously in background
+            import asyncio
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        _handle_fsm_state_transition_to_done(db, pid, user.id, new_state)
+                    )
+                finally:
+                    loop.close()
+            except Exception as fsm_e:
+                _LOG.error(f"Failed to handle FSM transition for {pid}: {fsm_e}", exc_info=True)
+
+        # Update cache for next time
+        _previous_state_cache[pid] = new_state
     except Exception as e:
         _LOG.debug(f"Failed to persist conversation state: {e}")
     # END NEW
@@ -2465,6 +2627,7 @@ def _turn_route(turn: Turn) -> dict | None:
             project_context=project_context,
             available_output_types=available_output_types,
             history_summary=state.history_summary,
+            conversation_summary=state.conversation_summary,
             memory_profile=memory_profile,
         )
 
@@ -2834,6 +2997,10 @@ def post_project_conversation_decisions(
     if background:
         from src.app.api.projects.conversation_turns import start_background
 
+        # Record activity for idle detection before background processing
+        _start_session_sync(pid)
+        _record_activity_sync(pid)
+
         return start_background(pid, user, db, lambda session, who, _on_phase: post_project_conversation_decisions(pid, body, False, who, session))
     require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
     conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
@@ -2976,6 +3143,10 @@ def post_project_conversation_outline(
     if background:
         from src.app.api.projects.conversation_turns import start_background
 
+        # Record activity for idle detection before background processing
+        _start_session_sync(pid)
+        _record_activity_sync(pid)
+
         return start_background(pid, user, db, lambda session, who, _on_phase: post_project_conversation_outline(pid, body, False, who, session))
     require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
     conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
@@ -3117,8 +3288,25 @@ def close_engagement_session(
 					_generate_engagement_summary(db, pid, "user_navigation_away", idle_duration)
 				)
 				if summary:
-					loop.run_until_complete(_upsert_conversation_summary(db, summary))
-					_LOG.info(f"Generated summary for engagement {pid} on user navigation away")
+					# STEP 1: Save to JSON file FIRST (source of truth)
+					json_saved = False
+					try:
+						from src.memory.short_term.conversation_state import load_state, save_state
+						conv_state = load_state(conv)
+						conv_state.conversation_summary = summary.summary_text
+						save_state(conv, conv_state)
+						json_saved = True
+						_LOG.debug(f"[1/2] Saved conversation_summary to JSON file for {pid} (user_navigation_away)")
+					except Exception as json_e:
+						_LOG.error(f"[1/2] Failed to save summary to JSON file: {json_e}")
+
+					# STEP 2: Save to database SECOND (persistent storage)
+					if json_saved:
+						loop.run_until_complete(_upsert_conversation_summary(db, summary))
+						_LOG.debug(f"[2/2] Saved summary to database for {pid} (user_navigation_away)")
+						_LOG.info(f"Generated summary for engagement {pid} on user navigation away - JSON→DB sequence complete")
+					else:
+						_LOG.error(f"Skipping database save because JSON save failed for {pid}")
 			finally:
 				loop.close()
 	except Exception as e:
@@ -3263,6 +3451,75 @@ def confirm_project_conversation_plan(
     }
 
 
+# NEW: Process Completion endpoint - Mark engagement as complete
+@router.post("/{pid}/conversation/complete")
+async def mark_conversation_complete(
+    pid: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Mark conversation/engagement as complete and generate final summary.
+
+    Triggers when user explicitly marks engagement as complete (e.g., clicks "Done" button).
+    Generates and saves engagement summary with trigger="engagement_completed".
+    Saves to JSON file FIRST (source of truth), then database.
+    """
+    require_project_role(pid, {"Owner", "Editor"}, user, db)
+
+    try:
+        _LOG.info(f"[Explicit Completion] User {user.id} marked engagement {pid} as complete")
+
+        # Generate summary with completion trigger
+        from src.workflows.conversation_summary_worker import _generate_engagement_summary, _upsert_conversation_summary
+
+        summary = await _generate_engagement_summary(
+            db,
+            pid,
+            trigger="engagement_completed",
+            idle_duration_sec=0
+        )
+
+        if summary:
+            # STEP 1: Save to JSON file FIRST (source of truth)
+            json_saved = False
+            try:
+                from src.memory.short_term.conversation_state import load_state, save_state
+
+                conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
+
+                if conv:
+                    conv_state = load_state(conv)
+                    conv_state.conversation_summary = summary.summary_text
+                    save_state(conv, conv_state)
+                    json_saved = True
+
+                    _LOG.info(f"[Explicit Completion] Saved summary to JSON for {pid}")
+            except Exception as json_e:
+                _LOG.error(f"[Explicit Completion] Failed to save to JSON: {json_e}", exc_info=True)
+
+            # STEP 2: Save to database SECOND - only if JSON save succeeded
+            if json_saved:
+                try:
+                    await _upsert_conversation_summary(db, summary)
+                    _LOG.info(f"[Explicit Completion] Saved summary to database for {pid}")
+                except Exception as db_e:
+                    _LOG.error(f"[Explicit Completion] Failed to save to database: {db_e}", exc_info=True)
+
+        return {
+            "status": "completed",
+            "project_id": pid,
+            "summary_generated": summary is not None,
+            "message": "Engagement marked as complete. Summary generated and saved."
+        }
+
+    except Exception as e:
+        _LOG.error(f"[Explicit Completion] Error marking completion for {pid}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=_detail("completion_error", f"Failed to mark engagement as complete: {str(e)}")
+        )
+
+
 # NEW: Phase 3 - Close engagement session endpoint
 @router.post("/{pid}/close-engagement-session")
 def close_engagement_session(
@@ -3292,8 +3549,34 @@ def close_engagement_session(
                     db, pid, "session_closed", session_meta.get("idle_duration_sec", 0)
                 )
                 if summary:
-                    await _upsert_conversation_summary(db, summary)
-                    return {"status": "closed_with_summary", "idle_duration_sec": session_meta.get("idle_duration_sec")}
+                    # STEP 1: Save to JSON file FIRST (source of truth)
+                    json_saved = False
+                    try:
+                        from src.memory.short_term.conversation_state import load_state, save_state
+                        conversation = db.query(Conversation).filter(
+                            Conversation.project_id == pid
+                        ).order_by(Conversation.updated_at.desc()).first()
+
+                        if conversation:
+                            conv_state = load_state(conversation)
+                            conv_state.conversation_summary = summary.summary_text
+                            save_state(conversation, conv_state)
+                            json_saved = True
+                            _LOG.debug(f"[1/2] Saved conversation_summary to JSON file for {pid} (session_closed)")
+                    except Exception as json_e:
+                        _LOG.error(f"[1/2] Failed to save summary to JSON file on session close: {json_e}")
+
+                    # STEP 2: Save to database SECOND (persistent storage)
+                    if json_saved:
+                        try:
+                            from src.workflows.conversation_summary_worker import _upsert_conversation_summary
+                            await _upsert_conversation_summary(db, summary)
+                            _LOG.debug(f"[2/2] Saved summary to database for {pid} (session_closed)")
+                            return {"status": "closed_with_summary", "idle_duration_sec": session_meta.get("idle_duration_sec")}
+                        except Exception as db_e:
+                            _LOG.error(f"[2/2] Failed to save summary to database on session close: {db_e}")
+                    else:
+                        _LOG.error(f"Skipping database save because JSON save failed for {pid}")
             except Exception as e:
                 _LOG.error(f"Failed to generate summary on session close: {e}")
 

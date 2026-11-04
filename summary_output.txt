@@ -1,0 +1,3 @@
+**Conversation Summary:**
+
+Priyanka is testing conversation summary code by building a single-slide test case. Agreed to SCQA narrative approach (Situation → Complication → Key Question → Answer) for Northwind manufacturing automation project. Validated Slides 2–3 (bottleneck identification & critical question). **Next:** Complete remaining slides and finalize JSON file structure for summary storage/update testing.

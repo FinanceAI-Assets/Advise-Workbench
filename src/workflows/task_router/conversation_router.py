@@ -102,6 +102,7 @@ def route_turn(
     project_context: str,
     available_output_types: list[dict[str, Any]],
     history_summary: str = "",
+    conversation_summary: str = "",
     memory_profile: dict[str, Any] | None = None,
 ) -> RouterDecision:
     catalog = [
@@ -136,11 +137,14 @@ def route_turn(
         "{client:{name,industry}, outcome:{primary,decision}, win_themes:[...], audience, narrative_arc, tone}.\n"
         "missing_slots values should come from: client, outcome, win_themes.\n"
     )
-    summary_prefix = (
-        f"Conversation summary (prior turns):\n{history_summary}\n\n"
-        if history_summary.strip()
-        else ""
-    )
+    # Build context with both history summary (10-msg rolling) and conversation summary (idle checkpoint)
+    summary_parts = []
+    if conversation_summary.strip():
+        summary_parts.append(f"Session summary (auto-generated on idle/checkpoint):\n{conversation_summary}")
+    if history_summary.strip():
+        summary_parts.append(f"Rolling conversation summary (prior 20+ messages):\n{history_summary}")
+    summary_prefix = "\n\n".join(summary_parts) + "\n\n" if summary_parts else ""
+
     user = (
         f"{summary_prefix}"
         f"Current state: {conv_state}\n\n"

@@ -14,12 +14,12 @@ from src.core.tz import ist_now
 class EngagementSession:
     """Tracks active engagement session (one per engagement)."""
 
-    def __init__(self, project_id: str, idle_timeout_sec: int = 600):
+    def __init__(self, project_id: str, idle_timeout_sec: int = 120):
         """Initialize engagement session.
 
         Args:
             project_id: Project/engagement ID
-            idle_timeout_sec: Idle timeout in seconds (default 10 minutes)
+            idle_timeout_sec: Idle timeout in seconds (default 2 minutes)
         """
         self.project_id = project_id
         self.idle_timeout_sec = idle_timeout_sec
@@ -55,7 +55,7 @@ class EngagementSessionRegistry:
     _lock = asyncio.Lock()
 
     @classmethod
-    async def start_session(cls, project_id: str, idle_timeout_sec: int = 600) -> EngagementSession:
+    async def start_session(cls, project_id: str, idle_timeout_sec: int = 120) -> EngagementSession:
         """Start or resume engagement session.
 
         If session already exists, resets idle timer (resume).
@@ -63,7 +63,7 @@ class EngagementSessionRegistry:
 
         Args:
             project_id: Project/engagement ID
-            idle_timeout_sec: Idle timeout in seconds
+            idle_timeout_sec: Idle timeout in seconds (default 2 minutes)
 
         Returns:
             EngagementSession instance

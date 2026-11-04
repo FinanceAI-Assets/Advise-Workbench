@@ -97,7 +97,7 @@ class EngagementMeta(Base):
     # Idle detection & session management
     engagement_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    idle_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600, server_default="600")
+    idle_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120, server_default="120")
     enable_idle_detection: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
