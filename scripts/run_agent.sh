@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Advise Workbench: check the environment, then run bridge + backend + frontend together.
 #
-#   ./scripts/run_agent.sh           prechecks, then start everything (Ctrl+C stops it all)
-#   ./scripts/run_agent.sh --check   prechecks only
-#   ./scripts/run_agent.sh --fix     prechecks, repairing what is safe to repair, then start
-#   ./scripts/run_agent.sh --check --fix   repair, report, and exit
+#   ./scripts/run_agent.sh           prechecks, then start everything (Ctrl+C stops it all); missing Python and
+#                                    frontend packages (and .venv) are installed automatically
+#   ./scripts/run_agent.sh --check   prechecks only (reports missing packages, installs nothing)
+#   ./scripts/run_agent.sh --fix     also repairs .env settings that are safe to repair, then start
+#   ./scripts/run_agent.sh --check --fix   repair and install, report, and exit
 #
 # Before the other checks it makes sure Postgres, Redis and RabbitMQ answer (starting local ones with
 # scripts/infra.sh) and that the shared-service links in .env (Qdrant, S3, embeddings, ...) are reachable.
@@ -318,45 +319,68 @@ fi
 
 pass "run orchestrator: LangGraph (runs resume from checkpoints after a restart)"
 
+# Packages are installed automatically when missing (no --fix needed); only "--check" on its own just reports.
+INSTALL=1; [ "$CHECK_ONLY" = 1 ] && [ "$FIX" = 0 ] && INSTALL=0
+PIP_LOG="$RUN_DIR/pip-install.log"; NPM_LOG="$RUN_DIR/npm-install.log"; mkdir -p "$RUN_DIR"
+pip_install() { # requirements-file -> 0 when installed; output in $PIP_LOG
+  "$VPY" -m pip install --upgrade pip setuptools wheel >>"$PIP_LOG" 2>&1
+  "$VPY" -m pip install -r "$1" >>"$PIP_LOG" 2>&1
+}
+
 section "Backend packages"
 if [ ! -x "$VPY" ]; then
-  if [ "$FIX" = 1 ] && [ -n "$PY" ]; then
-    echo "        creating virtual environment and installing packages (several minutes)..."
-    "$PY" -m venv "$VENV"
+  if [ "$INSTALL" = 1 ] && [ -n "$PY" ]; then
+    echo "        .venv is missing: creating it and installing packages (several minutes; log: $PIP_LOG)..."
+    : > "$PIP_LOG"
+    "$PY" -m venv "$VENV" >>"$PIP_LOG" 2>&1
     [ -x "$VENV/Scripts/python.exe" ] && VPY="$VENV/Scripts/python.exe" || VPY="$VENV/bin/python"
-    if [ -x "$VPY" ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then
+    if [ -x "$VPY" ] && pip_install "$ROOT/requirements-dev.txt"; then
       fixed "created .venv and installed packages"
-    else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
-  else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+    else fail "package installation failed (see $PIP_LOG)" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+  elif [ -z "$PY" ]; then fail ".venv is missing and no Python 3.11 was found to create it" "install Python 3.11, then run this script again"
+  else fail ".venv is missing" "run without --check (it is created automatically), or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
 fi
 if [ -x "$VPY" ]; then
-  MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
+  missing_packages() {
+    "$VPY" - <<'PYEOF' 2>/dev/null
 import importlib
 names = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "anthropic", "pptx", "docx", "openpyxl", "reportlab", "sentence_transformers", "faiss",
          "celery", "boto3", "qdrant_client", "docling"]
 print(" ".join(n for n in names if importlib.util.find_spec(n) is None))
 PYEOF
-)"
+  }
+  MISSING="$(missing_packages)"
   if [ -z "$MISSING" ]; then pass "key Python packages are installed"
-  elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
-  else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
+  elif [ "$INSTALL" = 1 ]; then
+    echo "        installing missing Python packages: $MISSING (log: $PIP_LOG)..."
+    : > "$PIP_LOG"
+    if pip_install "$ROOT/requirements-dev.txt" && [ -z "$(missing_packages)" ]; then fixed "installed missing packages: $MISSING"
+    else fail "package installation failed; still missing: $(missing_packages) (see $PIP_LOG)" ".venv/bin/pip install -r requirements-dev.txt"; fi
+  else fail "missing Python packages: $MISSING" "run without --check (they are installed automatically), or: .venv/bin/pip install -r requirements-dev.txt"; fi
 
   ANTHROPIC_V="$("$VPY" -c 'from importlib.metadata import version; print(version("anthropic"))' 2>/dev/null)"
   case "$ANTHROPIC_V" in
     0.*) pass "anthropic $ANTHROPIC_V (below 1.0, as this code needs)" ;;
     "") : ;;
-    *) if [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements.txt"; then fixed "reinstalled pinned packages (anthropic below 1.0)"
+    *) if [ "$INSTALL" = 1 ] && pip_install "$ROOT/requirements.txt"; then fixed "reinstalled pinned packages (anthropic below 1.0)"
        else fail "anthropic $ANTHROPIC_V rejects the 'temperature' argument this code sends" ".venv/bin/pip install -r requirements.txt"; fi ;;
   esac
 fi
 
 section "Frontend packages"
+npm_install() { (cd "$FRONTEND" && npm install --no-fund --no-audit >"$NPM_LOG" 2>&1); }
 if [ ! -x "$FRONTEND/node_modules/.bin/next" ]; then
-  if [ "$FIX" = 1 ] && (cd "$FRONTEND" && npm install --no-fund --no-audit >/dev/null 2>&1); then fixed "ran npm install"
-  else fail "frontend packages are not installed" "cd frontend && npm install   (or run with --fix)"; fi
+  if [ "$INSTALL" = 1 ]; then
+    echo "        frontend packages are missing: running npm install (a few minutes; log: $NPM_LOG)..."
+    if npm_install; then fixed "ran npm install"
+    else fail "npm install failed (see $NPM_LOG)" "cd frontend && npm install"; fi
+  else fail "frontend packages are not installed" "run without --check (installed automatically), or: cd frontend && npm install"; fi
 elif [ "$FRONTEND/package-lock.json" -nt "$FRONTEND/node_modules/.package-lock.json" ]; then
-  if [ "$FIX" = 1 ] && (cd "$FRONTEND" && npm install --no-fund --no-audit >/dev/null 2>&1); then fixed "refreshed frontend packages (npm install)"
-  else warn "package-lock.json changed after the last npm install; packages may be out of date" "cd frontend && npm install   (or run with --fix)"; fi
+  if [ "$INSTALL" = 1 ]; then
+    echo "        package-lock.json changed since the last npm install: refreshing (log: $NPM_LOG)..."
+    if npm_install; then fixed "refreshed frontend packages (npm install)"
+    else warn "npm install failed; packages may be out of date (see $NPM_LOG)" "cd frontend && npm install"; fi
+  else warn "package-lock.json changed after the last npm install; packages may be out of date" "run without --check, or: cd frontend && npm install"; fi
 else pass "frontend packages are installed"; fi
 
 section "Database and folders"
@@ -427,10 +451,12 @@ if [ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 1 ]; then
   OO_UP=1
 elif [ "$OO_ENABLED" = "true" ]; then
   S="$(check_port openobserve "$OO_PORT" "$OO_URL/healthz")"
+  # Monitoring is optional: when the local OpenObserve cannot be started, warn and start everything else
+  # (OO_UP=1 here only means "do not start it"); the app runs without exporting telemetry.
   case "$S" in up) OO_UP=1; pass "OpenObserve already running on $OO_PORT" ;;
     free) if [ -x "$ROOT/.tools/openobserve/openobserve" ]; then pass "port $OO_PORT is free for OpenObserve"
-          else fail "OPENOBSERVE_ENABLED=true but OpenObserve is not installed" "./scripts/openobserve.sh setup"; fi ;;
-    *) fail "port $OO_PORT is used by ${S#busy:}" "stop that process or change OPENOBSERVE_URL" ;; esac
+          else OO_UP=1; warn "OPENOBSERVE_ENABLED=true but OpenObserve is not installed; starting without it" "./scripts/openobserve.sh setup, or set OPENOBSERVE_ENABLED=false"; fi ;;
+    *) OO_UP=1; warn "port $OO_PORT is used by ${S#busy:}; starting without OpenObserve" "stop that process or change OPENOBSERVE_URL" ;; esac
 fi
 
 section "Optional tools"
@@ -518,13 +544,20 @@ fi
 if [ "$BACKEND_UP" = 0 ]; then
   start_service backend "$ROOT" "$VPY" -m uvicorn src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
   wait_http backend "http://127.0.0.1:$BACKEND_PORT/health" 120 "$PID_backend" || cleanup 1
-  # Document ingestion pipeline worker (S3 -> Docling -> Postgres chunks -> Qdrant); solo pool works on Windows.
-  if bash "$INFRA_SH" check rabbitmq >/dev/null 2>&1; then
-    start_service worker "$ROOT" "$VPY" -m celery -A src.workers.celery_app worker --pool=solo --loglevel=INFO
-    WORKER_STARTED=1
-  else
-    echo "[worker] RabbitMQ is not running, so the ingestion worker was not started (./scripts/infra.sh start rabbitmq)"
-  fi
+fi
+# Document ingestion pipeline worker (S3 -> Docling -> Postgres chunks -> Qdrant); solo pool works on Windows.
+# Started even when the backend was already running: without it, uploads stay "pending". A worker this script
+# started earlier is reused. (Other workers on a shared broker are not counted: they may run other code.)
+WORKER_PID_FILE="$RUN_DIR/worker.pid"
+if [ -f "$WORKER_PID_FILE" ] && kill -0 "$(cat "$WORKER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
+  echo "[worker] already running (pid $(cat "$WORKER_PID_FILE"), log: $RUN_DIR/worker.log)"
+  WORKER_STARTED=1
+elif bash "$INFRA_SH" check rabbitmq >/dev/null 2>&1; then
+  start_service worker "$ROOT" "$VPY" -m celery -A src.workers.celery_app worker --pool=solo --loglevel=INFO
+  WORKER_STARTED=1
+else
+  echo "[worker] RabbitMQ (CELERY_BROKER_URL) does not answer, so the ingestion worker was not started:" \
+       "uploads will stay 'pending' (./scripts/infra.sh start rabbitmq, or fix CELERY_BROKER_URL in .env)"
 fi
 if [ "$FRONTEND_UP" = 0 ]; then
   export API_PROXY_TARGET="http://127.0.0.1:$BACKEND_PORT"

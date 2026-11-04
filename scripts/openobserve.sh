@@ -30,6 +30,23 @@ url() { u="$(env_get OPENOBSERVE_URL)"; echo "${u:-http://localhost:5080}"; }
 
 install() {
   [ -x "$BIN" ] && { echo "OpenObserve already installed: $("$BIN" --version)"; return 0; }
+
+  # Windows: check for pre-installed binary
+  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    WINDOWS_BIN="/d/Users/ChiragJain/Workbench_APP/openobserve-ee-v1.1.0-windows-amd64/openobserve.exe"
+    if [ -f "$WINDOWS_BIN" ]; then
+      echo "Found Windows OpenObserve binary at: $WINDOWS_BIN"
+      mkdir -p "$BIN_DIR"
+      cp "$WINDOWS_BIN" "$BIN"
+      echo "Linked: OpenObserve $(\"$BIN\" --version 2>/dev/null || echo 'configured')"
+      return 0
+    else
+      echo "Windows OpenObserve binary not found at: $WINDOWS_BIN"
+      echo "Please ensure the binary exists at that location or download from OpenObserve."
+      exit 1
+    fi
+  fi
+
   case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) PLATFORM=darwin-arm64 ;;
     Darwin-x86_64) PLATFORM=darwin-amd64 ;;

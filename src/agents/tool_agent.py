@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -14,6 +15,7 @@ from src.tools.code_executor.bash_executor import get_bash_executor, new_session
 from src.llm.claude import is_claude_enabled
 from src.core.observability.langfuse_tracing import langfuse_span
 from src.core.observability.metrics import increment
+from src.core.observability.advanced_metrics import record_tool_call
 from src.llm.run_budget import charge_llm_usage, extract_usage_counts
 from src.tools.code_executor.text_editor_executor import execute_text_editor_tool
 from src.tools.registry import resolve_tool_call, tool_result_to_text
@@ -401,13 +403,30 @@ def run_subagent_tool_loop(
                 is_err = True
             else:
                 try:
+                    tool_start_time = time.perf_counter()
                     result = resolve_tool_call(name_str, raw_input, native_context)
+                    tool_duration_ms = (time.perf_counter() - tool_start_time) * 1000
                     out_text = tool_result_to_text(result)
                     is_err = False
+
+                    # Record tool execution metrics
+                    record_tool_call(
+                        duration_ms=tool_duration_ms,
+                        success=True,
+                        necessary=True,
+                    )
                 except Exception as exc:  # noqa: BLE001
+                    tool_duration_ms = (time.perf_counter() - tool_start_time) * 1000
                     timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
                     out_text = _tool_error_response(name_str, exc, timed_out=timed_out)
                     is_err = True
+
+                    # Record tool execution metrics for failed tools
+                    record_tool_call(
+                        duration_ms=tool_duration_ms,
+                        success=False,
+                        necessary=True,
+                    )
             trace_entry: dict[str, Any] = {
                 "round": rounds_completed,
                 "tool": name_str,

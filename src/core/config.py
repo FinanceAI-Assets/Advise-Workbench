@@ -473,6 +473,23 @@ class Settings(BaseSettings):
     # When True, deck.pdf is produced by converting the rendered PPTX with LibreOffice
     # (pixel-faithful); the ReportLab outline renderer remains the fail-open fallback.
     deck_pdf_via_soffice_enabled: bool = True
+
+    # Content Quality Evaluation: automatic LLM-based content scoring on run completion.
+    quality_evaluation_enabled: bool = Field(
+        default=True,
+        description="Enable automatic content quality evaluation",
+        validation_alias="QUALITY_EVALUATION_ENABLED"
+    )
+    quality_evaluation_async: bool = Field(
+        default=True,
+        description="Run evaluation asynchronously (don't block run completion)",
+        validation_alias="QUALITY_EVALUATION_ASYNC"
+    )
+    quality_evaluation_model: str = Field(
+        default="claude-opus-5-5",
+        description="Claude model to use for quality evaluation",
+        validation_alias="QUALITY_EVALUATION_MODEL"
+    )
     soffice_convert_timeout_sec: float = 120.0
     # Optional explicit path to the LibreOffice ``soffice`` binary. When unset,
     # discovery falls back to PATH then common install locations. Set this when
@@ -729,6 +746,44 @@ def log_run_queue_startup_config(*, repo_env_present: bool) -> None:
             "local Redis-queue testing; switch DATABASE_URL to Postgres before staging/production "
             "(enforced there — see Settings._validate_secrets_and_urls)."
         )
+
+
+def _endpoint_for_logs(url: str) -> str:
+    """scheme://host:port of a service URL, without credentials, path or query (or "(not set)")."""
+    from urllib.parse import urlsplit
+
+    if not url:
+        return "(not set)"
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+    except ValueError:
+        return "(unparseable)"
+
+
+def log_document_pipeline_config(process: str) -> None:
+    """One startup line per service the document pipeline uses (engagement uploads, Sheldon's rag_agent, the query
+    pipeline), so a wrong or missing .env value shows in the backend / worker log. No secrets are logged."""
+    import logging
+
+    log = logging.getLogger("advise_workbench.config")
+    prefix = settings.qdrant_collection_prefix
+    log.info("[STARTUP] %s document pipeline: database=%s broker=%s", process,
+             describe_database_url_for_logs(settings.database_url), _endpoint_for_logs(settings.celery_broker_url))
+    log.info("[STARTUP] %s SeaweedFS (S3)=%s bucket=%s prefix=%s | Qdrant=%s collections=%s%s, %s%s",
+             process, _endpoint_for_logs(settings.s3_endpoint_url), settings.s3_bucket or "(not set)",
+             settings.s3_intake_prefix, _endpoint_for_logs(settings.qdrant_url), prefix, settings.qdrant_collection,
+             prefix, settings.qdrant_wiki_collection)
+    log.info("[STARTUP] %s embeddings=%s model=%s | Docling OCR=%s | LLM provider=%s | LOG_LEVEL=%s",
+             process, _endpoint_for_logs(settings.embedding_base_url) if settings.embedding_base_url else "(local model)",
+             settings.embedding_model, settings.docling_ocr_enabled, settings.llm_provider or "(default)",
+             settings.log_level)
+    missing = [name for name, value in (("S3_ENDPOINT_URL", settings.s3_endpoint_url), ("S3_BUCKET", settings.s3_bucket),
+                                        ("QDRANT_URL", settings.qdrant_url)) if not value]
+    if missing:
+        log.warning("[STARTUP] %s: %s not set in .env; engagement uploads cannot be processed", process,
+                    ", ".join(missing))
 
 
 def bash_allowlist_set() -> frozenset[str]:

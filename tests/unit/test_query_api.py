@@ -56,7 +56,20 @@ def env(tmp_path, monkeypatch: pytest.MonkeyPatch):
         return "Vendors are screened against the approved criteria [S1]."
 
     monkeypatch.setattr(qp, "claude_generate", fake_llm)
+    # Phase 2 (smalltalk / clarify turns): the LLM router of src.agents.sheldon_router_agent is replaced by a fixed
+    # path; Path 1.a is a fixed answer, Path 1.b the real rag_agent.search_knowledge_base (the query pipeline).
+    phase2 = {"path": "1.a"}
+
+    def fake_phase2_agents():
+        from src.agents.conversation.rag_agent import search_knowledge_base
+
+        return (lambda router_input: {"path": phase2["path"], "confidence": 0.9, "reasoning": "test"},
+                lambda router_input: {"success": True, "answer": "Glad it helped."},
+                search_knowledge_base)
+
+    monkeypatch.setattr(projects_module, "_get_phase2_agents", fake_phase2_agents)
     return {"client": client, "admin": admin, "user": _login(client, admin=False), "doc": doc, "chunks": chunk_ids,
+            "phase2": phase2,
             "released": released, "practice": entry["practiceId"], "questions": questions, **fakes}
 
 
@@ -301,7 +314,32 @@ def test_sheldon_keeps_chat_away_from_the_rag_agent(env, monkeypatch):
     monkeypatch.setattr(projects_module, "_recommend_output_types", lambda *_a, **_k: ([], [], {}, "", None))
     reply = client.post(f"/api/projects/{eid}/conversation/messages", headers=user,
                         json={"content": "Thanks, that was a useful workshop yesterday"}).json()["messages"][-1]
-    assert reply["metadata"]["kind"] == "conversational_response"
+    # Smalltalk is answered by Phase 2 Path 1.a (answer_agent) or the conversational reply, never the rag_agent.
+    assert reply["metadata"]["kind"] in {"phase2_answer", "conversational_response"}
+
+
+def test_phase2_path_1b_answers_from_the_query_pipeline(env, monkeypatch):
+    """The Phase 2 router's RAG path (search_knowledge_base) is the real pipeline, not the old dummy documents."""
+    client, user = env["client"], env["user"]
+    eid = _engagement(env)
+    env["phase2"]["path"] = "1.b"
+    _route_as(monkeypatch, "clarify")
+    reply = client.post(f"/api/projects/{eid}/conversation/messages", headers=user,
+                        json={"content": "How long do vendor master changes take?"}).json()["messages"][-1]
+    # Their Phase 2 code stores its own metadata; the answer text is the query pipeline's cited answer.
+    assert reply["metadata"]["kind"] == "phase2_rag_answer" and reply["metadata"]["path"] == "1.b"
+    assert "[S1]" in reply["content"] and "workshop-notes.txt (engagement document)" in reply["content"]
+    assert "Q4 2024" not in reply["content"]  # not the old placeholder's dummy documents
+
+    from src.agents.conversation.rag_agent import search_knowledge_base
+
+    # A run (orchestrator) has no user: the engagement comes from project_context.
+    run = search_knowledge_base({"user_instruction": "How long do vendor master changes take?",
+                                 "project_context": {"project_id": eid}})
+    assert run["success"] and run["should_answer"] and run["documents"][0]["source"] == "engagement"
+    # Not a member: no answer, the caller falls through to generation.
+    denied = search_knowledge_base({"user_instruction": "How long?", "project_id": eid, "user_id": "someone-else"})
+    assert denied["success"] is False and denied["should_generate"]
 
 
 @pytest.mark.parametrize("intent, rationale, message, state, expected", [
