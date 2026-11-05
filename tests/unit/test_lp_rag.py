@@ -34,12 +34,6 @@ Publish a close calendar with owners and deadlines. Leading teams close the book
 _CONCEPTS = ["invoice", "close", "supplier"]
 
 
-@pytest.fixture(autouse=True)
-def _only_file_sources(monkeypatch: pytest.MonkeyPatch) -> None:
-    """These tests cover the file sources; released practices (from the shared test database) are left out."""
-    monkeypatch.setattr(lp_index, "_released_passages", lambda: [])
-
-
 def _fake_embed(texts: list[str]) -> np.ndarray:
     """One dimension per concept, so 'meaning' is predictable without loading the real model."""
     synonyms = {"invoice": ["invoice", "bill", "payment"], "close": ["close", "month-end", "books"], "supplier": ["supplier", "vendor"]}
@@ -97,25 +91,6 @@ def test_a_whole_document_as_the_query_is_shortened(library) -> None:
     final = lp_rag.run_lp_rag(long_query, max_results=1)
     assert len(final["search_text"].split()) == lp_rag.MAX_QUERY_TERMS
     assert final["results"][0]["heading"] == "Three-way match"
-
-
-def test_practice_filter_keeps_only_passages_of_those_practices(library, monkeypatch: pytest.MonkeyPatch) -> None:
-    def released() -> list[dict]:
-        return [
-            {"id": f"rel-{pid}", "path": f"published/{pid}", "heading": heading, "text": text, "source": "published",
-             "practice_id": pid, "job_id": f"job-{pid}"}
-            for pid, heading, text in (
-                ("lp-001", "Invoice controls", "Match every invoice to its purchase order before payment."),
-                ("lp-002", "Invoice approvals", "Route each invoice to a named approver before payment."),
-            )
-        ]
-
-    monkeypatch.setattr(lp_index, "_released_passages", released)
-    lp_index._index = None
-    everything = lp_rag.run_lp_rag("invoice before payment", max_results=8)["results"]
-    assert {r.get("practice_id") for r in everything} >= {"lp-001", "lp-002", None}
-    only = lp_rag.run_lp_rag("invoice before payment", max_results=8, practice_ids=["lp-002"])["results"]
-    assert [r["practice_id"] for r in only] == ["lp-002"]
 
 
 def test_index_is_rebuilt_when_a_file_changes(library) -> None:

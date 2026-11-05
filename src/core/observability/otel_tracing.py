@@ -104,11 +104,7 @@ def _init_openobserve_metrics_and_logs(resource: Any, base: str, headers: dict[s
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader  # type: ignore[import-not-found]
 
     reader = PeriodicExportingMetricReader(
-        OTLPMetricExporter(
-            endpoint=f"{base}/v1/metrics",
-            headers=headers,
-            timeout=5  # 5 second timeout for metric exports
-        ),
+        OTLPMetricExporter(endpoint=f"{base}/v1/metrics", headers=headers),
         export_interval_millis=max(1, int(settings.openobserve_metrics_interval_sec)) * 1000,
     )
     meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
@@ -116,9 +112,7 @@ def _init_openobserve_metrics_and_logs(resource: Any, base: str, headers: dict[s
     app_metrics.set_otel_meter(meter_provider.get_meter("advise_workbench"))
 
     logger_provider = LoggerProvider(resource=resource)
-    logger_provider.add_log_record_processor(BatchLogRecordProcessor(
-        OTLPLogExporter(endpoint=f"{base}/v1/logs", headers=headers, timeout=5)
-    ))
+    logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(endpoint=f"{base}/v1/logs", headers=headers)))
     handler = LoggingHandler(level=logging.INFO, logger_provider=logger_provider)
     root = logging.getLogger()
     root.addHandler(handler)

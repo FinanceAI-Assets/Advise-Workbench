@@ -10,7 +10,7 @@ layers =
     src.workflows
     src.agents
     src.evaluation : src.guardrails
-    src.tools : src.query
+    src.tools
     src.memory : src.deliverables : src.prompts
     src.llm
     src.core

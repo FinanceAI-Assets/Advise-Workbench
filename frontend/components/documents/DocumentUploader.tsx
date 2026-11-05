@@ -5,54 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 
-// Mirrors `ingestion` in src/app/api/documents.py: the ingestion pipeline's processing of one upload.
-type Ingestion = {
-  job_id: string;
-  status: string;
-  searchable: boolean;
-  is_terminal: boolean;
-  stage: string | null;
-  progress_percent: number;
-  chunk_count: number;
-  error: string | null;
-};
-
-type DocumentItem = { filename: string; path: string; ingestion: Ingestion | null };
-
-const POLL_MS = 3000;
-
-function IngestionBadge({ ingestion, onRetry, retrying }: { ingestion: Ingestion | null; onRetry: () => void; retrying: boolean }) {
-  if (!ingestion) {
-    return (
-      <button type="button" className="text-[var(--info)] underline" onClick={onRetry} disabled={retrying}>
-        {retrying ? "Queuing..." : "Not processed - process now"}
-      </button>
-    );
-  }
-  if (ingestion.searchable) {
-    return <span className="text-[var(--success)]">Ready for questions</span>;
-  }
-  if (ingestion.status === "failed") {
-    return (
-      <span className="flex items-center gap-2 text-[var(--error)]" title={ingestion.error ?? undefined}>
-        Processing failed
-        <button type="button" className="underline" onClick={onRetry} disabled={retrying}>
-          {retrying ? "Retrying..." : "Retry"}
-        </button>
-      </span>
-    );
-  }
-  return (
-    <span className="text-[var(--info)]">
-      Processing{ingestion.stage ? ` (${ingestion.stage})` : ""} {ingestion.progress_percent}%
-    </span>
-  );
-}
-
 export function DocumentUploader({ projectId, autoload = true }: { projectId: string; autoload?: boolean }) {
   const { api, token, ready } = useAuth();
-  const [items, setItems] = useState<DocumentItem[]>([]);
-  const [retrying, setRetrying] = useState(false);
+  const [items, setItems] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -61,68 +16,28 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<{ index: number; total: number } | null>(null);
 
-  const loadDocuments = useCallback(
-    async (quiet = false) => {
-      if (!projectId || !token) return;
-      if (!quiet) {
-        setLoading(true);
-        setError(null);
+  const loadDocuments = useCallback(async () => {
+    if (!projectId || !token) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api(`/api/documents/list?project_id=${encodeURIComponent(projectId)}`);
+      const data = (await res.json().catch(() => ({}))) as { items?: string[]; detail?: string };
+      if (!res.ok) {
+        throw new Error(typeof data.detail === "string" ? data.detail : "Failed to load documents");
       }
-      try {
-        const res = await api(`/api/documents/list?project_id=${encodeURIComponent(projectId)}`);
-        const data = (await res.json().catch(() => ({}))) as {
-          items?: string[];
-          documents?: DocumentItem[];
-          detail?: string;
-        };
-        if (!res.ok) {
-          throw new Error(typeof data.detail === "string" ? data.detail : "Failed to load documents");
-        }
-        if (Array.isArray(data.documents)) {
-          setItems(data.documents);
-        } else {
-          const paths = Array.isArray(data.items) ? data.items : [];
-          setItems(paths.map((p) => ({ filename: p.split("/").pop() ?? p, path: p, ingestion: null })));
-        }
-      } catch (e) {
-        if (!quiet) setError(e instanceof Error ? e.message : "Failed to load documents");
-      } finally {
-        if (!quiet) setLoading(false);
-      }
-    },
-    [api, projectId, token]
-  );
+      setItems(Array.isArray(data.items) ? data.items : []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load documents");
+    } finally {
+      setLoading(false);
+    }
+  }, [api, projectId, token]);
 
   useEffect(() => {
     if (!autoload || !projectId || !ready || !token) return;
     void loadDocuments();
   }, [projectId, autoload, ready, token, loadDocuments]);
-
-  // Uploads are processed in the background; refresh their status until every one is done.
-  const processing = items.some((d) => d.ingestion && !d.ingestion.is_terminal);
-  useEffect(() => {
-    if (!processing) return;
-    const timer = window.setInterval(() => void loadDocuments(true), POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [processing, loadDocuments]);
-
-  async function handleReprocess() {
-    if (!projectId || !token) return;
-    setRetrying(true);
-    setError(null);
-    try {
-      const res = await api(`/api/documents/reindex?project_id=${encodeURIComponent(projectId)}`, { method: "POST" });
-      const data = (await res.json().catch(() => ({}))) as { detail?: string };
-      if (!res.ok) {
-        throw new Error(typeof data.detail === "string" ? data.detail : "Could not queue the documents");
-      }
-      await loadDocuments(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not queue the documents");
-    } finally {
-      setRetrying(false);
-    }
-  }
 
   async function handleUploadOne(file: File): Promise<{ filename: string; ok: boolean; error?: string }> {
     const filename = file.name;
@@ -142,8 +57,8 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
       if (!res.ok) {
         throw new Error(typeof data.detail === "string" ? data.detail : "Upload failed");
       }
-      setMessage(`Uploaded: ${filename} - processing for questions`);
-      await loadDocuments(true);
+      setMessage(`Uploaded: ${filename}`);
+      await loadDocuments();
 
       // Ingest document into wiki (non-blocking — wiki page auto-syncs on load too)
       try {
@@ -197,8 +112,9 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
     setUploading(false);
   }
 
-  async function handleDelete(filename: string) {
+  async function handleDelete(itemPath: string) {
     if (!projectId || !token) return;
+    const filename = itemPath.split("/").pop() ?? itemPath;
     setDeleting(filename);
     setError(null);
     setMessage(null);
@@ -266,20 +182,17 @@ export function DocumentUploader({ projectId, autoload = true }: { projectId: st
           <p>No documents uploaded yet.</p>
         ) : (
           items.map((item) => (
-            <div key={item.path} className="flex items-center justify-between gap-2 rounded border border-[var(--surface-border)] bg-[var(--surface-muted)] px-2 py-1">
-              <p className="truncate">{item.filename}</p>
-              <div className="flex shrink-0 items-center gap-3">
-                <IngestionBadge ingestion={item.ingestion} onRetry={() => void handleReprocess()} retrying={retrying} />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="px-2 py-1 text-xs"
-                  disabled={Boolean(deleting)}
-                  onClick={() => void handleDelete(item.filename)}
-                >
-                  {deleting === item.filename ? "Deleting..." : "Delete"}
-                </Button>
-              </div>
+            <div key={item} className="flex items-center justify-between gap-2 rounded border border-[var(--surface-border)] bg-[var(--surface-muted)] px-2 py-1">
+              <p className="truncate">{item.split("/").pop() ?? item}</p>
+              <Button
+                type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
+                disabled={Boolean(deleting)}
+                onClick={() => void handleDelete(item)}
+              >
+                {deleting === (item.split("/").pop() ?? item) ? "Deleting..." : "Delete"}
+              </Button>
             </div>
           ))
         )}

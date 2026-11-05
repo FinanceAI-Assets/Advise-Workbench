@@ -538,15 +538,18 @@ cd frontend && npm run build
 ├── pyproject.toml                      # pytest, ruff, coverage, mypy settings
 ├── Dockerfile                          # Backend image (frontend/Dockerfile for the web app)
 ├── frontend/
-│   ├── app/                            # Next.js App Router pages (workbench routes, see "Frontend Routes")
+│   ├── app/                            # Next.js App Router pages
+│   │   └── projects/[pid]/runs/[rid]/  # Run Studio page
 │   ├── components/
-│   │   ├── shell/                      # App and admin shells, sidebars, top bars
-│   │   ├── workbench/                  # PageFrame, EngagementPicker, AdminControls
-│   │   ├── engagements/, conversation/, deliverables/, reviews/, skills/, lp-library/
-│   │   ├── admin-console/              # Admin console panels
-│   │   └── ui/                         # Design-system primitives
-│   ├── hooks/                          # useWorkbench, useEngagements, useEngagementConversation, useDeliverables, useAdminConsole
-│   └── e2e/                            # Playwright smoke + route checks
+│   │   ├── RunStudio.tsx               # Main run orchestrator (Cowork layout)
+│   │   └── run-studio/
+│   │       ├── ApprovalBanner.tsx      # Unified sticky approval gate (NEW)
+│   │       ├── ToolActivityFeed.tsx    # Live tool activity right panel (NEW)
+│   │       ├── ZoneAInstruction.tsx    # Instruction chat
+│   │       ├── ZoneCLiveMonitor.tsx    # Audit trail + coordinator_plan / agent_tool_round UI
+│   │       └── ZoneDOutputReview.tsx   # Output preview
+│   └── hooks/
+│       └── useRunStream.ts             # SSE event subscription
 ├── .github/
 │   ├── dependabot.yml                  # Weekly Actions / pip / npm updates
 │   └── workflows/ci.yml                # pytest, alembic, pip-audit, npm audit, lint, build
@@ -652,20 +655,17 @@ On startup, if compaction is on but v2 retrieval is off, the API logs a **warnin
 
 | Route | Description |
 |---|---|
-| `/` | Redirects to `/engagements` |
-| `/login`, `/signup` | Sign in and registration |
-| `/engagements` | Engagement list; `/engagements/new` creates one, `/engagements/next-actions` lists pending work |
-| `/engagements/{id}` | Engagement overview |
-| `/engagements/{id}/conversation` | Conversation with the agent: planning, decisions, plan approval, run progress |
-| `/engagements/{id}/deliverables` | Deliverable viewer with evidence, version history and export |
-| `/conversation`, `/deliverables` | Engagement pickers for the two views above |
-| `/library` | Leading-practice library |
-| `/skills`, `/skills/runs` | Skill catalogue and skill runs |
-| `/reviews`, `/reviews/{id}` | Review queue and review detail |
-| `/search`, `/notifications`, `/help`, `/settings`, `/profile` | Utility pages |
-| `/admin/console` | Admin console (engagements, library, reviews, settings, skills); `/admin/console/skills/new` is the skill wizard |
-
-The older project-studio routes (`/projects/*`, `/v2/projects/*`, `/customize`, `/memory`, `/tasks`, `/permissions`, `/admin/dpdp`, `/admin/skills`) were removed in favour of the workbench.
+| `/projects` | Project list |
+| `/projects/{pid}` | Unified Project + Studio workspace (planning + execution + OPAR panels) |
+| `/projects/{pid}/runs/{rid}` | Backward-compatible deep link that opens the same unified workspace with run preselected |
+| `/projects/{pid}/models` | Analytical models list |
+| `/projects/{pid}/models/{mid}` | Model detail + dashboard |
+| `/projects/{pid}/models/{mid}/conflicts` | Excel conflict resolution UI |
+| `/admin/skills` | Skill registry admin |
+| `/tasks` | Scheduled tasks |
+| `/memory` | Project memory management |
+| `/customize` | Workspace customisation |
+| `/permissions` | RBAC and access management |
 
 ---
 

@@ -1,0 +1,473 @@
+"use client";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { extractApiErrorMessage, parseResponseBodyLoose } from "@/lib/api-error";
+import { useAuth } from "@/lib/auth-context";
+
+export type ModelSummary = {
+  id: string;
+  name: string;
+  description?: string;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
+  version_count?: number;
+};
+
+export type Scenario = {
+  id: string;
+  name: string;
+  created_at?: string;
+  assumption_overrides: Record<string, string | number | boolean>;
+};
+
+export type ModelConflict = {
+  id: string;
+  sheet: string;
+  cell_ref: string;
+  type: "value_mismatch" | "type_mismatch" | "formula_changed" | "deleted_range" | "structural_shift";
+  severity: "medium" | "high" | "low";
+  status: "open" | "resolved" | "reopened";
+  base?: { value?: unknown };
+  local?: { value?: unknown };
+  remote?: { value?: unknown };
+  history?: Array<{ timestamp: string; value: unknown; source: "base" | "local" | "remote"; user?: string }>;
+  impact?: { dependentCells: string[]; affectedModels: string[]; impactCount: number };
+  formula?: string;
+  createdAt?: string;
+  resolvedAt?: string;
+  resolution?: { chosen_side?: "local" | "remote" | "policy"; rationale?: string; actor?: string; timestamp?: string } | null;
+};
+
+export type ConsolidatedFinancialMetrics = {
+  profitability: {
+    grossMargin: number;
+    operatingMargin: number;
+    netMargin: number;
+    roe: number | null;
+    roa: number | null;
+    roic: number | null;
+  };
+  liquidity: {
+    currentRatio: number | null;
+    quickRatio: number | null;
+    cashConversionCycle: number | null;
+  };
+  leverage: {
+    debtToEquity: number | null;
+    interestCoverage: number | null;
+    netDebtToEbitda: number | null;
+  };
+  growth: {
+    revenueGrowth: number;
+    ebitdaGrowth: number;
+    fcfGrowth: number;
+    cagr: number;
+  };
+};
+
+export type ConsolidatedFinancialStatement = {
+  name: string;
+  periods: string[];
+  revenue: number[];
+  cogs: number[];
+  grossProfit: number[];
+  opex: number[];
+  ebit: number[];
+  taxes: number[];
+  netIncome: number[];
+};
+
+export type ConsolidatedVarianceData = {
+  period: number;
+  budget: number;
+  actual: number;
+  variance: number;
+  variancePct: number;
+  favorable: boolean;
+};
+
+export type ConsolidatedForecastData = {
+  period: number;
+  revenue: number;
+  margin: number;
+  ebit: number;
+  ebitda?: number;
+  netIncome?: number;
+  confidence: number;
+};
+
+export type ConsolidatedFinancialData = {
+  metrics: ConsolidatedFinancialMetrics;
+  statements: ConsolidatedFinancialStatement;
+  variances: ConsolidatedVarianceData[];
+  forecasts: ConsolidatedForecastData[];
+  assumptions: Record<string, number>;
+  data_source: "snapshot" | "assumptions";
+};
+
+export function useModels(projectId: string) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["models", projectId],
+    enabled: Boolean(token && projectId),
+    queryFn: async (): Promise<ModelSummary[]> => {
+      const res = await api(`/api/projects/${encodeURIComponent(projectId)}/models`);
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as { items?: ModelSummary[]; detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Failed to load models"));
+      return data.items ?? [];
+    },
+  });
+}
+
+export function useCreateModel(projectId: string) {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { name: string; description?: string; assumptions?: Record<string, unknown> }) => {
+      const res = await api(`/api/projects/${encodeURIComponent(projectId)}/models`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as { id?: string; detail?: string };
+      if (!res.ok || !data.id) throw new Error(extractApiErrorMessage(data, rawText || "Create model failed"));
+      return data.id;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["models", projectId] });
+    },
+  });
+}
+
+export function useModelDetail(projectId: string, modelId: string) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["model", projectId, modelId],
+    enabled: Boolean(token && projectId && modelId),
+    queryFn: async (): Promise<{ model: ModelSummary & { assumptions?: Record<string, unknown> }; scenarios: Scenario[] }> => {
+      const res = await api(`/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}`);
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as {
+        model?: ModelSummary & { assumptions?: Record<string, unknown> };
+        scenarios?: Scenario[];
+        detail?: string;
+      };
+      if (!res.ok || !data.model) throw new Error(extractApiErrorMessage(data, rawText || "Load model failed"));
+      return { model: data.model, scenarios: data.scenarios ?? [] };
+    },
+  });
+}
+
+export function useModelVersions(projectId: string, modelId: string) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["model-versions", projectId, modelId],
+    enabled: Boolean(token && projectId && modelId),
+    queryFn: async (): Promise<Array<{ version_id: string; created_at: string; reason: string }>> => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/versions`
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as {
+        items?: Array<{ version_id: string; created_at: string; reason: string }>;
+        detail?: string;
+      };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Load versions failed"));
+      return data.items ?? [];
+    },
+  });
+}
+
+export function useCreateScenario(projectId: string, modelId: string) {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { name: string; assumption_overrides: Record<string, unknown> }) => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/scenarios`,
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as { detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Create scenario failed"));
+      return data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["model", projectId, modelId] });
+      void qc.invalidateQueries({ queryKey: ["model-versions", projectId, modelId] });
+      void qc.invalidateQueries({ queryKey: ["model-dashboard", projectId, modelId] });
+    },
+  });
+}
+
+export function useModelDashboard(projectId: string, modelId: string) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["model-dashboard", projectId, modelId],
+    enabled: Boolean(token && projectId && modelId),
+    queryFn: async (): Promise<{
+      kpis: Array<{ id: string; label: string; value: string | number }>;
+      charts: Array<{ id: string; title: string; labels: string[]; datasets: Array<{ label: string; data: number[] }> }>;
+      tables: Array<{ id: string; title: string; columns: string[]; rows: Array<Array<string | number | boolean>> }>;
+    }> => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/dashboard`
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Load dashboard failed"));
+      return {
+        kpis: Array.isArray(data.kpis) ? data.kpis : [],
+        charts: Array.isArray(data.charts) ? data.charts : [],
+        tables: Array.isArray(data.tables) ? data.tables : [],
+      } as {
+        kpis: Array<{ id: string; label: string; value: string | number }>;
+        charts: Array<{ id: string; title: string; labels: string[]; datasets: Array<{ label: string; data: number[] }> }>;
+        tables: Array<{ id: string; title: string; columns: string[]; rows: Array<Array<string | number | boolean>> }>;
+      };
+    },
+  });
+}
+
+export function useModelConflicts(
+  projectId: string,
+  modelId: string,
+  filters?: { sheet?: string; severity?: string; status?: string }
+) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["model-conflicts", projectId, modelId, filters?.sheet, filters?.severity, filters?.status],
+    enabled: Boolean(token && projectId && modelId),
+    queryFn: async (): Promise<ModelConflict[]> => {
+      const params = new URLSearchParams();
+      if (filters?.sheet) params.set("sheet", filters.sheet);
+      if (filters?.severity) params.set("severity", filters.severity);
+      if (filters?.status) params.set("status", filters.status);
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/excel/conflicts${suffix}`
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as { items?: ModelConflict[]; detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Load conflicts failed"));
+      return data.items ?? [];
+    },
+  });
+}
+
+export function useResolveModelConflict(projectId: string, modelId: string) {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { conflictId: string; chosen_side: "local" | "remote" | "policy"; rationale?: string }) => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/excel/conflicts/${encodeURIComponent(payload.conflictId)}/resolve`,
+        { method: "POST", body: JSON.stringify({ chosen_side: payload.chosen_side, rationale: payload.rationale ?? "" }) }
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as { detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Resolve conflict failed"));
+      return data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["model-conflicts", projectId, modelId] });
+    },
+  });
+}
+
+export function useConflictDetail(projectId: string, modelId: string, conflictId: string | null) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["model-conflict-detail", projectId, modelId, conflictId],
+    enabled: Boolean(token && projectId && modelId && conflictId),
+    queryFn: async (): Promise<Partial<ModelConflict>> => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/excel/conflicts/${encodeURIComponent(conflictId!)}`
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown> & { detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Load conflict detail failed"));
+      return data as Partial<ModelConflict>;
+    },
+  });
+}
+
+export function useBatchResolveConflicts(projectId: string, modelId: string) {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { conflictIds: string[]; chosen_side: "local" | "remote" | "policy"; rationale?: string }) => {
+      const results = await Promise.all(
+        payload.conflictIds.map((cid) =>
+          api(
+            `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/excel/conflicts/${encodeURIComponent(cid)}/resolve`,
+            { method: "POST", body: JSON.stringify({ chosen_side: payload.chosen_side, rationale: payload.rationale ?? "" }) }
+          )
+        )
+      );
+      const failed = results.find((res) => !res.ok);
+      if (failed) {
+        const { data: parsed, rawText } = await parseResponseBodyLoose(failed);
+        const data = (parsed && typeof parsed === "object" ? parsed : {}) as { detail?: string };
+        throw new Error(extractApiErrorMessage(data, rawText || "Batch resolve failed"));
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["model-conflicts", projectId, modelId] });
+    },
+  });
+}
+
+export function useAuditLog(
+  projectId: string,
+  modelId: string,
+  filters?: { event_type?: string; cell_ref?: string; offset?: number; limit?: number }
+) {
+  const { api, token } = useAuth();
+  const offset = filters?.offset ?? 0;
+  const limit = filters?.limit ?? 200;
+  return useQuery({
+    queryKey: ["model-audit-log", projectId, modelId, filters?.event_type, filters?.cell_ref, offset, limit],
+    enabled: Boolean(token && projectId && modelId),
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (filters?.event_type) params.set("event_type", filters.event_type);
+      if (filters?.cell_ref) params.set("cell_ref", filters.cell_ref);
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/excel/audit-log?${params.toString()}`
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as {
+        events?: unknown[];
+        total?: number;
+        has_more?: boolean;
+        detail?: string;
+      };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Load audit log failed"));
+      return {
+        events: (data.events ?? []) as import("@/components/excel/AuditLogViewer").AuditEvent[],
+        total: data.total ?? 0,
+        hasMore: data.has_more ?? false,
+      };
+    },
+  });
+}
+
+export function useConsolidatedFinancial(projectId: string, modelId: string) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["model-consolidated-financial", projectId, modelId],
+    enabled: Boolean(token && projectId && modelId),
+    queryFn: async (): Promise<ConsolidatedFinancialData> => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/financial/consolidated`
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown> & { detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Load consolidated financial failed"));
+      return data as ConsolidatedFinancialData;
+    },
+  });
+}
+
+export function useGenerateReport(projectId: string, modelId: string) {
+  const { api } = useAuth();
+  return useMutation({
+    mutationFn: async (payload: {
+      reportType: string;
+      format: string;
+      title: string;
+      includeCharts: boolean;
+      includeTables: boolean;
+      recipients: string;
+    }) => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/reports/generate`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as {
+        download_path?: string;
+        status?: string;
+        detail?: string;
+        emailed?: boolean;
+        email_reason?: string | null;
+      };
+      if (!res.ok || data.status === "not_yet_implemented") {
+        throw new Error(extractApiErrorMessage(data, rawText || data.detail || "Generate report failed"));
+      }
+      return data;
+    },
+  });
+}
+
+export type StyleProfile = {
+  formality: string;
+  tone: string;
+  persona: string;
+  verbosity: string;
+  audience: string;
+};
+
+export function useStyleProfile(projectId: string, modelId: string) {
+  const { api, token } = useAuth();
+  return useQuery({
+    queryKey: ["style-profile", projectId, modelId],
+    enabled: Boolean(token && projectId && modelId),
+    queryFn: async (): Promise<StyleProfile> => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/style-profile`
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as StyleProfile & { detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Load style profile failed"));
+      return data;
+    },
+  });
+}
+
+export function useSaveStyleProfile(projectId: string, modelId: string) {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: StyleProfile) => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/style-profile`,
+        { method: "PUT", body: JSON.stringify(payload) }
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as { detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Save style profile failed"));
+      return data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["style-profile", projectId, modelId] });
+    },
+  });
+}
+
+export function useReopenModelConflict(projectId: string, modelId: string) {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { conflictId: string; reason?: string }) => {
+      const res = await api(
+        `/api/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelId)}/excel/conflicts/${encodeURIComponent(payload.conflictId)}/reopen`,
+        { method: "POST", body: JSON.stringify({ reason: payload.reason ?? "" }) }
+      );
+      const { data: parsed, rawText } = await parseResponseBodyLoose(res);
+      const data = (parsed && typeof parsed === "object" ? parsed : {}) as { detail?: string };
+      if (!res.ok) throw new Error(extractApiErrorMessage(data, rawText || "Reopen conflict failed"));
+      return data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["model-conflicts", projectId, modelId] });
+    },
+  });
+}

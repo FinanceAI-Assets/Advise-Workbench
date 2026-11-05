@@ -49,6 +49,7 @@ Designs of individual modules.
 | [TOKEN_BUDGET_IMPLEMENTATION.md](03-design/TOKEN_BUDGET_IMPLEMENTATION.md) | Token Budget & Context Compression - Implementation Guide |
 | [conversation-graph.md](03-design/conversation-graph.md) | Sheldon's conversation: turn phases, graph driver and background replies |
 | [financial-modules-build-plan.md](03-design/financial-modules-build-plan.md) | Financial Analysis Modules — Build Plan |
+| [guided-journey-view.md](03-design/guided-journey-view.md) | Guided view: the six-step project journey |
 | [langgraph-run-graph.md](03-design/langgraph-run-graph.md) | Run execution with LangGraph |
 | [leading-practice-rag.md](03-design/leading-practice-rag.md) | Leading Practice library: retrieval pipeline |
 | [memory-context-prompts.md](03-design/memory-context-prompts.md) | Memory, context and prompts |
@@ -60,8 +61,8 @@ Working on the code: integration guides and conventions.
 | Document | Title |
 |---|---|
 | [anthropic_skills_reconciliation.md](04-development/anthropic_skills_reconciliation.md) | Anthropic skills reconciliation (mapped built-ins) |
+| [frontend-integration-guide.md](04-development/frontend-integration-guide.md) | Advise Workbench — Component Integration Guide |
 | [layering.md](04-development/layering.md) | Layering rules |
-| [library-query-api.md](04-development/library-query-api.md) | Query pipeline: Sheldon's rag_agent, Talk to data, `POST /api/query` (Postman) |
 | [model-providers.md](04-development/model-providers.md) | Model providers |
 
 ## 05-testing
@@ -72,7 +73,6 @@ Test reports, quality evaluations, sample outputs and parity reports.
 |---|---|
 | [CODE_QUALITY_EVAL.md](05-testing/CODE_QUALITY_EVAL.md) | Code Quality Eval — Advise Workbench |
 | [TEST_REPORT.md](05-testing/TEST_REPORT.md) | PPTX Artifact Renderer - Comprehensive Test Report |
-| [engagement-rag-test-plan.md](05-testing/engagement-rag-test-plan.md) | Test plan: Sheldon answers from engagement documents (files, questions, expected answers) |
 | [TestEngagement2_Analysismodel_20260410.xlsx](05-testing/TestEngagement2_Analysismodel_20260410.xlsx) |  |
 | [TestEngagement2_Executivereport_20260528.pdf](05-testing/TestEngagement2_Executivereport_20260528.pdf) |  |
 | [reports/](05-testing/reports/) | PPTX canvas parity reports and visual-diff images |
@@ -88,7 +88,6 @@ Running it: operations, topology, security, hardening.
 | [PRODUCTION_HARDENING_PLAN_2026-04-21.md](06-deployment-operations/PRODUCTION_HARDENING_PLAN_2026-04-21.md) | Production Hardening Plan (2026-04-21) |
 | [PRODUCTION_TOPOLOGY.md](06-deployment-operations/PRODUCTION_TOPOLOGY.md) | Production topology (500-user scale) |
 | [SECURITY.md](06-deployment-operations/SECURITY.md) | Security operations checklist |
-| [SHARED_SERVICES.md](06-deployment-operations/SHARED_SERVICES.md) | Shared team backend services (Postgres, Redis, RabbitMQ, SeaweedFS, Qdrant, TEI, OpenObserve, Celery/Docling) |
 | [V4_HARDENING_EXECUTION_CHECKLIST.md](06-deployment-operations/V4_HARDENING_EXECUTION_CHECKLIST.md) | v4 Hardening Execution Checklist |
 | [bash_tool_security.md](06-deployment-operations/bash_tool_security.md) | Bash tool (Anthropic-aligned) — security and operations |
 | [observability.md](06-deployment-operations/observability.md) | Monitoring with OpenObserve |
@@ -117,7 +116,7 @@ Plans, tickets and phase summaries.
 
 Historical documents, kept unchanged for reference.
 
-51 files. See the folder: [99-archive/](99-archive/).
+48 files. See the folder: [99-archive/](99-archive/).
 
 ## Elsewhere in the repo
 

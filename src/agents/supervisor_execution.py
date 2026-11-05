@@ -1144,17 +1144,7 @@ class CoordinatorExecution:
             )
             # endregion
             _coordinator_poll_abort()
-
-            # Check if context_validation from Phase 2 is available
-            context_validation = state.get("context_validation", {})
-            context_confidence = state.get("context_confidence", 1.0)
-            if context_validation:
-                _LOG.info(f"[PHASE3-SUPERVISOR] Received context_validation from Phase 2: confidence={context_confidence:.2f}")
-                print(f"[PHASE3-SUPERVISOR] Context validation available: user_decision={context_validation.get('user_decision', 'auto')}")
-
             if emit_event:
-                if context_validation:
-                    emit_event("context_validation_received", {"confidence": context_confidence, "decision": context_validation.get("user_decision", "auto")})
                 emit_event("fanout_start", {"stages": ["context_assembly", "skill_selection", "plan_validation"]})
                 fanout = self._parallel_read_stages(state)
                 if fanout.get("errors"):

@@ -428,11 +428,6 @@ def test_list_runs_and_sse_accepts_query_token() -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    ":memory:" in settings.database_url,
-    reason="streams from a background thread over the shared in-memory SQLite connection, which crashes the "
-    "process on Windows; runs against Postgres (DATABASE_URL)",
-)
 def test_stream_completes_after_approve_with_persisted_events() -> None:
     client = TestClient(fastapi_app)
     headers = auth_header(client, email="finish@example.com")

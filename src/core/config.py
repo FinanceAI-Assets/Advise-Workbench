@@ -58,92 +58,6 @@ class Settings(BaseSettings):
     # pubsub connection; size to >= peak concurrent streams expected.
     sse_redis_max_connections: int = 300
 
-    # Document ingestion pipeline (Celery): S3 (SeaweedFS) -> Docling -> Postgres chunks -> embeddings -> Qdrant
-    celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
-    celery_result_backend: str = "redis://localhost:6379/0"
-    celery_task_max_retries: int = 2
-
-    # SeaweedFS through its S3 gateway (shared service; see docs/06-deployment-operations/SHARED_SERVICES.md)
-    s3_endpoint_url: str = ""
-    s3_access_key_id: str = ""
-    s3_secret_access_key: str = ""
-    s3_bucket: str = ""
-    s3_region: str = "us-east-1"
-    s3_intake_prefix: str = "document_intake"
-    s3_timeout_sec: int = 60
-
-    # Document Intake Validation
-    document_max_size_bytes: int = 104857600  # 100MB
-    document_allowed_formats: str = "pdf,docx,pptx,xlsx,xls,txt,md,csv,json,jpg,jpeg,png,gif,bmp"
-
-    # Docling parsing (chunking uses the Library's section-aware chunker, practice_ingest.chunk_blocks)
-    docling_ocr_enabled: bool = True  # RapidOCR for PDF bitmap areas and scanned pages (models ship with rapidocr)
-
-    # OCR settings for images/diagrams
-    ocr_enabled: bool = True
-    tesseract_cmd: str = "tesseract"  # Path to tesseract binary
-    ocr_timeout_sec: int = 60
-
-    # Stage 1.3: Embeddings & Wiki - Vector Search & Knowledge Base
-    # Embeddings: the shared service (POST {EMBEDDING_BASE_URL}/embed) when set, else a local sentence-transformers model.
-    embedding_base_url: str = ""
-    embedding_api_key: str = ""
-    embedding_model: str = "BAAI/bge-small-en-v1.5"
-    embedding_batch_size: int = 32
-    embedding_timeout_sec: int = 120
-    qdrant_url: str = "http://localhost:6333"
-    qdrant_api_key: str = ""
-    qdrant_collection_prefix: str = ""
-    qdrant_collection: str = "document_chunks"  # stored as f"{qdrant_collection_prefix}{qdrant_collection}"
-    qdrant_wiki_collection: str = "wiki_pages"
-    # CA certificate that signed the shared services' TLS certificates (private links); empty = the system store.
-    ssl_ca_file: str = ""
-
-    @property
-    def tls_verify(self) -> str | bool:
-        """``verify`` for the S3, Qdrant and embedding clients."""
-        if self.ssl_ca_file and not Path(self.ssl_ca_file).is_file():
-            raise RuntimeError(
-                f"SSL_CA_FILE={self.ssl_ca_file} does not exist: save the shared services' CA certificate there "
-                "(from the shared-services owner), or clear SSL_CA_FILE for links with public certificates"
-            )
-        return self.ssl_ca_file or True
-
-    # Knowledge building (facts -> wiki drafts -> dedup -> wiki embeddings), through the configured
-    # model provider (LLM_PROVIDER=claude_cli uses the signed-in Claude Code CLI; no API key).
-    knowledge_building_enabled: bool = True
-    knowledge_fact_batch_chars: int = 12000  # chunk text sent per fact-extraction call
-    knowledge_max_fact_calls: int = 8  # cap on model calls per document for fact extraction
-    knowledge_max_wiki_pages: int = 8  # wiki pages generated per document
-    wiki_deduplication_threshold: float = 0.85  # cosine similarity at which two pages are the same topic
-
-    # Query pipeline (POST /api/query): retrieval over the library's chunks + wiki pages, cited answers.
-    query_top_k: int = 10  # sources given to the model
-    query_candidates: int = 50  # vector hits per query variant and collection, before verification
-    query_min_score: float = 0.35  # below this cosine similarity a hit is not evidence
-    query_max_variants: int = 3  # query variants embedded and searched
-    query_variant_min_similarity: float = 0.5  # variants less similar to the question are not searched (drift)
-    query_llm_variants: str = "auto"  # off | auto (English variant of a non-English question) | always (+ rewrite, paraphrase)
-    query_min_confidence: float = 0.4  # best match below this vector score -> insufficient evidence (low confidence)
-    query_rerank_pool: int = 20  # best verified hits scored for faithfulness and reranked
-    query_min_verification: float = 0.6  # wiki pages less supported by their source chunks are dropped
-    query_verify_evidence: int = 3  # source chunks a wiki page is checked against (and shown as its evidence)
-    query_evidence_per_wiki: int = 2  # of those, chunks added to the model's context next to the wiki page
-    query_reranker_base_url: str = ""  # hosted cross-encoder: POST {url}/rerank (Text Embeddings Inference API)
-    query_reranker_api_key: str = ""  # defaults to EMBEDDING_API_KEY
-    query_reranker_model: str = ""  # local cross-encoder, e.g. BAAI/bge-reranker-v2-m3; empty = vector score + keywords
-    query_context_max_tokens: int = 3800  # sources in the prompt (~4 characters per token)
-    query_max_answer_tokens: int = 700
-    query_min_citation_coverage: float = 0.5  # answers citing a smaller share of their sentences are rejected
-    query_history_turns: int = 4  # previous turns used to rewrite a follow-up question
-    query_llm_timeout_sec: float = 90.0  # per answer attempt
-    query_llm_retries: int = 2  # extra attempts after a timeout or API error
-    query_llm_retry_backoff_sec: float = 1.0  # wait before retry n is n x this (doubled when rate limited)
-    query_max_concurrent_answers: int = 8  # answer calls running at once per process; others wait (counted in the timeout)
-    query_rate_limit: str = "30/minute"  # POST /api/query per user
-
-    anthropic_api_key: str = ""
-
     # SMTP for outbound email (financial report delivery). Email is disabled when
     # smtp_host is empty — send_email() returns {"sent": False, "reason": "email_not_configured"}.
     smtp_host: str = ""
@@ -175,13 +89,6 @@ class Settings(BaseSettings):
     auth_allow_self_signup: bool = False
     # Comma-separated email domains that may sign in. Empty allows any domain.
     auth_allowed_email_domains: str = "deloitte.com"
-    # Microsoft Entra ID (OIDC) sign-in. Disabled until a client ID and secret are configured.
-    microsoft_sso_client_id: str = ""
-    microsoft_sso_client_secret: str = ""
-    microsoft_sso_tenant_id: str = "organizations"
-    microsoft_sso_redirect_uri: str = "http://localhost:8000/api/auth/microsoft/callback"
-    microsoft_sso_frontend_redirect_uri: str = "http://localhost:3000/login"
-    microsoft_sso_scopes: str = "openid profile email"
     # Comma-separated emails permitted to mutate the shared leading_practice wiki.
     # Empty in development = any authenticated user (matches historical behavior);
     # in staging/production, an empty list blocks all LP mutations.
@@ -408,9 +315,6 @@ class Settings(BaseSettings):
     advise_workbench_runs_debug_log: str = ""
     observability_snapshot_path: str = ""
     structured_logging_enabled: bool = False
-    # Console log level of the API process (DEBUG, INFO, WARNING). INFO shows the [UPLOAD], [SHELDON], [RAG_AGENT] and
-    # [QUERY] lines; the Celery worker prints its stage lines ([S3], [PARSE], [CHUNK], [EMBED]) with --loglevel=INFO.
-    log_level: str = "INFO"
 
     model_realtime_redis_channel_prefix: str = "advise-workbench:model-events"
     drawio_collab_channel_prefix: str = "advise-workbench:drawio-collab"
@@ -473,23 +377,6 @@ class Settings(BaseSettings):
     # When True, deck.pdf is produced by converting the rendered PPTX with LibreOffice
     # (pixel-faithful); the ReportLab outline renderer remains the fail-open fallback.
     deck_pdf_via_soffice_enabled: bool = True
-
-    # Content Quality Evaluation: automatic LLM-based content scoring on run completion.
-    quality_evaluation_enabled: bool = Field(
-        default=True,
-        description="Enable automatic content quality evaluation",
-        validation_alias="QUALITY_EVALUATION_ENABLED"
-    )
-    quality_evaluation_async: bool = Field(
-        default=True,
-        description="Run evaluation asynchronously (don't block run completion)",
-        validation_alias="QUALITY_EVALUATION_ASYNC"
-    )
-    quality_evaluation_model: str = Field(
-        default="claude-opus-5-5",
-        description="Claude model to use for quality evaluation",
-        validation_alias="QUALITY_EVALUATION_MODEL"
-    )
     soffice_convert_timeout_sec: float = 120.0
     # Optional explicit path to the LibreOffice ``soffice`` binary. When unset,
     # discovery falls back to PATH then common install locations. Set this when
@@ -746,44 +633,6 @@ def log_run_queue_startup_config(*, repo_env_present: bool) -> None:
             "local Redis-queue testing; switch DATABASE_URL to Postgres before staging/production "
             "(enforced there — see Settings._validate_secrets_and_urls)."
         )
-
-
-def _endpoint_for_logs(url: str) -> str:
-    """scheme://host:port of a service URL, without credentials, path or query (or "(not set)")."""
-    from urllib.parse import urlsplit
-
-    if not url:
-        return "(not set)"
-    try:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
-    except ValueError:
-        return "(unparseable)"
-
-
-def log_document_pipeline_config(process: str) -> None:
-    """One startup line per service the document pipeline uses (engagement uploads, Sheldon's rag_agent, the query
-    pipeline), so a wrong or missing .env value shows in the backend / worker log. No secrets are logged."""
-    import logging
-
-    log = logging.getLogger("advise_workbench.config")
-    prefix = settings.qdrant_collection_prefix
-    log.info("[STARTUP] %s document pipeline: database=%s broker=%s", process,
-             describe_database_url_for_logs(settings.database_url), _endpoint_for_logs(settings.celery_broker_url))
-    log.info("[STARTUP] %s SeaweedFS (S3)=%s bucket=%s prefix=%s | Qdrant=%s collections=%s%s, %s%s",
-             process, _endpoint_for_logs(settings.s3_endpoint_url), settings.s3_bucket or "(not set)",
-             settings.s3_intake_prefix, _endpoint_for_logs(settings.qdrant_url), prefix, settings.qdrant_collection,
-             prefix, settings.qdrant_wiki_collection)
-    log.info("[STARTUP] %s embeddings=%s model=%s | Docling OCR=%s | LLM provider=%s | LOG_LEVEL=%s",
-             process, _endpoint_for_logs(settings.embedding_base_url) if settings.embedding_base_url else "(local model)",
-             settings.embedding_model, settings.docling_ocr_enabled, settings.llm_provider or "(default)",
-             settings.log_level)
-    missing = [name for name, value in (("S3_ENDPOINT_URL", settings.s3_endpoint_url), ("S3_BUCKET", settings.s3_bucket),
-                                        ("QDRANT_URL", settings.qdrant_url)) if not value]
-    if missing:
-        log.warning("[STARTUP] %s: %s not set in .env; engagement uploads cannot be processed", process,
-                    ", ".join(missing))
 
 
 def bash_allowlist_set() -> frozenset[str]:

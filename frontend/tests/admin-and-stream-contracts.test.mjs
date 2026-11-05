@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const ROOT = path.resolve(process.cwd());
@@ -9,14 +9,10 @@ async function read(relPath) {
   return readFile(path.join(ROOT, relPath), "utf-8");
 }
 
-async function exists(relPath) {
-  try {
-    await access(path.join(ROOT, relPath));
-    return true;
-  } catch {
-    return false;
-  }
-}
+test("SSE stream listener includes output_chunk event", async () => {
+  const content = await read("hooks/useRunStream.ts");
+  assert.match(content, /"output_chunk"/);
+});
 
 test("auth context does not force JSON content-type for FormData", async () => {
   const content = await read("lib/auth-context.tsx");
@@ -24,13 +20,14 @@ test("auth context does not force JSON content-type for FormData", async () => {
   assert.match(content, /!isFormData/);
 });
 
-test("root route sends users to the workbench", async () => {
-  const content = await read("app/page.tsx");
-  assert.match(content, /redirect\("\/engagements"\)/);
+test("project route uses unified project studio container", async () => {
+  const content = await read("app/projects/[pid]/page.tsx");
+  assert.match(content, /ProjectStudioUnified/);
+  assert.match(content, /searchParams\.get\("run"\)/);
 });
 
-test("retired project-studio routes stay removed", async () => {
-  for (const route of ["app/projects", "app/v2", "app/customize", "app/memory", "app/tasks", "app/permissions"]) {
-    assert.equal(await exists(route), false, `${route} should not exist`);
-  }
+test("run route reuses unified project studio container", async () => {
+  const content = await read("app/projects/[pid]/runs/[rid]/page.tsx");
+  assert.match(content, /ProjectStudioUnified/);
+  assert.match(content, /initialRunId=\{rid\}/);
 });

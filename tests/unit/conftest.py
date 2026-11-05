@@ -4,9 +4,6 @@ import os
 
 import pytest
 
-# src/app/main.py loads the repo `.env` with override=True; without this flag a developer's `.env` would replace the
-# in-memory database below with the real (shared) one as soon as a test imports the app.
-os.environ["ADVISE_WORKBENCH_SKIP_DOTENV"] = "1"
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-chars-long-ok!")
 # Prevent optional localhost Redis from connecting during tests (draw.io collab fan-out / timing).
@@ -54,8 +51,6 @@ def _auth_allow_self_signup_for_integration_tests(monkeypatch: pytest.MonkeyPatc
     # Integration tests predate the collaborative storyline flow and only need a confirmed plan
     # to exercise downstream behaviour; the legacy discovery→plan path reaches ready_for_confirmation.
     monkeypatch.setattr(settings, "collaborative_building_enabled", False)
-    # Unit tests use in-process stand-ins for the shared services; a developer's CA file is irrelevant.
-    monkeypatch.setattr(settings, "ssl_ca_file", "")
 
 
 @pytest.fixture(autouse=True)

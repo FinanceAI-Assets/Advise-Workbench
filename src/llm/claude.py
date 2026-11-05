@@ -10,7 +10,6 @@ from typing import Any
 from src.core.config import settings
 from src.core.run_control import RunAborted, poll_abort
 from src.llm import gateway
-from src.llm.providers._common import call_timeout
 from src.llm.run_budget import charge_llm_usage, extract_usage_counts
 
 _CB_LOCK = threading.Lock()
@@ -136,10 +135,8 @@ def claude_generate(
     temperature: float | None = None,
     max_tokens: int | None = None,
     cache_system: bool = True,
-    timeout_sec: float | None = None,
 ) -> str:
-    """Low-level Claude call; returns raw text. ``timeout_sec`` is a hard limit for this call (an out-of-process
-    provider such as the Claude CLI is stopped at it)."""
+    """Low-level Claude call; returns raw text."""
     if not is_claude_enabled():
         raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
 
@@ -180,14 +177,13 @@ def claude_generate(
             )
 
     _guard_circuit()
-    limit = call_timeout.set(timeout_sec) if timeout_sec else None
     try:
         kwargs: dict[str, Any] = dict(
             model=model or gateway.model_for("default"),
             max_tokens=max_tokens or settings.anthropic_max_tokens,
             temperature=temperature if temperature is not None else settings.anthropic_temperature,
             messages=[{"role": "user", "content": user}],
-            timeout=max(1, float(timeout_sec or settings.anthropic_timeout_sec)),
+            timeout=max(1, float(settings.anthropic_timeout_sec)),
         )
         if cache_system:
             kwargs["system"] = _build_cached_system(system)
@@ -199,9 +195,6 @@ def claude_generate(
     except Exception:
         _record_failure()
         raise
-    finally:
-        if limit is not None:
-            call_timeout.reset(limit)
     _record_message_usage(msg)
     _record_success()
     return _extract_text(msg)

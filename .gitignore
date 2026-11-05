@@ -63,7 +63,3 @@ frontend/tsconfig.tsbuildinfo
 
 # GitHub workflow and Dependabot settings (not needed to run the app)
 .github/
-
-# Environment-specific TLS certificates (shared services CA, client certs)
-config/*.crt
-config/*.pem

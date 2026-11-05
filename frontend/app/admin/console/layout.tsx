@@ -1,6 +1,9 @@
 "use client";
 
+import Link from "next/link";
+
 import { AdminShell } from "@/components/shell/AdminShell";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { PageSkeleton } from "@/components/workbench/PageFrame";
 import { useAuth } from "@/lib/auth-context";
 
@@ -15,6 +18,17 @@ export default function AdminConsoleLayout({ children }: { children: React.React
       </div>
     );
   }
-  if (!user) return <PageSkeleton />;
+  if (!user?.isAdmin) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          title="Administrator access required"
+          description="The admin console is available to platform administrators only."
+        >
+          <Link href="/engagements">Back to your workspace</Link>
+        </EmptyState>
+      </div>
+    );
+  }
   return <AdminShell>{children}</AdminShell>;
 }

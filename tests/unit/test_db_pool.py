@@ -2,19 +2,12 @@
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.app.main import app
-from src.core.config import settings
 from tests.unit.test_auth_hitl import auth_header
 
 
-@pytest.mark.skipif(
-    ":memory:" in settings.database_url,
-    reason="20 threads on the one shared in-memory SQLite connection crash the process on Windows; the pool is "
-    "what this tests, so it runs against Postgres (DATABASE_URL)",
-)
 def test_concurrent_requests_no_deadlock():
     """Fire 20 simultaneous authenticated requests; assert none return 5xx."""
     client = TestClient(app)

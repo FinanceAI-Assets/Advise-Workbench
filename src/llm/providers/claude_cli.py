@@ -20,7 +20,7 @@ from typing import Any
 from src.core.config import settings
 from src.llm.capabilities import Capabilities
 from src.llm.config import LLMConfig
-from src.llm.providers._common import blocks, call_timeout, message, system_text, tool_result_text
+from src.llm.providers._common import blocks, message, system_text, tool_result_text
 
 # Never let the CLI inherit API credentials: it must use its own sign-in.
 _STRIPPED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")
@@ -99,8 +99,6 @@ class ClaudeCliProvider:
         system = system_text(kwargs.get("system")) + (_NO_TOOLS_NOTE if kwargs.get("tools") else "")
         stdin_line = json.dumps({"type": "user", "message": {"role": "user", "content": collapse_messages(list(kwargs.get("messages") or []))}}) + "\n"
         timeout = float(self._config.options.get("timeout_sec") or 600)
-        if call_timeout.get():
-            timeout = min(timeout, float(call_timeout.get()))
 
         workdir = Path(tempfile.gettempdir()) / "advise-claude-cli"  # empty folder: no CLAUDE.md is picked up
         workdir.mkdir(exist_ok=True)

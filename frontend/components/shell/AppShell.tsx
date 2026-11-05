@@ -3,12 +3,11 @@
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 
-import { AppFooter } from "@/components/shell/AppFooter";
 import { ShellSidebar } from "@/components/shell/ShellSidebar";
 import { ShellTopbar } from "@/components/shell/ShellTopbar";
 import { useAuth } from "@/lib/auth-context";
 
-const noShellRoutes = ["/login", "/signup", "/admin/console"];
+const noShellRoutes = ["/login", "/admin/console"];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -18,7 +17,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   // One guard for every page: no session means sign in first.
   useEffect(() => {
-    if (ready && !token && !pathname.startsWith("/login") && !pathname.startsWith("/signup")) {
+    if (ready && !token && !pathname.startsWith("/login")) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     }
   }, [ready, token, pathname, router]);
@@ -77,12 +76,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         desktopCollapsed={desktopNavCollapsed}
         onDesktopToggle={() => setDesktopNavCollapsed((prev) => !prev)}
       />
-      <div className="app-shell-body relative z-[1] flex min-h-screen min-w-0 flex-1 flex-col">
+      <div className="app-shell-body relative z-[1] min-w-0 flex-1">
         <ShellTopbar onMenuClick={() => setMobileNavOpen(true)} />
-        {/* The main area fills the window height so the footer stays at the bottom on short pages. */}
-        <main id="main-content" tabIndex={-1} className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col p-4 md:p-6 outline-none">
-          <div className="flex-1">{children}</div>
-          <AppFooter />
+        <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-[1400px] p-4 md:p-6 outline-none">
+          {children}
         </main>
       </div>
     </div>

@@ -2,6 +2,7 @@
 
 import {
   Briefcase,
+  ChevronsUpDown,
   ClipboardCheck,
   HelpCircle,
   LayoutDashboard,
@@ -10,7 +11,7 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
-  Settings,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -18,7 +19,6 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 
 import { BrandMark } from "@/components/shell/BrandMark";
-import { WorkspaceSwitcher } from "@/components/shell/WorkspaceSwitcher";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
@@ -29,7 +29,6 @@ const links = [
   { href: "/admin/console/library", label: "Library management", icon: Library },
   { href: "/admin/console/skills", label: "Skills management", icon: LayoutGrid },
   { href: "/admin/console/reviews", label: "Reviews & governance", icon: ClipboardCheck },
-  { href: "/admin/console/settings", label: "Settings", icon: Settings },
 ];
 
 function AdminNavLinkList({ onNavigate }: { onNavigate?: () => void }) {
@@ -49,7 +48,7 @@ function AdminNavLinkList({ onNavigate }: { onNavigate?: () => void }) {
             href={item.href}
             onClick={onNavigate}
             className={cn(
-              "flex min-h-10 items-center gap-2 rounded-md border-l-2 px-2 py-2 text-xs transition !no-underline",
+              "flex min-h-11 items-center gap-2 rounded-md border-l-2 px-2 py-2 text-sm transition !no-underline",
               active
                 ? "border-l-[var(--accent-green)] bg-[var(--primary-800)] !text-white shadow-sm"
                 : "border-l-transparent !text-[var(--primary-200)] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
@@ -113,6 +112,19 @@ function AdminSidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </button>
     </div>
+  );
+}
+
+function AdminConsolePicker() {
+  return (
+    <button
+      type="button"
+      className="flex min-h-11 w-full items-center gap-2 rounded-md border border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-800)] px-3 py-2 text-sm font-semibold text-white"
+    >
+      <ShieldCheck size={16} className="shrink-0 text-[var(--accent-green)]" />
+      <span className="flex-1 text-left">Admin console</span>
+      <ChevronsUpDown size={14} className="shrink-0 text-[var(--primary-400)]" />
+    </button>
   );
 }
 
@@ -194,8 +206,8 @@ export function AdminSidebar({
     <>
       <aside
         className={cn(
-          "shell-sidebar sticky top-0 hidden h-screen shrink-0 flex-col border-r border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-950)] p-3 text-[#FFFFFF] transition-[width] lg:flex",
-          desktopCollapsed ? "w-[64px]" : "w-[260px]"
+          "shell-sidebar sticky top-0 hidden h-screen shrink-0 flex-col border-r border-[color:color-mix(in_srgb,var(--primary-700)_35%,transparent)] bg-[var(--primary-950)] p-4 text-[#FFFFFF] transition-[width] lg:flex",
+          desktopCollapsed ? "w-[72px]" : "w-[260px]"
         )}
       >
         <div className="mb-4 flex shrink-0 items-start justify-between gap-2 px-2">
@@ -216,7 +228,7 @@ export function AdminSidebar({
         </div>
         {!desktopCollapsed ? (
           <div className="mb-6 shrink-0 px-0">
-            <WorkspaceSwitcher admin />
+            <AdminConsolePicker />
           </div>
         ) : null}
         {desktopCollapsed ? (
@@ -285,7 +297,7 @@ export function AdminSidebar({
             </Button>
           </div>
           <div className="mb-4 shrink-0">
-            <WorkspaceSwitcher admin />
+            <AdminConsolePicker />
           </div>
           <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             <AdminNavLinkList onNavigate={onMobileClose} />
