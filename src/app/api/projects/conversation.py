@@ -4,7 +4,7 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import perf_counter
 
 from fastapi import BackgroundTasks, Depends, HTTPException
@@ -1155,6 +1155,7 @@ def _update_conversation_summary(
     conv: "Conversation",
     state: "ConversationState",
     messages: list[dict],
+    db: Session | None = None,
 ) -> bool:
     """Generate and store a rolling summary of older conversation turns.
 
@@ -1163,6 +1164,8 @@ def _update_conversation_summary(
     the normal recent-history window remains verbatim.
 
     Changed from 10-message to 6-message intervals for fresher context in routing decisions.
+
+    Also persists the summary to the database conversation_summaries table if db session provided.
 
     Returns True if the summary was updated; caller must call save_state() afterward.
     Non-blocking: failures are swallowed and return False.
@@ -1174,18 +1177,18 @@ def _update_conversation_summary(
     # [DEPRECATED: Original 10-message minimum trigger]
     # if n < 10:
     #     return False
-    # [NEW: 6-message minimum trigger for fresher context]
-    if n < 6:
+    # [NEW: Configurable message minimum trigger for fresher context]
+    if n < settings.conversation_summary_trigger_interval:
         return False
     # [DEPRECATED: Original 10-message interval trigger]
     # if state.history_summary and n % 10 != 0:
     #     return False
-    # [NEW: 6-message interval trigger - generates summary more frequently]
+    # [NEW: Configurable message interval trigger - generates summary more frequently]
     # [CHANGED: Use conversation_summary instead of history_summary (consolidated field)]
-    if state.conversation_summary and n % 6 != 0:
+    if state.conversation_summary and n % settings.conversation_summary_trigger_interval != 0:
         return False
 
-    messages_to_summarize = messages[:-6]
+    messages_to_summarize = messages[:-settings.conversation_summary_recent_exclude_count] if settings.conversation_summary_recent_exclude_count > 0 else messages
     if not messages_to_summarize:
         return False
 
@@ -1231,7 +1234,104 @@ def _update_conversation_summary(
     # [CHANGED: Use conversation_summary instead of history_summary (consolidated field)]
     # [DEPRECATED: state.history_summary = summary]
     state.conversation_summary = summary
+
+    # NEW: Persist rolling summary to database for durability and API accessibility
+    if db is not None:
+        try:
+            _save_rolling_summary_to_db(
+                db=db,
+                project_id=conv.project_id,
+                summary_text=summary,
+                state=state,
+                message_count=n,
+            )
+        except Exception as e:
+            logger.error(f"Failed to save rolling summary to DB for project {conv.project_id}: {e}")
+            # Don't fail the response if DB save fails - JSON save is primary
+
     return True
+
+
+def _save_rolling_summary_to_db(
+    db: Session,
+    project_id: str,
+    summary_text: str,
+    state: ConversationState,
+    message_count: int = 0,
+) -> None:
+    """
+    Save rolling conversation summary to database conversation_summaries table.
+
+    Updates existing record (one per engagement) or creates new if doesn't exist.
+    Each rolling summary (at 6, 12, 18... messages) updates the same record,
+    preserving created_at but updating updated_at timestamp.
+
+    Args:
+        db: Database session
+        project_id: Project/engagement ID
+        summary_text: Generated summary (2-4 lines)
+        state: Current conversation state (for snapshot)
+        message_count: Total message count at time of summary generation (for metadata)
+
+    Raises:
+        Exception: Database operation failures are raised to caller for logging
+    """
+    try:
+        # Check if summary already exists for this engagement
+        existing = db.query(ConversationSummary).filter_by(
+            project_id=project_id
+        ).first()
+
+        state_snapshot = state.to_dict()
+        current_time = ist_now()
+
+        # Prepare all fields following the pattern from conversation_summary_worker.py
+        state_snapshot_json = json.dumps(state_snapshot)
+        summary_metadata = {
+            "message_count": message_count,
+            "generated_at": current_time.isoformat(),
+            "trigger_type": "rolling_summary"
+        }
+        summary_metadata_json = json.dumps(summary_metadata)
+        discovery_slots_snapshot = json.dumps({})
+        decision_answers_snapshot = json.dumps({})
+        conversation_fsm_state = state.state if state else "unknown"
+        expires_at = current_time + timedelta(days=30)
+
+        if existing:
+            # UPDATE: rolling summary overwrites previous values but keeps created_at
+            existing.summary_text = summary_text
+            existing.state_snapshot_json = state_snapshot_json
+            existing.summary_metadata_json = summary_metadata_json
+            existing.discovery_slots_snapshot = discovery_slots_snapshot
+            existing.decision_answers_snapshot = decision_answers_snapshot
+            existing.conversation_fsm_state = conversation_fsm_state
+            existing.summary_trigger = "rolling_summary"
+            existing.updated_at = current_time
+            existing.expires_at = expires_at
+        else:
+            # CREATE: first rolling summary for this engagement
+            new_summary = ConversationSummary(
+                id=f"summary_{project_id}",
+                project_id=project_id,
+                summary_text=summary_text,
+                state_snapshot_json=state_snapshot_json,
+                summary_metadata_json=summary_metadata_json,
+                discovery_slots_snapshot=discovery_slots_snapshot,
+                decision_answers_snapshot=decision_answers_snapshot,
+                conversation_fsm_state=conversation_fsm_state,
+                summary_trigger="rolling_summary",
+                created_at=current_time,
+                updated_at=current_time,
+                expires_at=expires_at,
+            )
+            db.add(new_summary)
+
+        db.commit()
+    except Exception as e:
+        logger.error(f"Error saving rolling summary to DB for project {project_id}: {e}")
+        db.rollback()
+        raise
 
 
 def _extract_user_name(email: str) -> str:
@@ -2430,7 +2530,7 @@ def _turn_receive(turn: Turn) -> dict | None:
             prior_messages = _serialize_messages(db, conv.id)
             prior_plan_meta = _latest_assistant_plan_metadata(prior_messages)
             state = load_state(conv)
-            summary_updated = _update_conversation_summary(conv, state, prior_messages)
+            summary_updated = _update_conversation_summary(conv, state, prior_messages, db=db)
 
             # Fast-paths only apply to fresh conversations with no established context.
             # Once an assistant has responded or state has advanced, short messages like

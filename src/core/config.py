@@ -218,6 +218,19 @@ class Settings(BaseSettings):
     conversation_digest_exclude_stale_sources: bool = True
     subagent_conversation_digest_max_chars: int = 3500
     coordinator_planning_context_chars: int = 7000
+    # Conversation summary trigger configuration for inline generation
+    conversation_summary_trigger_interval: int = Field(
+        default=6,
+        ge=1,
+        le=100,
+        description="Message count interval for triggering conversation summary generation (e.g., 6 = trigger at 6, 12, 18... messages)"
+    )
+    conversation_summary_recent_exclude_count: int = Field(
+        default=6,
+        ge=0,
+        le=50,
+        description="Number of recent messages to exclude from summary (kept verbatim in recent context)"
+    )
     # Optional extended thinking for narrative subagent (extra cost when enabled).
     subagent_narrative_thinking_enabled: bool = False
     anthropic_subagent_thinking_budget_tokens: int = 8000

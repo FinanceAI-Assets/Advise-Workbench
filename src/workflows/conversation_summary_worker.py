@@ -21,18 +21,144 @@ from src.memory.short_term.conversation_state import ConversationState
 logger = logging.getLogger(__name__)
 
 
-async def check_idle_engagements_and_summarize(db: Session) -> dict:
-    """Background task: Check idle engagements, generate and save summaries.
+async def reconcile_orphaned_summaries(db: Session) -> dict:
+    """Crash recovery: Find summaries in JSON files but missing from database and save them.
 
-    Runs periodically (every 2 minutes) to detect idle engagements and create summaries.
+    This handles scenarios where:
+    1. System crashed after JSON save but before database save
+    2. Database transaction was rolled back
+    3. Summary is durably in JSON file but missing from database
+
+    Runs on system startup and periodically to ensure consistency.
 
     Args:
         db: Database session
 
     Returns:
-        Dict with summary_count of generated summaries
+        Dict with count of recovered summaries
+    """
+    from pathlib import Path
+
+    recovered_count = 0
+
+    try:
+        # Find all workspace directories
+        base_workspace = Path("workspace")
+        if not base_workspace.exists():
+            return {"orphaned_summaries_recovered": 0}
+
+        # Scan each project's conversation_state directory
+        for project_dir in base_workspace.iterdir():
+            if not project_dir.is_dir():
+                continue
+
+            project_id = project_dir.name
+            state_dir = project_dir / "conversation_state"
+
+            if not state_dir.exists():
+                continue
+
+            # Check each conversation state JSON file
+            for state_file in state_dir.glob("*.json"):
+                try:
+                    state_data = json.loads(state_file.read_text(encoding='utf-8'))
+                    summary_text = state_data.get('conversation_summary', '').strip()
+
+                    # Skip if no summary in JSON file
+                    if not summary_text:
+                        continue
+
+                    # Check if this project has a summary in database
+                    existing_db_summary = db.query(ConversationSummary).filter(
+                        ConversationSummary.project_id == project_id
+                    ).first()
+
+                    # If summary in JSON but NOT in database → ORPHANED
+                    if not existing_db_summary:
+                        logger.warning(
+                            f"[CRASH RECOVERY] Found orphaned summary in JSON for {project_id}. "
+                            f"Summary in JSON but missing from database. Attempting recovery..."
+                        )
+
+                        # Reconstruct ConversationSummary from JSON data
+                        try:
+                            conversation = db.query(Conversation).filter(
+                                Conversation.project_id == project_id
+                            ).order_by(Conversation.updated_at.desc()).first()
+
+                            if conversation:
+                                # Build summary object from state data
+                                summary = ConversationSummary(
+                                    id=f"summary_{project_id}",
+                                    project_id=project_id,
+                                    summary_text=summary_text,
+                                    summary_metadata_json=json.dumps({
+                                        "message_count": 0,
+                                        "recovered_from_json": True,
+                                        "recovery_timestamp": ist_now().isoformat()
+                                    }),
+                                    state_snapshot_json=json.dumps(state_data),
+                                    discovery_slots_snapshot=json.dumps({}),
+                                    decision_answers_snapshot=json.dumps({}),
+                                    conversation_fsm_state=state_data.get('state', 'unknown'),
+                                    summary_trigger="crash_recovery",  # Mark as crash recovery
+                                    idle_duration_seconds=None,
+                                    created_at=ist_now(),
+                                    updated_at=ist_now(),
+                                    expires_at=ist_now() + timedelta(days=30)
+                                )
+
+                                # Save to database
+                                db.add(summary)
+                                db.commit()
+                                recovered_count += 1
+
+                                logger.info(
+                                    f"[CRASH RECOVERY] Successfully recovered summary for {project_id}. "
+                                    f"Summary restored from JSON file to database."
+                                )
+                        except Exception as recovery_e:
+                            db.rollback()
+                            logger.error(
+                                f"[CRASH RECOVERY] Failed to recover summary for {project_id}: {recovery_e}",
+                                exc_info=True
+                            )
+
+                except Exception as file_e:
+                    logger.debug(f"Error reading state file {state_file}: {file_e}")
+                    continue
+
+        logger.info(f"[CRASH RECOVERY] Reconciliation complete. Recovered {recovered_count} orphaned summaries.")
+        return {"orphaned_summaries_recovered": recovered_count}
+
+    except Exception as e:
+        logger.error(f"[CRASH RECOVERY] Reconciliation failed: {e}", exc_info=True)
+        return {"orphaned_summaries_recovered": 0}
+
+
+async def check_idle_engagements_and_summarize(db: Session) -> dict:
+    """Background task: Check idle engagements, generate and save summaries.
+
+    Runs periodically (every 2 minutes) to detect idle engagements and create summaries.
+    Also performs crash recovery to ensure summaries in JSON files are saved to database.
+
+    Args:
+        db: Database session
+
+    Returns:
+        Dict with summary_count of generated summaries and recovered orphaned summaries
     """
     summary_count = 0
+    recovered_count = 0
+
+    # STEP 0: Reconcile orphaned summaries from crashes (crash recovery)
+    try:
+        recovery_result = await reconcile_orphaned_summaries(db)
+        recovered_count = recovery_result.get("orphaned_summaries_recovered", 0)
+        if recovered_count > 0:
+            logger.info(f"[IDLE DETECTION] Recovered {recovered_count} summaries from previous crashes")
+    except Exception as recovery_e:
+        logger.error(f"[IDLE DETECTION] Crash recovery failed: {recovery_e}", exc_info=True)
 
     # Get all idle sessions
     idle_sessions = await EngagementSessionRegistry.get_idle_sessions()
@@ -132,7 +258,10 @@ async def check_idle_engagements_and_summarize(db: Session) -> dict:
         except Exception as e:
             logger.error(f"Failed to summarize idle engagement {project_id}: {e}", exc_info=True)
 
-    return {"summaries_generated": summary_count}
+    return {
+        "summaries_generated": summary_count,
+        "summaries_recovered": recovered_count  # Crash recovery count
+    }
 
 
 async def _generate_engagement_summary(
@@ -342,6 +471,9 @@ Summary:"""
             messages=[{"role": "user", "content": prompt}],
         )
         summary = _extract_final_text_from_message(msg).strip()
+        # Remove markdown heading and newlines if LLM included them
+        if summary.startswith("**Summary:**"):
+            summary = summary.replace("**Summary:**\n\n", "", 1).strip()
         if not summary:
             logger.warning("LLM returned empty summary")
             return "Conversation was held. Details to be documented."

@@ -35,7 +35,7 @@ from src.deliverables.xlsx.deliverable_xlsx import XLSXDeliverable
 from src.core.middleware import request_timing_middleware
 from src.core.rate_limit import limiter
 from src.core.request_context import get_correlation_id
-from src.core.db.session import engine, init_db
+from src.core.db.session import engine, init_db, SessionLocal
 from src.llm.startup import shutdown_llm, validate_llm_on_startup
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
@@ -100,6 +100,24 @@ async def lifespan(_app: FastAPI):
     reconcile_stalled_approved_runs_on_startup()
     if settings.scheduler_enabled:
         start_scheduler_worker()
+    # NEW: Crash recovery - reconcile orphaned summaries from previous crashes
+    try:
+        import asyncio
+        from src.workflows.conversation_summary_worker import reconcile_orphaned_summaries
+
+        db = SessionLocal()
+        try:
+            logger = logging.getLogger(__name__)
+            result = asyncio.run(reconcile_orphaned_summaries(db))
+            recovered = result.get("orphaned_summaries_recovered", 0)
+            if recovered > 0:
+                logger.info(f"[STARTUP] Crash recovery complete: {recovered} orphaned summaries restored from JSON files")
+        finally:
+            db.close()
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[STARTUP] Crash recovery skipped: {e}")
+    # END NEW
     # NEW: Start conversation idle detection worker (Phase 2: Idle Detection & Session Management)
     start_idle_detection_worker()
     yield
