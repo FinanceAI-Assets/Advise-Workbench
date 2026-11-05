@@ -133,7 +133,7 @@ def _engagement_of(router_input: dict[str, Any]) -> str | None:
 
 
 def search_knowledge_base(router_input: dict[str, Any]) -> dict[str, Any]:
-    """Path 1.b: answer from the engagement's documents + the Leading Practice Library through the query pipeline.
+    """Path 1.b: answer from engagement documents, and from selected library practices when linked.
 
     ``router_input``: ``user_instruction`` (the question), ``project_id`` or ``project_context.project_id`` (the
     engagement), and optionally ``user_id`` (the engagement membership is then checked, as for every other caller)
@@ -162,15 +162,28 @@ def search_knowledge_base(router_input: dict[str, Any]) -> dict[str, Any]:
         logger.info("[RAG_AGENT] Path 1.b search_knowledge_base: engagement=%s user=%s question=%r",
                     engagement_id or "-", user_id or "(run)", question[:120])
         with session_scope() as db:
+            practice_ids = service.engagement_practice_ids(db, engagement_id)
+            include_library = bool(practice_ids)
             if user_id:
-                reply = answer(db, user_id=str(user_id), question=question, engagement_id=engagement_id,
-                               history=router_input.get("history"))
+                reply = answer(
+                    db,
+                    user_id=str(user_id),
+                    question=question,
+                    engagement_id=engagement_id,
+                    include_library=include_library,
+                    practice_ids=practice_ids or None,
+                    history=router_input.get("history"),
+                )
             else:
-                scope = service.scope_for(engagement_id=engagement_id)
+                scope = service.scope_for(
+                    engagement_id=engagement_id,
+                    include_library=include_library,
+                    practice_ids=practice_ids or None,
+                )
                 result = answer_question(db, scope, question, _history(router_input.get("history")))
                 if engagement_id:
                     result.retrieval["pending_documents"] = service.pending_documents(db, engagement_id)
-                reply = _reply(result, scope, engagement_id, True)
+                reply = _reply(result, scope, engagement_id, include_library)
         result = reply.result
         documents = [
             {"id": s["id"], "title": s["title"], "excerpt": s["snippet"], "relevance": s["score"], "source": s["scope"],

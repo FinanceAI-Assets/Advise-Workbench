@@ -293,8 +293,33 @@ def test_sheldon_sends_document_questions_to_the_rag_agent(env, monkeypatch):
     meta = reply["metadata"]
     assert reply["role"] == "assistant" and meta["kind"] == "rag_answer" and meta["status"] == "answered"
     assert "[S1]" in reply["content"] and "Sources:" in reply["content"]
-    assert {s["scope"] for s in meta["sources"]} == {"engagement", "library"}  # the engagement's files + the library
+    assert {s["scope"] for s in meta["sources"]} == {"engagement"}
     assert meta["scope"]["engagement_id"] == eid
+    assert meta["scope"]["library"] is False and meta["scope"]["practice_ids"] == []
+
+
+def test_sheldon_uses_linked_library_practices_for_an_engagement(env, monkeypatch):
+    client, user = env["client"], env["user"]
+    env["released"].add(env["doc"])
+    eid = _engagement(env)
+    with session_scope() as db:
+        db.get(LpPractice, env["practice"]).status = "Approved"
+    linked = client.post(
+        f"/api/library/{env['practice']}/add-to-engagement",
+        headers=user,
+        json={"projectId": eid},
+    )
+    assert linked.status_code == 200, linked.text
+    _route_as(monkeypatch, "knowledge_question")
+    resp = client.post(
+        f"/api/projects/{eid}/conversation/messages",
+        headers=user,
+        json={"content": "How long do vendor master changes take?"},
+    )
+    assert resp.status_code == 200, resp.text
+    meta = resp.json()["messages"][-1]["metadata"]
+    assert {s["scope"] for s in meta["sources"]} == {"engagement", "library"}
+    assert meta["scope"]["library"] is True and meta["scope"]["practice_ids"] == [env["practice"]]
 
 
 def test_document_questions_are_not_held_by_context_validation(env, monkeypatch):

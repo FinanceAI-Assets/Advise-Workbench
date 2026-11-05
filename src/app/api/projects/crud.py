@@ -32,6 +32,7 @@ from src.core.db.session import get_db
 from src.app.schemas.common import ProjectSummary
 from src.deliverables.branding_service import BrandingService
 from src.core.storage import ensure_workspace, workspace_path
+from src.core.workspace_store import remove_tree
 
 
 class CreateProjectRequest(BaseModel):
@@ -140,7 +141,7 @@ def delete_project(
 
     project_workspace = workspace_path(pid)
     if project_workspace.exists():
-        shutil.rmtree(project_workspace, ignore_errors=True)
+        remove_tree(project_workspace, ignore_errors=True)
     return {"project_id": pid, "deleted": True}
 
 

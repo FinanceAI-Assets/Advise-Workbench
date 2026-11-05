@@ -169,8 +169,8 @@ else
   done
 fi
 
-section "Shared services (public links in .env)"
-# link_state HTTP-code -> up | down. 000 = no connection; 502/504/52x = a dead tunnel or unreachable origin.
+section "Shared services (local addresses in .env)"
+# link_state HTTP-code -> up | down. 000 = no connection; 502/504/52x = a dead proxy or unreachable origin.
 link_state() { case "$1" in 000|502|504|52[0-9]) echo down ;; *) echo up ;; esac; }
 # Team settings that travel with `git pull`: when .env.example carries an active "team-shared-services" block,
 # its managed keys are brought into .env (with --fix) or reported (without). The personal settings (collection prefix,
@@ -207,8 +207,7 @@ check_link() { # label ENV_VAR path need200(1|0)
   state="$(link_state "$code")"
   if [ "$state" = up ] && { [ "$4" = 0 ] || [ "$code" = 200 ]; }; then pass "$1 answers (HTTP $code) at ${url%/}"
   else
-    hint="check the link and its key in .env"
-    case "$url" in *trycloudflare.com*) hint="quick-tunnel links change when the tunnels restart: ask the service owner for the current advise-workbench-team.env" ;; esac
+    hint="check the address, the shared server's port and its key in .env"
     if [ "$SHARED_REQUIRED" = true ]; then fail "$1 link does not answer (HTTP $code): ${url%/}" "$hint"
     else warn "$1 link does not answer (HTTP $code): ${url%/}" "$hint"; fi
   fi
@@ -258,9 +257,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 section "Model access"
-# Provider: LLM_PROVIDER in .env, else `provider:` in config/model_config.yaml, else anthropic.
+# Provider: LLM_PROVIDER in .env (see .env.example for every option), else anthropic.
 PROVIDER="$(env_get LLM_PROVIDER)"
-[ -z "$PROVIDER" ] && PROVIDER="$(sed -n 's/^provider:[[:space:]]*\([a-z_]*\).*/\1/p' "$ROOT/config/model_config.yaml" 2>/dev/null | head -n 1)"
 PROVIDER="${PROVIDER:-anthropic}"
 BASE_URL="$(env_get ANTHROPIC_BASE_URL)"
 API_KEY="$(env_get ANTHROPIC_API_KEY)"
@@ -285,13 +283,6 @@ case "$PROVIDER" in
     USES_CLI=1
     pass "provider claude_cli: the backend calls the Claude Code CLI directly (no bridge, no API key)"
     check_claude_cli ;;
-  openai_compatible)
-    LLM_MODEL_SET="$(env_get LLM_MODEL)"
-    [ -z "$LLM_MODEL_SET" ] && LLM_MODEL_SET="$(awk '/^models:/{f=1;next} f&&/^[^ ]/{f=0} f&&/default:/{gsub(/.*default:[[:space:]]*|"|#.*/,""); print; exit}' "$ROOT/config/model_config.yaml" 2>/dev/null | tr -d '[:space:]')"
-    if [ -n "$LLM_MODEL_SET" ]; then pass "provider openai_compatible, model $LLM_MODEL_SET"
-    else fail "provider openai_compatible needs a model" "set LLM_MODEL in .env or models.default in config/model_config.yaml"; fi
-    if [ -n "$(env_get LLM_API_KEY)" ] || [ -n "$(env_get LLM_BASE_URL)" ]; then pass "LLM_API_KEY or LLM_BASE_URL is set (not validated here)"
-    else fail "provider openai_compatible needs LLM_API_KEY (or LLM_BASE_URL for a local server)" "add it to .env"; fi ;;
   anthropic)
     if [ "$BRIDGE_MODE" = 1 ]; then
       USES_CLI=1
@@ -305,7 +296,15 @@ case "$PROVIDER" in
     else
       fail "no model access configured" "set a real ANTHROPIC_API_KEY, or LLM_PROVIDER=claude_cli to use the signed-in Claude Code CLI, or see docs/04-development/model-providers.md"
     fi ;;
-  *) fail "unknown LLM_PROVIDER '$PROVIDER'" "use anthropic, claude_cli or openai_compatible" ;;
+  *)
+    # openai, azure_openai, bedrock and the OpenAI-compatible presets: the app's own validator decides.
+    if [ -x "$VPY" ]; then
+      if REPORT="$(cd "$ROOT" && "$VPY" -m src.llm check 2>/dev/null)"; then
+        pass "provider $PROVIDER is configured ($(printf '%s' "$REPORT" | sed -n 's/^models: *//p'))"
+      else
+        fail "provider $PROVIDER is not ready: $(printf '%s' "$REPORT" | sed -n 's/^status: *//p')" "fix .env as described in .env.example, then run: make llm.check"
+      fi
+    else warn "provider $PROVIDER is checked once .venv exists" "run with --fix, then: make llm.check"; fi ;;
 esac
 
 if [ "$USES_CLI" = 1 ]; then
@@ -464,6 +463,8 @@ elif [ "$OO_ENABLED" = "true" ]; then
           else OO_UP=1; warn "OPENOBSERVE_ENABLED=true but OpenObserve is not installed; starting without it" "./scripts/openobserve.sh setup, or set OPENOBSERVE_ENABLED=false"; fi ;;
     *) OO_UP=1; warn "port $OO_PORT is used by ${S#busy:}; starting without OpenObserve" "stop that process or change OPENOBSERVE_URL" ;; esac
 fi
+OO_START_LOCAL=0
+[ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 0 ] && [ "$OO_UP" = 0 ] && OO_START_LOCAL=1
 
 section "Optional tools"
 [ "$OO_ENABLED" = "true" ] || warn "OpenObserve monitoring is off: no traces, metrics or logs are collected" "./scripts/openobserve.sh setup"

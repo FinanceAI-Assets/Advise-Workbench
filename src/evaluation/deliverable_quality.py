@@ -1,5 +1,4 @@
-"""
-Contract-driven deliverable critique, scoring, and revision orchestration.
+"""Contract-driven deliverable critique, scoring, and revision orchestration.
 
 Evaluators and weights are loaded from quality contract JSON — not hardcoded here.
 """
@@ -13,8 +12,15 @@ from collections.abc import Callable
 from typing import Any
 
 from src.core.config import settings
+from src.llm import gateway
+from src.llm.claude import (
+    claude_generate_json,
+    _extract_first_json_object,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.evaluation.quality_framework import UnifiedQualityFramework
-from src.llm.claude import claude_generate_json, is_claude_enabled
 from src.core.observability.langfuse_tracing import langfuse_span
 from src.core.observability.metrics import increment
 from src.evaluation.quality_contract_registry import contract_for_outputs
@@ -334,7 +340,13 @@ def _score_llm_critique(text: str, dim: dict[str, Any], *, project_id: str | Non
     rubric = str(dim.get("rubric") or "").strip()
     if not rubric:
         return 1.0, {"skipped": True}
-    if not is_claude_enabled() or len(text.strip()) < 80:
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # from src.llm.claude import claude_generate_json, is_claude_enabled
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled() or len(text.strip()) < 80:
+    #     return 0.78, {"fallback": True, "note": "claude_disabled_or_short"}
+    # [NEW: Gateway-based provider-agnostic check]
+    if not gateway.is_enabled() or len(text.strip()) < 80:
         return 0.78, {"fallback": True, "note": "claude_disabled_or_short"}
     user = (
         "Rate the deliverable against the rubric. Return strict JSON: "
@@ -342,10 +354,23 @@ def _score_llm_critique(text: str, dim: dict[str, Any], *, project_id: str | Non
         f"Rubric:\n{rubric}\n\nDeliverable:\n{text[:12000]}"
     )
     try:
-        res = claude_generate_json(
+        # [DEPRECATED: Old claude_generate_json call]
+        # res = claude_generate_json(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
             system="You are an expert editorial reviewer. Return JSON only.",
-            user=user,
+            messages=[{"role": "user", "content": user}],
         )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            res = json.loads(text)
+        except json.JSONDecodeError:
+            res = _extract_first_json_object(text)
         sc = float(res.get("score", 0.65)) if isinstance(res, dict) else 0.65
         sc = max(0.0, min(1.0, sc))
         issues = res.get("issues") if isinstance(res, dict) else []

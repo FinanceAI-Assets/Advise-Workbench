@@ -12,6 +12,8 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+from src.core.workspace_store import as_path
 from src.core.tz import IST
 from typing import Any
 
@@ -20,11 +22,13 @@ from sqlalchemy.orm import Session
 from src.core.db.models import MemoryItem
 from src.core.config import settings
 from src.llm.model_tiers import planning_model
+from src.llm import gateway
 from src.llm.claude import (
     _extract_first_json_object,
     claude_generate_json,
     claude_generate_with_thinking,
-    is_claude_enabled,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
 )
 from src.memory.knowledge.leading_practices import leading_practice_library_service as _lp
 
@@ -360,7 +364,13 @@ def build_storyline_contract(
     disabled or the LLM call fails, so callers never hard-fail on the spine.
     """
     arc_key = arc_key if arc_key in ARC_LIBRARY else "pyramid"
-    if not getattr(settings, "storyline_contract_enabled", True) or not is_claude_enabled():
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # from src.llm.claude import ..., is_claude_enabled
+    # [DEPRECATED: Old check - kept for reference]
+    # if not getattr(settings, "storyline_contract_enabled", True) or not is_claude_enabled():
+    #     return _fallback_contract(arc_key, target_slides)
+    # [NEW: Gateway-based provider-agnostic check]
+    if not getattr(settings, "storyline_contract_enabled", True) or not gateway.is_enabled():
         return _fallback_contract(arc_key, target_slides)
 
     arc_def = ARC_LIBRARY[arc_key]
@@ -465,7 +475,7 @@ def build_storyline_contract(
 def persist_storyline_contract(run_dir: str | Path, contract: dict[str, Any]) -> str | None:
     """Write the contract to ``<run_dir>/storyline.json``. Fail-open; returns path or None."""
     try:
-        p = Path(run_dir)
+        p = as_path(run_dir)
         p.mkdir(parents=True, exist_ok=True)
         out = p / "storyline.json"
         out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -478,7 +488,7 @@ def persist_storyline_contract(run_dir: str | Path, contract: dict[str, Any]) ->
 def load_storyline_contract(run_dir: str | Path) -> dict[str, Any] | None:
     """Load ``<run_dir>/storyline.json`` if present. Fail-open; returns None on any error."""
     try:
-        out = Path(run_dir) / "storyline.json"
+        out = as_path(run_dir) / "storyline.json"
         if not out.exists():
             return None
         data = json.loads(out.read_text(encoding="utf-8"))

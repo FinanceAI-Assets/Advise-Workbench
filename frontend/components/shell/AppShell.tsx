@@ -67,7 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen bg-[var(--primary-50)] text-[var(--primary-900)]">
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--primary-900)] focus:shadow-lg focus:outline-2 focus:outline-[var(--accent-blue)]"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--primary-900)] focus:shadow-lg focus:outline-2 focus:outline-[var(--accent-green)]"
       >
         Skip to main content
       </a>

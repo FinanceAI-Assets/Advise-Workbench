@@ -13,6 +13,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+from src.core.workspace_store import as_path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -90,7 +92,7 @@ def write_claims_dossier(
     source: str = "pptx",
 ) -> dict[str, Any]:
     """Persist (or merge) the claim dossier for a run. Preserves prior decisions."""
-    run_dir = Path(run_dir)
+    run_dir = as_path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / CLAIMS_FILENAME
     prior = load_claims_dossier(run_dir)
@@ -127,7 +129,7 @@ def write_claims_dossier(
 
 
 def load_claims_dossier(run_dir: Path) -> dict[str, Any]:
-    path = Path(run_dir) / CLAIMS_FILENAME
+    path = as_path(run_dir) / CLAIMS_FILENAME
     if not path.is_file():
         return {"claims": [], "summary": _summarize([])}
     try:
@@ -176,7 +178,7 @@ def apply_claim_decisions(
         "summary": _summarize(claims),
         "last_applied": applied,
     }
-    path = Path(run_dir) / CLAIMS_FILENAME
+    path = as_path(run_dir) / CLAIMS_FILENAME
     path.write_text(json.dumps(dossier, indent=2), encoding="utf-8")
     return dossier
 

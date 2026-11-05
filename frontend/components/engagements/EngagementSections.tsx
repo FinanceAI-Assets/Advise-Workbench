@@ -33,7 +33,7 @@ export function SourcesSection({ id, detail }: SectionProps) {
   return (
     <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <Card className="space-y-3">
-        <h2 className="text-base font-semibold text-[var(--text-default)]">Engagement documents</h2>
+        <h2 className="text-base font-semibold text-[var(--text-default)]">Project level documents</h2>
         <p className="text-xs text-[var(--text-muted)]">
           Uploaded files are indexed for this engagement only. Supported: txt, md, csv, json, pdf, docx, pptx, xlsx.
         </p>
@@ -55,11 +55,6 @@ export function SourcesSection({ id, detail }: SectionProps) {
             ))}
           </ul>
         )}
-        <Link href="/library" className="!no-underline">
-          <Button variant="secondary" className="w-full justify-center">
-            Browse the library
-          </Button>
-        </Link>
         <p className="text-xs text-[var(--text-muted)]">
           Only permitted, indexed sources are retrieved. Source boundaries travel with drafts.
         </p>

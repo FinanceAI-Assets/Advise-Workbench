@@ -14,6 +14,7 @@ Everything is rebuilt when a source file or a release changes.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import re
@@ -55,8 +56,10 @@ _index: LPIndex | None = None
 _checked_at = 0.0
 
 
-def _index_dir() -> Path:
-    return Path(settings.workspace_root) / ".lp_index"
+def _index_dir():
+    from src.core.storage import workspace_path
+
+    return workspace_path(".lp_index")
 
 
 def _released_passages() -> list[dict[str, Any]]:
@@ -77,10 +80,12 @@ def _source_files(covered_practices: set[str] = frozenset()) -> list[tuple[str, 
     library = Path(settings.lp_library_local_path) if settings.lp_library_local_path else None
     if library and library.is_dir():
         files += [("library", p) for p in sorted(library.rglob("*")) if p.is_file() and p.suffix.lower() in {".md", ".txt"}]
-    wiki = Path(settings.workspace_root) / "leading_practices" / "wiki"
+    from src.core.storage import workspace_path
+
+    wiki = workspace_path("leading_practices") / "wiki"
     if wiki.is_dir():
         files += [("wiki", p) for p in sorted(wiki.rglob("*.md")) if ".meta" not in p.parts]
-    published = Path(settings.workspace_root) / "leading_practices" / "published"
+    published = workspace_path("leading_practices") / "published"
     if published.is_dir():  # only releases whose passages are not in the database (made before the pipeline)
         files += [("published", p) for p in sorted(published.glob("*.md")) if p.stem not in covered_practices]
     return files
@@ -188,13 +193,15 @@ def _chunk_embeddings(index: LPIndex) -> Any:
         meta_path = _index_dir() / "embeddings.json"
         try:
             if json.loads(meta_path.read_text(encoding="utf-8")) == {"fingerprint": index.fingerprint, "model": EMBEDDING_MODEL}:
-                index.embeddings = np.load(vectors_path)
+                index.embeddings = np.load(io.BytesIO(vectors_path.read_bytes()))
                 return index.embeddings
         except (OSError, ValueError):
             pass
         local = [index.chunks[i] for i in index.local_positions]
         index.embeddings = _embed([_search_text(c) for c in local]) if local else np.zeros((0, 1), dtype="float32")
-        np.save(vectors_path, index.embeddings)
+        buf = io.BytesIO()
+        np.save(buf, index.embeddings)
+        vectors_path.write_bytes(buf.getvalue())
         meta_path.write_text(json.dumps({"fingerprint": index.fingerprint, "model": EMBEDDING_MODEL}), encoding="utf-8")
         return index.embeddings
 

@@ -44,6 +44,9 @@ def get_checkpointer() -> Any:
     with _LOCK:
         if _SAVER is not None:
             return _SAVER
+        if settings.workspace_backend == "db_s3" and checkpoint_store() != "postgres":
+            # A SQLite checkpoint file would be created in a local workspace folder.
+            raise ValueError("WORKSPACE_BACKEND=db_s3 needs RUN_CHECKPOINT_STORE=postgres")
         if checkpoint_store() == "postgres":
             from langgraph.checkpoint.postgres import PostgresSaver  # type: ignore
             from psycopg.rows import dict_row

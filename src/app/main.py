@@ -48,6 +48,7 @@ from src.core.middleware import request_timing_middleware
 from src.core.rate_limit import limiter
 from src.core.request_context import get_correlation_id
 from src.core.db.session import engine, init_db
+from src.llm.startup import shutdown_llm, validate_llm_on_startup
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
 from src.core.observability.metrics import snapshot as observability_snapshot
@@ -111,6 +112,7 @@ async def lifespan(_app: FastAPI):
     )
     log_document_pipeline_config("backend")
     init_otel_if_enabled()
+    validate_llm_on_startup()
     init_db()
     if settings.enable_deliverable_registry:
         DeliverableRegistry.register("pptx", PPTXDeliverable())
@@ -126,6 +128,7 @@ async def lifespan(_app: FastAPI):
     yield
     drain_execution_worker(timeout_sec=settings.run_drain_timeout_sec)
     await shutdown_mcp_servers()
+    shutdown_llm()
     flush_telemetry()
 
 

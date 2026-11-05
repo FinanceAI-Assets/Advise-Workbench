@@ -9,39 +9,23 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from src.core.config import settings
-from src.core.run_control import poll_abort
-from src.llm import gateway
-from src.tools.code_executor.bash_executor import get_bash_executor, new_session_id
-from src.llm.claude import is_claude_enabled
+
+# [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
+# from src.llm.claude import is_claude_enabled
 from src.core.observability.langfuse_tracing import langfuse_span
 from src.core.observability.metrics import increment
-from src.core.observability.advanced_metrics import record_tool_call
-from src.llm.run_budget import charge_llm_usage, extract_usage_counts
+from src.core.run_control import poll_abort
+from src.llm import gateway
+from src.llm.base_provider import ToolCallRecord
+from src.tools.code_executor.bash_executor import get_bash_executor, new_session_id
 from src.tools.code_executor.text_editor_executor import execute_text_editor_tool
 from src.tools.registry import resolve_tool_call, tool_result_to_text
 
 _LOG = logging.getLogger(__name__)
 
 
-def _record_message_usage(message: Any) -> None:
-    """Charge per-round token usage from a raw Anthropic tool-loop response.
-
-    Mirrors ``src.llm.claude._record_message_usage``: these tool loops call
-    the Anthropic client directly (for bash/text-editor/custom tool support) and
-    so bypass the ``claude_generate*`` helpers that normally charge usage.
-    """
-    inp, out = extract_usage_counts(message)
-    usage = getattr(message, "usage", None)
-    raw_inp = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
-    cache_create = int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
-    if inp or out:
-        charge_llm_usage(
-            input_tokens=raw_inp,
-            output_tokens=out,
-            cache_read_tokens=cache_read,
-            cache_creation_tokens=cache_create,
-        )
+def _record_message_usage(message: Any) -> None:  # noqa: ARG001
+    """Deprecated no-op kept for existing importers: ``gateway.create_message`` now charges usage itself."""
 
 
 def _tool_error_response(tool_name: str, exc: Exception, *, timed_out: bool = False) -> str:
@@ -138,8 +122,12 @@ def run_claude_bash_tool_loop(
     Keep ``allow_bash=False`` unless ``BASH_TOOL_ENABLED`` and policy allow it.
     Returns keys: ``text``, ``session_id``, ``tool_trace``, ``model``, ``rounds``.
     """
-    if not is_claude_enabled():
-        raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     raise RuntimeError("Model provider is not configured: set LLM_PROVIDER in .env (see .env.example)")
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
+        raise RuntimeError("Model provider is not configured: set LLM_PROVIDER in .env (see .env.example)")
     return run_claude_tools_loop(
         system=system,
         messages=messages,
@@ -304,6 +292,111 @@ def run_claude_tools_loop(
     }
 
 
+def _execute_tool(name: str, raw_input: dict[str, Any], allowed: set[str], native_context: dict[str, Any]) -> tuple[str, bool]:
+    """Run one registry tool for an agent; returns ``(output text, is_error)``. Never raises."""
+    if name not in allowed:
+        return json.dumps({"error": f"Tool {name!r} not enabled for this agent"}), True
+    try:
+        return tool_result_to_text(resolve_tool_call(name, raw_input, native_context)), False
+    except Exception as exc:  # noqa: BLE001
+        timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
+        return _tool_error_response(name, exc, timed_out=timed_out), True
+
+
+def _trace_entry(round_no: int, name: str, tool_use_id: Any, out_text: str, is_err: bool) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "round": round_no,
+        "tool": name,
+        "tool_use_id": tool_use_id,
+        "is_error": is_err,
+        "output_chars": len(out_text),
+    }
+    preview = _trace_preview_for_tool(name, out_text) if not is_err else None
+    if preview:
+        entry["preview"] = preview
+    return entry
+
+
+def _report_tool_round(
+    emit_event: Callable[[str, dict[str, Any]], None] | None,
+    agent_id: str,
+    run_id: str | None,
+    round_no: int,
+    calls: int,
+    trace_summary: list[dict[str, Any]],
+) -> None:
+    if emit_event:
+        emit_event(
+            "agent_tool_round",
+            {
+                "agent": agent_id,
+                "run_id": run_id,
+                "round": round_no,
+                "trace": trace_summary[-calls:] if calls else [],
+            },
+        )
+    if run_id:
+        langfuse_span(
+            trace_id=run_id,
+            name="agent.tool_round",
+            input_payload={"agent_id": agent_id, "round": round_no},
+            output_payload={"tool_calls": calls, "errors": sum(1 for t in trace_summary if t.get("is_error"))},
+        )
+
+
+def _swarm_mailbox_block(native_context: dict[str, Any], run_id: str | None) -> str:
+    """The swarm teammate's mailbox digest, or "" when swarm orchestration does not apply."""
+    tm = str(native_context.get("swarm_teammate_id") or "").strip()
+    rid = str(native_context.get("run_id") or run_id or "").strip()
+    if not (tm and rid and bool(getattr(settings, "swarm_orchestration_enabled", False))):
+        return ""
+    from src.extensions.swarm.swarm import format_swarm_mailbox_for_teammate
+
+    return format_swarm_mailbox_for_teammate(run_id=rid, teammate_id=tm, limit=18) or ""
+
+
+def _run_delegated_tool_session(
+    *,
+    system: str,
+    user: str,
+    model: str,
+    tool_defs: list[dict[str, Any]],
+    native_context: dict[str, Any],
+    max_rounds: int,
+    emit_event: Callable[[str, dict[str, Any]], None] | None,
+    agent_id: str,
+    run_id: str | None,
+) -> dict[str, Any]:
+    """Tool loop run by the provider itself (the Claude CLI calls our tools over its MCP bridge).
+
+    Same tool execution, allow-list, trace entries and ``agent_tool_round`` events as the API loop.
+    """
+    allowed = {str(t.get("name") or "") for t in tool_defs if isinstance(t, dict)}
+    trace_summary: list[dict[str, Any]] = []
+
+    def on_round(round_no: int, calls: list[ToolCallRecord]) -> None:
+        for call in calls:
+            trace_summary.append(_trace_entry(round_no, call.name, call.tool_use_id, call.output, call.is_error))
+        _report_tool_round(emit_event, agent_id, run_id, round_no, len(calls), trace_summary)
+
+    msg = gateway.run_tool_session(
+        system=system,
+        messages=[{"role": "user", "content": user}],
+        tools=tool_defs,
+        executor=lambda name, tool_input: _execute_tool(name, tool_input, allowed, native_context),
+        max_rounds=max_rounds,
+        model=model,
+        on_round=on_round,
+        on_event=poll_abort,
+    )
+    return {
+        "text": _extract_final_text_from_message(msg),
+        "tool_trace": trace_summary,
+        "model": model,
+        "rounds": int(getattr(msg, "tool_rounds", 0) or 0) + 1,
+    }
+
+
 def run_subagent_tool_loop(
     *,
     system: str,
@@ -323,18 +416,36 @@ def run_subagent_tool_loop(
 
     ``tool_defs`` must be Anthropic-style entries from ``tool_to_anthropic_schema`` / ``anthropic_tool_definitions``.
     """
-    if not is_claude_enabled():
-        raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
+    # [NEW: Use provider-agnostic gateway check instead of is_claude_enabled]
+    if not gateway.is_enabled():
+        raise RuntimeError("Model provider is not configured: set LLM_PROVIDER in .env (see .env.example)")
     if not tool_defs or not gateway.capabilities().tools:
         # No tools requested, or the provider cannot call tools: write in a single call.
-        from src.llm.claude import claude_generate
+        # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+        # from src.llm.claude import claude_generate
+        # return {
+        #     "text": claude_generate(
+        #         system=system,
+        #         user=user,
+        #         max_tokens=max_tokens or settings.subagent_tool_max_tokens,
+        #     ),
+        #     "tool_trace": [],
+        #     "model": gateway.model_for("default"),
+        #     "rounds": 1,
+        # }
 
+        # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=max_tokens or settings.subagent_tool_max_tokens,
+            temperature=temperature if temperature is not None else settings.anthropic_temperature,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        final_text = _extract_final_text_from_message(msg)
         return {
-            "text": claude_generate(
-                system=system,
-                user=user,
-                max_tokens=max_tokens or settings.subagent_tool_max_tokens,
-            ),
+            "text": final_text,
             "tool_trace": [],
             "model": gateway.model_for("default"),
             "rounds": 1,
@@ -342,6 +453,19 @@ def run_subagent_tool_loop(
 
     cap = max_rounds if max_rounds is not None else settings.subagent_tool_max_rounds
     model = gateway.model_for("default")
+    if gateway.capabilities().delegated_tools:
+        block = _swarm_mailbox_block(native_context, run_id)
+        return _run_delegated_tool_session(
+            system=system,
+            user=f"{block}\n---\n{user}" if block else user,
+            model=model,
+            tool_defs=tool_defs,
+            native_context=native_context,
+            max_rounds=cap,
+            emit_event=emit_event,
+            agent_id=agent_id,
+            run_id=run_id,
+        )
     msg_history: list[dict[str, Any]] = [{"role": "user", "content": user}]
     trace_summary: list[dict[str, Any]] = []
     final_text = ""
@@ -351,25 +475,16 @@ def run_subagent_tool_loop(
     for round_i in range(cap):
         poll_abort()
         rounds_completed = round_i + 1
-        tm = str(native_context.get("swarm_teammate_id") or "").strip()
-        rid = str(native_context.get("run_id") or run_id or "").strip()
-        if (
-            tm
-            and rid
-            and bool(getattr(settings, "swarm_orchestration_enabled", False))
-        ):
-            from src.extensions.swarm.swarm import format_swarm_mailbox_for_teammate
-
-            block = format_swarm_mailbox_for_teammate(run_id=rid, teammate_id=tm, limit=18)
-            if block:
-                if round_i == 0:
-                    u0 = msg_history[0]["content"]
-                    if isinstance(u0, str):
-                        msg_history[0]["content"] = f"{block}\n---\n{u0}"
-                    elif isinstance(u0, list):
-                        msg_history[0]["content"] = [{"type": "text", "text": f"{block}\n---\n"}] + u0
-                else:
-                    msg_history.append({"role": "user", "content": block})
+        block = _swarm_mailbox_block(native_context, run_id)
+        if block:
+            if round_i == 0:
+                u0 = msg_history[0]["content"]
+                if isinstance(u0, str):
+                    msg_history[0]["content"] = f"{block}\n---\n{u0}"
+                elif isinstance(u0, list):
+                    msg_history[0]["content"] = [{"type": "text", "text": f"{block}\n---\n"}] + u0
+            else:
+                msg_history.append({"role": "user", "content": block})
         msg = gateway.create_message(
             model=model,
             max_tokens=max_tokens or settings.subagent_tool_max_tokens,
@@ -398,46 +513,8 @@ def run_subagent_tool_loop(
             if not isinstance(raw_input, dict):
                 raw_input = {}
             name_str = str(name)
-            if name_str not in allowed:
-                out_text = json.dumps({"error": f"Tool {name_str!r} not enabled for this agent"})
-                is_err = True
-            else:
-                try:
-                    tool_start_time = time.perf_counter()
-                    result = resolve_tool_call(name_str, raw_input, native_context)
-                    tool_duration_ms = (time.perf_counter() - tool_start_time) * 1000
-                    out_text = tool_result_to_text(result)
-                    is_err = False
-
-                    # Record tool execution metrics
-                    record_tool_call(
-                        duration_ms=tool_duration_ms,
-                        success=True,
-                        necessary=True,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    tool_duration_ms = (time.perf_counter() - tool_start_time) * 1000
-                    timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
-                    out_text = _tool_error_response(name_str, exc, timed_out=timed_out)
-                    is_err = True
-
-                    # Record tool execution metrics for failed tools
-                    record_tool_call(
-                        duration_ms=tool_duration_ms,
-                        success=False,
-                        necessary=True,
-                    )
-            trace_entry: dict[str, Any] = {
-                "round": rounds_completed,
-                "tool": name_str,
-                "tool_use_id": tid,
-                "is_error": is_err,
-                "output_chars": len(out_text),
-            }
-            preview = _trace_preview_for_tool(name_str, out_text) if not is_err else None
-            if preview:
-                trace_entry["preview"] = preview
-            trace_summary.append(trace_entry)
+            out_text, is_err = _execute_tool(name_str, raw_input, allowed, native_context)
+            trace_summary.append(_trace_entry(rounds_completed, name_str, tid, out_text, is_err))
             tool_result_blocks.append(
                 {
                     "type": "tool_result",
@@ -447,23 +524,7 @@ def run_subagent_tool_loop(
                 }
             )
 
-        if emit_event:
-            emit_event(
-                "agent_tool_round",
-                {
-                    "agent": agent_id,
-                    "run_id": run_id,
-                    "round": rounds_completed,
-                    "trace": trace_summary[-len(tool_result_blocks) :] if tool_result_blocks else [],
-                },
-            )
-        if run_id:
-            langfuse_span(
-                trace_id=run_id,
-                name="agent.tool_round",
-                input_payload={"agent_id": agent_id, "round": rounds_completed},
-                output_payload={"tool_calls": len(tool_result_blocks), "errors": sum(1 for t in trace_summary if t.get("is_error"))},
-            )
+        _report_tool_round(emit_event, agent_id, run_id, rounds_completed, len(tool_result_blocks), trace_summary)
 
         if not tool_result_blocks:
             _LOG.warning("stop_reason=tool_use but no tool_use blocks; stopping subagent loop")
@@ -487,8 +548,9 @@ def run_claude_text_only(
     temperature: float | None = None,
 ) -> str:
     """Internal helper: single-turn beta message without tools (for callers that avoid claude_generate)."""
-    if not is_claude_enabled():
-        raise RuntimeError("Model provider is not configured (see config/model_config.yaml and docs/SETUP.md)")
+    # [NEW: Use provider-agnostic gateway check instead of is_claude_enabled]
+    if not gateway.is_enabled():
+        raise RuntimeError("Model provider is not configured: set LLM_PROVIDER in .env (see .env.example)")
     m = model or gateway.model_for("default")
     msg = gateway.create_message(
         model=m,

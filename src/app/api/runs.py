@@ -26,7 +26,10 @@ from src.core.rate_limit import limiter
 from src.core.db.models import Conversation, ConversationMessage, MemoryEvent, Run, RunEvent, RunTask, ScheduledTaskRun, User, utcnow
 from src.core.db.session import SessionLocal, get_db
 from src.app.schemas.common import RunSummary
-from src.llm.claude import claude_generate_json, is_claude_enabled
+# [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
+from src.llm import gateway
+from src.llm.claude import claude_generate_json
+# is_claude_enabled
 from src.workflows.task_router.output_format_detection import (
     detect_deliverable_keyword_formats,
     detect_explicit_output_formats,
@@ -49,6 +52,7 @@ from src.workflows.orchestrator import (
     reset_dead_letter_attempts,
 )
 from src.core.storage import workspace_path
+from src.core.workspace_store import remove_tree
 from src.extensions.swarm.swarm import persist_instruction_broadcast_swarm_event_payload
 
 router = APIRouter()
@@ -424,7 +428,11 @@ class RecommendOutputTypesRequest(BaseModel):
 def _recommend_output_types(
     instruction: str, available_output_types: list[dict]
 ) -> tuple[list[str], list[str], dict[str, str], str, dict | None]:
-    if not is_claude_enabled():
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled():
+    #     raise HTTPException(status_code=503, detail="LLM recommendations unavailable: missing ANTHROPIC_API_KEY")
+    # [NEW: Use provider-agnostic gateway check]
+    if not gateway.is_enabled():
         raise HTTPException(status_code=503, detail="LLM recommendations unavailable: missing ANTHROPIC_API_KEY")
     catalog = [
         {
@@ -684,7 +692,7 @@ def clear_runs(
     for run_id in run_ids:
         run_dir = runs_dir / run_id
         if run_dir.exists():
-            shutil.rmtree(run_dir, ignore_errors=True)
+            remove_tree(run_dir, ignore_errors=True)
     return {"project_id": project_id, "deleted_runs": int(deleted_runs)}
 
 
@@ -708,7 +716,7 @@ def delete_run(
 
     run_dir = workspace_path(project_id) / "runs" / run_id
     if run_dir.exists():
-        shutil.rmtree(run_dir, ignore_errors=True)
+        remove_tree(run_dir, ignore_errors=True)
     return {"project_id": project_id, "run_id": run_id, "deleted": True}
 
 

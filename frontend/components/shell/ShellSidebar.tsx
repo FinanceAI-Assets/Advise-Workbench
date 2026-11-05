@@ -3,12 +3,14 @@
 import {
   Briefcase,
   ClipboardCheck,
+  FileStack,
   HelpCircle,
   Library,
-  LayoutGrid,
   LogOut,
+  MessagesSquare,
   ShieldCheck,
   Settings,
+  Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
   X,
@@ -53,17 +55,17 @@ function NavLinkList({ onNavigate }: { onNavigate?: () => void }) {
     {
       href: engagementId ? `/engagements/${engagementId}/conversation` : "/conversation",
       label: "Conversation",
-      icon: LayoutGrid,
+      icon: MessagesSquare,
       active: isConversation,
     },
     { href: "/reviews", label: "Reviews", icon: ClipboardCheck, active: pathname.startsWith("/reviews") },
     {
       href: engagementId ? `/engagements/${engagementId}/deliverables` : "/deliverables",
       label: "Deliverables",
-      icon: LayoutGrid,
+      icon: FileStack,
       active: isDeliverables,
     },
-    { href: "/skills", label: "Skills", icon: LayoutGrid, active: pathname.startsWith("/skills") },
+    { href: "/skills", label: "Skills", icon: Sparkles, active: pathname.startsWith("/skills") },
   ];
 
   return (

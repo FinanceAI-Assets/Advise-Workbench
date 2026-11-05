@@ -10,10 +10,12 @@ has processed them; the ones still in progress are listed in ``retrieval["pendin
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.db.models import DocumentJob, Membership
+from src.core.db.models import DocumentJob, Membership, WorkbenchRecord
 from src.memory.knowledge.library_release import LIBRARY_SCOPE
 from src.query.pipeline import QueryResult, QueryScope, answer_question, source_detail
 
@@ -36,6 +38,32 @@ def scope_for(*, engagement_id: str | None = None, include_library: bool = True,
         engagement_id=engagement_id or None,
         practice_ids=tuple(dict.fromkeys(practice_ids or [])),
     )
+
+
+def engagement_practice_ids(db: Session, engagement_id: str | None) -> list[str]:
+    """Practice ids explicitly added to an engagement as library source scope."""
+    if not engagement_id:
+        return []
+    rows = db.scalars(
+        select(WorkbenchRecord.payload_json).where(
+            WorkbenchRecord.collection == "engagement_practices",
+            WorkbenchRecord.project_id == engagement_id,
+        )
+    ).all()
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in rows:
+        try:
+            payload = json.loads(raw) if raw else {}
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        pid = str(payload.get("practiceId") or "").strip().lower()
+        if pid and pid not in seen:
+            seen.add(pid)
+            out.append(pid)
+    return out
 
 
 def ask(

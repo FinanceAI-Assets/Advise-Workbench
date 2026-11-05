@@ -52,7 +52,7 @@ export function ShellTopbar({ onMenuClick }: ShellTopbarProps) {
           type="search"
           name="q"
           placeholder="Search workbench"
-          className="w-full rounded-md border border-[var(--surface-border)] bg-white py-1.5 pl-8 pr-10 text-sm text-[var(--text-default)] outline-none ring-[var(--accent-blue)] focus:ring-2"
+          className="w-full rounded-md border border-[var(--surface-border)] bg-white py-1.5 pl-8 pr-10 text-sm text-[var(--text-default)] outline-none ring-[var(--accent-green)] focus:border-[var(--accent-green)] focus:ring-2"
           aria-label="Search workbench"
         />
         <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-2xs text-[var(--text-muted)]">

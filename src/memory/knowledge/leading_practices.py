@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
 
 from src.core.cache import cache_service
 from src.core.observability.metrics import increment
 from src.memory.knowledge import lp_index
 from src.memory.knowledge.lp_rag import run_lp_rag
+
+_LOG = logging.getLogger(__name__)
 
 
 class LeadingPracticeLibraryService:
@@ -33,14 +36,31 @@ class LeadingPracticeLibraryService:
         if not q:
             return []
 
+        scoped_practice_ids: list[str] | None = None
+        if project_id:
+            # Engagement-scoped mode: use only practices explicitly linked to this engagement.
+            try:
+                from src.core.db.session import session_scope
+                from src.query import service as query_service
+
+                with session_scope() as db:
+                    scoped_practice_ids = query_service.engagement_practice_ids(db, project_id)
+            except Exception as exc:
+                _LOG.warning("LP search scope lookup failed for project=%s: %s", project_id, exc)
+                scoped_practice_ids = []
+            # No linked practices means no LP retrieval for this engagement.
+            if not scoped_practice_ids:
+                return []
+
         fingerprint = lp_index.load_index().fingerprint
         digest = hashlib.sha256(q.encode("utf-8")).hexdigest()[:16]
-        cache_key = f"lpsearch:{fingerprint}:{max_results}:{digest}"
+        scope_sig = f"project:{project_id}:{','.join(scoped_practice_ids)}" if project_id else "global"
+        cache_key = f"lpsearch:{fingerprint}:{scope_sig}:{max_results}:{digest}"
         cached = cache_service.get(cache_key)
         if cached and isinstance(cached, dict) and isinstance(cached.get("results"), list):
             return cached["results"]
 
-        results = run_lp_rag(q, max_results=max_results).get("results") or []
+        results = run_lp_rag(q, max_results=max_results, practice_ids=scoped_practice_ids).get("results") or []
         increment("lp_rag_searches_total")
         cache_service.set(cache_key, {"results": results}, ttl_seconds=300)
         return results

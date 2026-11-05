@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.config import bash_allowlist_set, settings
-from src.core.storage import ensure_workspace, workspace_path
+from src.core.workspace_store import scratch
 
 _LOG = logging.getLogger(__name__)
 
@@ -25,13 +25,6 @@ _RAW_FORBIDDEN = re.compile(
     r"[\n\r;]|&&|\|\||\||`|\$\(|\${|>>|>|<<|<\(|>\(|`\s*&&"
 )
 _SHELL_OPERATOR_TOKENS = frozenset({"&&", "||", "|", ";", "&", ">", "<", ">>", "2>", "2>>", "&>", "|&"})
-
-
-def _sandbox_root(project_id: str) -> Path:
-    ensure_workspace(project_id)
-    root = workspace_path(project_id) / "bash_sandbox"
-    root.mkdir(parents=True, exist_ok=True)
-    return root.resolve()
 
 
 def sanitize_output(text: str, max_bytes: int | None = None) -> str:
@@ -123,20 +116,21 @@ def validate_command(command: str) -> tuple[bool, str]:
 
 @dataclass
 class _Session:
-    cwd: Path
+    # Folder relative to the sandbox root ("" = root). Relative, because the real sandbox
+    # folder may be a temporary copy that is different on every call.
+    rel: str = ""
     created: float = field(default_factory=time.time)
     touched: float = field(default_factory=time.time)
 
 
 class BashExecutor:
-    """Per-project sandboxes under workspace/<pid>/bash_sandbox; optional Docker one-shot mode."""
+    """Per-project sandboxes under <project>/bash_sandbox; optional Docker one-shot mode."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._sessions: dict[str, _Session] = {}
 
     def _get_session(self, session_id: str, project_id: str) -> _Session:
-        root = _sandbox_root(project_id)
         with self._lock:
             sess = self._sessions.get(session_id)
             now = time.time()
@@ -146,14 +140,13 @@ class BashExecutor:
                 else:
                     sess.touched = now
             if not sess:
-                self._sessions[session_id] = _Session(cwd=root)
+                self._sessions[session_id] = _Session()
                 sess = self._sessions[session_id]
             return sess
 
     def restart_session(self, session_id: str, project_id: str) -> None:
-        root = _sandbox_root(project_id)
         with self._lock:
-            self._sessions[session_id] = _Session(cwd=root)
+            self._sessions[session_id] = _Session()
 
     def _resolve_under_sandbox(self, path: Path, sandbox: Path) -> Path | None:
         try:
@@ -165,15 +158,15 @@ class BashExecutor:
 
     def _handle_cd(self, arg: str | None, session: _Session, sandbox: Path) -> tuple[bool, str]:
         if not arg or arg.strip() == "~":
-            session.cwd = sandbox
+            session.rel = ""
             return True, ""
-        target = (session.cwd / arg).resolve()
+        target = ((sandbox / session.rel) / arg).resolve()
         ok = self._resolve_under_sandbox(target, sandbox)
         if not ok:
             return False, f"cd: path escapes sandbox or invalid: {arg}\n"
         if not ok.exists() or not ok.is_dir():
             return False, f"cd: not a directory: {arg}\n"
-        session.cwd = ok
+        session.rel = "" if ok == sandbox else ok.relative_to(sandbox).as_posix()
         return True, ""
 
     def execute(
@@ -186,7 +179,27 @@ class BashExecutor:
         user_id: str | None,
     ) -> tuple[str, bool]:
         """Returns (stdout/stderr combined text, is_error)."""
-        sandbox = _sandbox_root(project_id)
+        # The sandbox is a real folder for the length of one call (see scratch()).
+        with scratch(project_id, "bash_sandbox", hydrate=True) as root:
+            return self._execute(
+                root.resolve(),
+                project_id=project_id,
+                session_id=session_id,
+                command=command,
+                restart=restart,
+                user_id=user_id,
+            )
+
+    def _execute(
+        self,
+        sandbox: Path,
+        *,
+        project_id: str,
+        session_id: str,
+        command: str | None,
+        restart: bool,
+        user_id: str | None,
+    ) -> tuple[str, bool]:
         digest = hashlib.sha256(b"").hexdigest()
 
         if restart:
@@ -242,15 +255,17 @@ class BashExecutor:
             )
             return f"Error: {reason}\n", True
 
+        cwd = (sandbox / session.rel).resolve()
         try:
-            session.cwd.resolve().relative_to(sandbox)
+            cwd.relative_to(sandbox)
         except ValueError:
-            session.cwd = sandbox
+            session.rel = ""
+            cwd = sandbox
 
         if settings.bash_docker_enabled:
             out, err_flag = self._run_docker(command, sandbox)
         else:
-            out, err_flag = self._run_subprocess(command, session.cwd)
+            out, err_flag = self._run_subprocess(command, cwd)
 
         out = sanitize_output(out)
         digest = hashlib.sha256(out.encode("utf-8", errors="replace")).hexdigest()
