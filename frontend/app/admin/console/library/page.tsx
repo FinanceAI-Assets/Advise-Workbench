@@ -385,7 +385,7 @@ function SourceUploadTab({
           <p className="text-xs text-[var(--text-default)]">
             {selectedRow?.lifecycle === "Approved"
               ? "Published in the Leading Practice Library. Upload a new version to start a candidate review."
-              : "No uploaded source is in review for this practice. Publication follows its independent review."}
+              : "No uploaded source is in review for this practice. Publishing records you as its approver."}
           </p>
           {selectedRow && selectedRow.lifecycle !== "Approved" ? (
             <ReasonAction

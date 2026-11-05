@@ -517,14 +517,9 @@ def request_practice_correction(
 def publish_practice(
     practice_id: str, body: ReasonedRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ) -> dict:
-    """Publish only after the assigned approver has approved this version."""
+    """Approve and publish this version. Without an earlier approval, the publishing administrator is the approver."""
     practice, review = _practice_review(db, practice_id)
-    if review is None or review.state != "Approved":
-        state = review.state if review else "not submitted for review"
-        raise HTTPException(
-            status_code=409,
-            detail=f"{practice.id.upper()} cannot be published: its independent review is {state.lower()}.",
-        )
+    review = admin_library.approve_as_admin(db, practice, review, admin)
     admin_library.release(db, practice, review, admin)
     practice.status = "Approved"
     practice.updated_at = utcnow()
