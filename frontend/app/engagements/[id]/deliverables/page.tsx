@@ -13,8 +13,10 @@ import {
   ExportApprovalNotice,
   formatRunTime,
   SlideCanvas,
+  SlideDecisionButtons,
   SlideEvidencePanel,
   SlideNavigator,
+  type SlideReview,
   toPages,
   VersionHistoryPanel,
   WordArtifactPanel,
@@ -29,7 +31,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
-import { useDeliverablesQuery } from "@/hooks/useDeliverables";
+import { useDeliverablesQuery, useSlideDecisions } from "@/hooks/useDeliverables";
 import { useEngagementDetailQuery, useExportReadinessQuery } from "@/hooks/useEngagements";
 import { useRunProgressQuery, useSubmitForReviewMutation } from "@/hooks/useWorkbench";
 import { useAuth } from "@/lib/auth-context";
@@ -122,7 +124,7 @@ const TAB_CRUMB: Record<DeliverableTabKey, string> = {
   "evidence-register": " / Evidence register",
 };
 
-// Deliverables for one engagement: the latest run's deck, document and evidence register, each with its own
+// Deliverables for one engagement: the latest drafts' deck, document and evidence register, each with its own
 // tab, plus review submission and downloads that open once the version is approved.
 export default function EngagementDeliverablesPage() {
   const params = useParams();
@@ -133,6 +135,7 @@ export default function EngagementDeliverablesPage() {
   const deliverables = useDeliverablesQuery(id);
   const readiness = useExportReadinessQuery(id);
   const engagement = useEngagementDetailQuery(id);
+  const slideDecisions = useSlideDecisions(deliverables.data?.runId ?? "");
   // When generation finishes, load the new drafts without a manual refresh.
   const latestRun = useRunProgressQuery(id).data?.run;
   const finishedRun = latestRun?.finished ? latestRun.id : "";
@@ -221,6 +224,11 @@ export default function EngagementDeliverablesPage() {
   const getSlideDetail = (index: number) =>
     toSlideDetail(data.rawSlides[index], index, data.rawSlides.length, data.slideBreadcrumb, data.slideSourcesSummary, data.slideFooterMeta);
   const claimCounts = Object.fromEntries(Object.entries(data.claimsBySlideIndex).map(([i, links]) => [i, links.length]));
+  const slideReview: SlideReview = {
+    decisionOf: slideDecisions.decisionOf,
+    onDecide: slideDecisions.decide,
+    locked: pptxReview?.review === "Approved",
+  };
 
   async function download(kind: ArtifactKind) {
     setDownloadError(null);
@@ -306,6 +314,11 @@ export default function EngagementDeliverablesPage() {
   return (
     <PageFrame back={back} breadcrumb={breadcrumb} title={header[tab].title} subtitle={header[tab].subtitle} actions={actions}>
       <RunProgressCard pid={id} showArtifactsLink={false} />
+      {data.fromEarlierRun ? (
+        <p className="text-sm text-[var(--text-muted)]">
+          The latest run produced no drafts, so these are from the run of {formatRunTime(data.run.createdAt)}.
+        </p>
+      ) : null}
 
       <EngagementTabs tabs={tabs} active={tab} onChange={openTab} />
 
@@ -340,6 +353,7 @@ export default function EngagementDeliverablesPage() {
                   reviewLabel={reviewLabel("pptx")}
                   onOpenReview={reviewAction("pptx")}
                   onDownload={canDownload("pptx") ? () => void download("pptx") : undefined}
+                  slideReview={slideReview}
                 />
                 <SlideEvidencePanel links={slideLinks} />
               </>
@@ -365,7 +379,13 @@ export default function EngagementDeliverablesPage() {
         hasPptx ? (
           <>
             <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-              <SlideNavigator slides={pptx.slides} activeIndex={slideIndex} claimCounts={claimCounts} onSelect={setSlideIndex} />
+              <SlideNavigator
+                slides={pptx.slides}
+                activeIndex={slideIndex}
+                claimCounts={claimCounts}
+                onSelect={setSlideIndex}
+                decisionOf={slideReview.decisionOf}
+              />
               <Card className="space-y-4">
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h2 className="text-base font-semibold text-[var(--text-default)]">{pptx.name}</h2>
@@ -373,7 +393,10 @@ export default function EngagementDeliverablesPage() {
                     · Slide {slideIndex + 1} / {pptx.slides.length}
                   </span>
                 </div>
-                <SlideCanvas slide={getSlideDetail(slideIndex)} />
+                <SlideCanvas
+                  slide={getSlideDetail(slideIndex)}
+                  actions={<SlideDecisionButtons slideNumber={slideIndex + 1} review={slideReview} />}
+                />
                 <div className="flex flex-wrap gap-2">
                   <Button variant="secondary" type="button" disabled={slideIndex === 0} onClick={() => setSlideIndex(slideIndex - 1)}>
                     Previous

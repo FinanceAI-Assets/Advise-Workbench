@@ -1,3 +1,4 @@
+import { SlideDecisionMark, type SlideReview } from "@/components/deliverables/SlideDecision";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import type { Slide } from "@/types/api";
@@ -6,10 +7,12 @@ export function SlideThumbnailNav({
   slides,
   activeIndex,
   onSelect,
+  decisionOf,
 }: {
   slides: Slide[];
   activeIndex: number;
   onSelect: (index: number) => void;
+  decisionOf?: SlideReview["decisionOf"];
 }) {
   const active = slides[activeIndex];
   const atStart = activeIndex === 0;
@@ -65,7 +68,10 @@ export function SlideThumbnailNav({
                   : "border-[var(--surface-border)] bg-[var(--surface-muted)] hover:bg-white"
               )}
             >
-              <p className="text-2xs text-[var(--text-muted)]">{String(slide.index).padStart(2, "0")}</p>
+              <div className="flex items-center justify-between gap-1">
+                <p className="text-2xs text-[var(--text-muted)]">{String(slide.index).padStart(2, "0")}</p>
+                <SlideDecisionMark decision={decisionOf?.(slide.index)} />
+              </div>
               <p className="truncate text-xs font-medium text-[var(--text-default)]">{slide.title}</p>
             </button>
           );

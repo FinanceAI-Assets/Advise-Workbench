@@ -1,3 +1,4 @@
+import { SlideDecisionMark, type SlideReview } from "@/components/deliverables/SlideDecision";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/utils";
 import type { Slide } from "@/types/api";
@@ -8,11 +9,13 @@ export function SlideNavigator({
   activeIndex,
   claimCounts,
   onSelect,
+  decisionOf,
 }: {
   slides: Slide[];
   activeIndex: number;
   claimCounts: Record<number, number>;
   onSelect: (index: number) => void;
+  decisionOf?: SlideReview["decisionOf"];
 }) {
   return (
     <Card className="space-y-2">
@@ -43,6 +46,7 @@ export function SlideNavigator({
                       {claims} claim{claims === 1 ? "" : "s"}
                     </span>
                   ) : null}
+                  <SlideDecisionMark decision={decisionOf?.(slide.index)} />
                 </span>
                 <span className="block text-xs text-[var(--text-muted)]">{active ? "Selected slide" : `Slide ${slide.index}`}</span>
               </button>

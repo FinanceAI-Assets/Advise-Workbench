@@ -1,11 +1,13 @@
+import type { ReactNode } from "react";
+
 import type { SlideDetail } from "@/types/api";
 
-export function SlideCanvas({ slide }: { slide: SlideDetail }) {
+export function SlideCanvas({ slide, actions }: { slide: SlideDetail; actions?: ReactNode }) {
   return (
     <div className="space-y-4 rounded-lg border border-[var(--surface-border)] bg-white p-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <p className="text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">{slide.breadcrumb}</p>
-        <span className="h-2 w-2 rounded-full bg-[var(--accent-green)]" aria-hidden />
+        {actions ?? <span className="h-2 w-2 rounded-full bg-[var(--accent-green)]" aria-hidden />}
       </div>
       <h3 className="text-xl font-semibold text-[var(--text-default)]">{slide.headline}</h3>
       <div className="grid gap-4 sm:grid-cols-3">

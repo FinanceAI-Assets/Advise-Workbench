@@ -162,7 +162,11 @@ export function ConversationThread({
     [pendingText]
   );
   const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant")?.body ?? "";
-  const run = useRunProgressQuery(pid).data?.run;
+  const latestRun = useRunProgressQuery(pid).data?.run;
+  // A run's progress belongs under the message that started it, so another conversation in the
+  // same engagement, which has no such message, never shows it.
+  const runMessageId = latestRun && messages.find((m) => m.metadata?.run_id === latestRun.id)?.id;
+  const run = runMessageId ? latestRun : undefined;
 
   // Keep the newest message in view, as a chat does.
   useEffect(() => {
@@ -186,12 +190,19 @@ export function ConversationThread({
           // Only the newest message's choices can still be picked.
           const open = i === messages.length - 1 && !busy;
           return (
-            <Bubble key={message.id} mine={message.role === "user"} author={message.author} time={message.timestamp}>
-              <FormattedText text={options ? textBesideOptions(message) : (message.body ?? "")} />
-              {options ? (
-                <ReplyOptions metadata={options} onReply={open ? onReply : undefined} onDraft={open ? onDraft : undefined} />
+            <Fragment key={message.id}>
+              <Bubble mine={message.role === "user"} author={message.author} time={message.timestamp}>
+                <FormattedText text={options ? textBesideOptions(message) : (message.body ?? "")} />
+                {options ? (
+                  <ReplyOptions metadata={options} onReply={open ? onReply : undefined} onDraft={open ? onDraft : undefined} />
+                ) : null}
+              </Bubble>
+              {run && message.id === runMessageId ? (
+                <Bubble mine={false} author="Sheldon" time="">
+                  <ChatRunProgress pid={pid} run={run} />
+                </Bubble>
               ) : null}
-            </Bubble>
+            </Fragment>
           );
         })}
         {pendingText ? (
@@ -205,11 +216,6 @@ export function ConversationThread({
               <TypingDots />
               {workingWord}…{elapsed >= 3 ? ` ${elapsed}s` : ""}
             </span>
-          </Bubble>
-        ) : null}
-        {run ? (
-          <Bubble mine={false} author="Sheldon" time="">
-            <ChatRunProgress pid={pid} run={run} />
           </Bubble>
         ) : null}
         <div ref={endRef} />

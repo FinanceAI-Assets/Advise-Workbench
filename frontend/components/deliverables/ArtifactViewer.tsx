@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { SlideCanvas } from "@/components/deliverables/SlideCanvas";
+import { SlideDecisionButtons, type SlideReview } from "@/components/deliverables/SlideDecision";
 import { SlideThumbnailNav } from "@/components/deliverables/SlideThumbnailNav";
 import type { DeliverablesDetail } from "@/types/api";
 
@@ -23,6 +24,7 @@ export function ArtifactViewer({
   reviewLabel = "Open review",
   onOpenReview,
   onDownload,
+  slideReview,
 }: {
   pptx: DeliverablesDetail["pptx"];
   // Optional: when the caller holds the raw pptx_slides.json array (real
@@ -37,6 +39,8 @@ export function ArtifactViewer({
   reviewLabel?: string;
   onOpenReview?: () => void;
   onDownload?: () => void;
+  // Accept and reject buttons on the slide, shown when the caller supplies it.
+  slideReview?: SlideReview;
 }) {
   const [activeIndex, setActiveIndex] = useState(pptx.activeSlideIndex);
   const activeSlide = pptx.slides[activeIndex];
@@ -92,9 +96,12 @@ export function ArtifactViewer({
         </div>
       </div>
 
-      <SlideCanvas slide={slide} />
+      <SlideCanvas
+        slide={slide}
+        actions={slideReview ? <SlideDecisionButtons slideNumber={activeSlide.index} review={slideReview} /> : undefined}
+      />
 
-      <SlideThumbnailNav slides={pptx.slides} activeIndex={activeIndex} onSelect={selectSlide} />
+      <SlideThumbnailNav slides={pptx.slides} activeIndex={activeIndex} onSelect={selectSlide} decisionOf={slideReview?.decisionOf} />
     </Card>
   );
 }
