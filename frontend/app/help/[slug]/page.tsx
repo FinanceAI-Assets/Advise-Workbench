@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { BackButton } from "@/components/workbench/BackButton";
 import { PageFrame } from "@/components/workbench/PageFrame";
 import { findHelpArticle } from "@/lib/helpArticles";
 
@@ -28,6 +29,7 @@ export default function HelpArticlePage() {
 
   return (
     <PageFrame
+      back={<BackButton href="/help" label="Back to help" />}
       breadcrumb={
         <>
           User workspace / <Link href="/help">Help &amp; documentation</Link> / Article

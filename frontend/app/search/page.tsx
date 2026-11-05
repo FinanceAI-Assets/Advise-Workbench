@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame } from "@/components/workbench/PageFrame";
 import { type SearchHit, useSearchQuery } from "@/hooks/useWorkbench";
 
@@ -48,6 +49,7 @@ export default function SearchPage() {
 
   return (
     <PageFrame
+      back={<BackButton />}
       breadcrumb="User workspace / Header / Search"
       title="Search workbench"
       subtitle="Find engagements, approved practices and source-linked artifacts within your permissions."

@@ -19,7 +19,7 @@ Application settings load from the repo-root **`.env`** (one file; there is no s
 make dev.secret
 ```
 
-The **`pytest`** suite under `tests/integration/` sets `JWT_SECRET` via `tests/integration/conftest.py` so CI and local test runs do not need a real `.env`.
+**`pytest`** never reads `.env`: `tests/conftest.py` sets `ADVISE_WORKBENCH_IGNORE_DOTENV=1`, selects in-memory SQLite, and aborts collection if the app's database is anything else. `JWT_SECRET` comes from the suite conftests, so CI and local test runs do not need a real `.env`. Export keys for `live_llm` tests in the shell.
 
 ## Code map (high signal)
 

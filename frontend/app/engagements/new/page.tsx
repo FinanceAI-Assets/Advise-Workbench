@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, Field, PageFrame } from "@/components/workbench/PageFrame";
 import { useCreateEngagementMutation } from "@/hooks/useEngagements";
 
@@ -55,6 +56,7 @@ export default function NewEngagementPage() {
   return (
     <form onSubmit={(e) => void onSubmit(e)}>
       <PageFrame
+        back={<BackButton href="/engagements" label="Back to engagements" />}
         breadcrumb={
           <>
             User workspace / <Link href="/engagements">Engagements</Link> / New engagement

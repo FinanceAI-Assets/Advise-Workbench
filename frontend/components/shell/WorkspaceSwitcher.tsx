@@ -9,9 +9,6 @@ import { useAuth } from "@/lib/auth-context";
 
 export function WorkspaceSwitcher({ admin }: { admin: boolean }) {
   const { user } = useAuth();
-  // The development server mirrors the backend's development-only admin override.
-  // Production builds must rely on the server-provided capability.
-  const developmentSwitchEnabled = process.env.NODE_ENV !== "production";
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -59,7 +56,7 @@ export function WorkspaceSwitcher({ admin }: { admin: boolean }) {
           <div className="px-2 py-1 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
             Switch workspace
           </div>
-          {admin || user?.canSwitchAdmin || developmentSwitchEnabled ? (
+          {user?.canSwitchAdmin ? (
             <Link
               href={destination}
               role="menuitem"

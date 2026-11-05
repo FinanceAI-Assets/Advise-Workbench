@@ -8,6 +8,7 @@ import { EngagementTabs } from "@/components/engagements";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ExportButton, ReasonAction, RecordsTable } from "@/components/workbench/AdminControls";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useAdminEngagementsQuery } from "@/hooks/useAdminConsole";
 
@@ -38,6 +39,7 @@ export default function AdminConsoleEngagementsPage() {
 
   return (
     <PageFrame
+      back={tab === "engagements" ? undefined : <BackButton onClick={() => setTab("engagements")} label="Back to engagements" />}
       breadcrumb="Admin console / Engagements & deliverables"
       title="Engagement oversight"
       subtitle="Manage ownership, access and lifecycle controls. Content and artifact approvals remain with assigned engagement reviewers."

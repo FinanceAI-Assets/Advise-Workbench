@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useNextActionsQuery } from "@/hooks/useEngagements";
 import { useAuth } from "@/lib/auth-context";
@@ -32,6 +33,7 @@ export default function NextActionsPage() {
 
   return (
     <PageFrame
+      back={<BackButton href="/engagements" label="Back to engagements" />}
       breadcrumb={
         <>
           User workspace / <Link href="/engagements">Engagements</Link> / Your next actions

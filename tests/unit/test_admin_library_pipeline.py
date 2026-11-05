@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from src.app.main import app as fastapi_app
 from src.core.config import settings
-from src.core.db.models import User
+from src.core.db.models import Review, ReviewComment, User
 from src.core.db.session import session_scope
 from src.memory.knowledge import lp_index, practice_ingest
 
@@ -107,15 +107,13 @@ def test_uploaded_practice_reaches_the_library_only_after_approval_and_publicati
     assert corrected.status_code == 202, corrected.text
     screen = client.get(f"/api/admin/library?practice={practice_id}", headers=admin).json()
     assert all(g["passed"] for g in screen["qualityGates"]["gates"])
-    assert screen["qualityGates"]["canSubmit"] and not screen["release"]["canPublish"]
+    assert screen["qualityGates"]["canSubmit"]
     assert screen["release"]["gates"][0]["label"].startswith("Correction CR-")
 
-    # 3. Approval: submit to an approver, who decides on the review page; only then can it be published.
+    # 3. Approval: submit to an approver, who decides on the review page.
     submit = client.post(f"/api/admin/library/{practice_id}/submit", headers=admin, json={"approverId": approver_id})
     assert submit.status_code == 200, submit.text
     review_id = submit.json()["reviewId"]
-    early = client.post(f"/api/admin/library/{practice_id}/publish", headers=admin, json={"reason": "Release it now"})
-    assert early.status_code == 409
     review = client.get(f"/api/reviews/{review_id}", headers=approver).json()
     assert review["canDecide"] and review["evidenceChecks"]
     decided = client.post(f"/api/reviews/{review_id}/decision", headers=approver, json={"decision": "approve"})
@@ -142,6 +140,54 @@ def test_uploaded_practice_reaches_the_library_only_after_approval_and_publicati
 
     release = client.get(f"/api/admin/library?practice={practice_id}", headers=admin).json()["release"]
     assert release["published"] and release["notice"]["title"] == "v1.0 published"
+
+
+def test_any_admin_can_approve_and_publish_a_candidate_awaiting_another_approver() -> None:
+    client = TestClient(fastapi_app)
+    uploader, _ = _login(client, "admin", admin=True)
+    other_admin, other_admin_id = _login(client, "admin", admin=True)
+    member, member_id = _login(client, "member")
+    practice_id = _upload(client, uploader, _source(f"Direct {uuid.uuid4().hex[:6]}", attributed=True), "direct.docx").json()["jobs"][0]["practiceId"]
+    assert client.post(f"/api/admin/library/{practice_id}/submit", headers=uploader, json={"approverId": member_id}).status_code == 200
+
+    assert client.get(f"/api/admin/library?practice={practice_id}", headers=other_admin).json()["qualityGates"]["canPublish"]
+    assert client.post(f"/api/admin/library/{practice_id}/publish", headers=member, json={"reason": "Not an admin"}).status_code == 403
+    published = client.post(f"/api/admin/library/{practice_id}/publish", headers=other_admin, json={"reason": "Ready for release"})
+    assert published.status_code == 200, published.text
+
+    with session_scope() as db:
+        review = db.scalar(select(Review).where(Review.id == practice_id.upper()))
+        assert review.state == "Approved" and review.reviewer_id == other_admin_id
+
+
+def test_admin_publish_works_without_submitting_but_not_over_blockers() -> None:
+    client = TestClient(fastapi_app)
+    admin, admin_id = _login(client, "admin", admin=True)
+
+    unsubmitted = _upload(client, admin, _source(f"Unsubmitted {uuid.uuid4().hex[:6]}", attributed=True), "unsubmitted.docx").json()["jobs"][0]["practiceId"]
+    assert client.post(f"/api/admin/library/{unsubmitted}/publish", headers=admin, json={"reason": "Ready for release"}).status_code == 200
+    with session_scope() as db:
+        review = db.scalar(select(Review).where(Review.id == unsubmitted.upper()))
+        assert review.state == "Approved" and review.reviewer_id == admin_id
+
+    # A failing quality gate blocks the button and the publish, and leaves no approval behind.
+    gated = _upload(client, admin, _source(f"Gated {uuid.uuid4().hex[:6]}", attributed=False), "gated.docx").json()["jobs"][0]["practiceId"]
+    assert not client.get(f"/api/admin/library?practice={gated}", headers=admin).json()["qualityGates"]["canPublish"]
+    assert client.post(f"/api/admin/library/{gated}/publish", headers=admin, json={"reason": "Release it now"}).status_code == 409
+    with session_scope() as db:
+        assert db.scalar(select(Review).where(Review.id == gated.upper())) is None
+
+    # So do an approver's requested changes and open review comments.
+    for state, comment in (("Changes requested", False), ("In review", True)):
+        practice = _upload(client, admin, _source(f"Held {uuid.uuid4().hex[:6]}", attributed=True), "held.docx").json()["jobs"][0]["practiceId"]
+        assert client.post(f"/api/admin/library/{practice}/submit", headers=admin, json={"approverId": admin_id}).status_code == 200
+        with session_scope() as db:
+            db.scalar(select(Review).where(Review.id == practice.upper())).state = state
+            if comment:
+                db.add(ReviewComment(review_id=practice.upper(), author="Approver", title="", body="Check this", anchor=""))
+        screen = client.get(f"/api/admin/library?practice={practice}", headers=admin).json()["qualityGates"]
+        assert not screen["canPublish"] and screen["blockers"]
+        assert client.post(f"/api/admin/library/{practice}/publish", headers=admin, json={"reason": "Release it now"}).status_code == 409
 
 
 def test_a_new_version_keeps_the_live_practice_served_until_it_is_released() -> None:

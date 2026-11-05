@@ -6,9 +6,9 @@ Upload sources is asynchronous: the endpoint stores each file in SeaweedFS (S3) 
 (``src.memory.knowledge.practice_ingest``) on the pipeline's own passages. The job record, in the
 ``ingestion_jobs`` collection, holds the stage results; the passages live in ``library_chunks``.
 
-Publication stays governed: every quality gate must pass, the candidate is submitted to an approver, the
-approver decides on the existing review page, and only then can an administrator publish. Publishing marks the
-practice Approved, which is what the Leading Practice Library (``/api/library``) lists and what user search
+Publication stays governed: every quality gate must pass, and then either an assigned approver decides on the
+existing review page or any administrator approves it by publishing. Publishing marks the practice Approved,
+which is what the Leading Practice Library (``/api/library``) lists and what user search
 retrieves (``src.memory.knowledge.library_release``); older versions then leave the search index.
 """
 
@@ -656,6 +656,38 @@ def record_correction(db: Session, practice_id: str, correction: dict[str, Any])
     return True
 
 
+def admin_approval_blocker(db: Session, review: Review | None) -> str:
+    """Why an administrator cannot approve this candidate by publishing it; empty when they can."""
+    if review is None or review.state == "Approved":
+        return ""
+    if review.state == "Changes requested":
+        return "Changes were requested; resubmit for approval"
+    if db.scalar(select(ReviewComment.id).where(ReviewComment.review_id == review.id, ReviewComment.status == "Open").limit(1)):
+        return "Resolve the open review comments before approving"
+    return ""
+
+
+def approve_as_admin(db: Session, practice: LpPractice, review: Review | None, admin: User) -> Review:
+    """Record the administrator publishing a candidate as its approver, replacing any approver still pending."""
+    blocker = admin_approval_blocker(db, review)
+    if blocker:
+        raise HTTPException(status_code=409, detail=f"{practice.id.upper()} cannot be published: {blocker}.")
+    if review is None:
+        review_id = practice.id.upper()
+        if db.get(Review, review_id) is not None:
+            raise HTTPException(status_code=409, detail=f"Review {review_id} belongs to another artifact")
+        job = latest_job(db, practice.id) or {}
+        review = Review(id=review_id, title=practice.title, artifact_type="practice", payload_json="{}",
+                        version_label=job.get("version") or practice.version_label,
+                        owner_id=job.get("uploadedById") or admin.id)
+        db.add(review)
+    if review.state != "Approved":
+        review.reviewer_id = admin.id
+        review.state = "Approved"
+        _timeline(review, f"Approved by administrator ({practice.id.upper()})", display_name(admin), "check")
+    return review
+
+
 def release(db: Session, practice: LpPractice, review: Review, admin: User) -> dict[str, Any] | None:
     """Publish the latest uploaded version. Returns None for practices that never came through the pipeline."""
     job = latest_job(db, practice.id)
@@ -795,8 +827,9 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
     blockers: list[str] = []
     if failing:
         blockers.append(f"Quality gates open: {', '.join(g['label'] for g in failing)}")
-    if not approved:
-        blockers.append("Independent approval is " + ("pending" if review_state == "In review" else review_state.lower()))
+    approval_blocker = admin_approval_blocker(db, review)
+    if approval_blocker:
+        blockers.append(approval_blocker)
     can_publish = not published and not blockers
 
     if failing:
@@ -895,7 +928,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
             ],
             "warning": None if published else _notice(
                 "Indexed is not published",
-                f"The candidate stays outside user retrieval until every quality gate passes and {reviewer or 'an independent approver'} approves the release."),
+                f"The candidate stays outside user retrieval until every quality gate passes and {reviewer or 'an approver'} or an administrator approves the release."),
             "retrievalChecks": validation["retrievalChecks"],
         },
         "qualityGates": {
@@ -930,6 +963,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
             "approvers": sorted(({"id": u.id, "name": display_name(u)} for u in users.values()), key=lambda u: u["name"].lower()),
             "canSubmit": not published and not failing and review_state not in {"In review", "Approved"},
             "canPublish": can_publish,
+            "blockers": blockers,
         },
         "release": {
             "practiceId": practice.id,

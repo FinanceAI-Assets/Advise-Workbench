@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, timedelta
 from src.core.tz import IST
@@ -7,6 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
@@ -15,10 +17,8 @@ from src.core.db.session import get_db
 from src.core.cache import cache_service
 
 PLATFORM_ROLES = {"user", "admin"}
-
-
-def development_admin_access_enabled() -> bool:
-    return (settings.advise_workbench_env or "development").strip().lower() == "development"
+MIN_PROVISIONED_PASSWORD_LENGTH = 12
+MAX_BCRYPT_PASSWORD_BYTES = 72
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -193,10 +193,8 @@ def require_project_role(project_id: str, allowed_roles: set[str], user: User, d
 
 
 def require_admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
-    """Require admin access, with an explicit development-only user override."""
+    """Require admin access, read from the database so a role change applies immediately."""
     row = db.scalar(select(User).where(User.id == user.id))
-    if row is not None and development_admin_access_enabled():
-        return row
     if row is None or not (row.is_admin or row.role == "admin"):
         raise HTTPException(status_code=403, detail="Administrator access required")
     if row.role != "admin":
@@ -232,6 +230,50 @@ def require_allowed_email_domain(email: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Sign in with your @{domains[0]} account.",
         )
+
+
+def provision_user(
+    db: Session,
+    *,
+    email: str,
+    password: str,
+    role: str,
+    full_name: str | None = None,
+    job_title: str | None = None,
+) -> User:
+    """Add a user with an assigned platform role. The caller commits."""
+    if role not in PLATFORM_ROLES:
+        raise HTTPException(status_code=422, detail=f"role must be one of: {', '.join(sorted(PLATFORM_ROLES))}")
+    email = email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or len(email) > 255:
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+    if len(password) < MIN_PROVISIONED_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Password must be at least {MIN_PROVISIONED_PASSWORD_LENGTH} characters",
+        )
+    if len(password.encode("utf-8")) > MAX_BCRYPT_PASSWORD_BYTES:
+        raise HTTPException(status_code=422, detail=f"Password must be at most {MAX_BCRYPT_PASSWORD_BYTES} bytes")
+    require_allowed_email_domain(email)
+    conflict = HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A user with this email already exists")
+    if db.scalar(select(User.id).where(func.lower(User.email) == email)):
+        raise conflict
+    created = User(
+        id=f"u_{uuid.uuid4().hex[:10]}",
+        email=email,
+        hashed_password=get_password_hash(password),
+        full_name=(full_name or "").strip()[:255] or None,
+        job_title=(job_title or "").strip()[:128] or None,
+        role=role,
+        is_admin=role == "admin",
+    )
+    db.add(created)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise conflict from exc
+    return created
 
 
 def ensure_user(email: str, password: str, db: Session) -> User:
