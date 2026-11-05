@@ -14,11 +14,11 @@ import {
   PermissionAwareCard,
   RecentConversationsList,
 } from "@/components/conversation";
-import { RunProgressCard } from "@/components/conversation/RunProgressCard";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useConversationQuery, useSendMessageMutation } from "@/hooks/useEngagementConversation";
 import { useEngagementDetailQuery } from "@/hooks/useEngagements";
@@ -29,7 +29,6 @@ import {
   useStartConversationMutation,
 } from "@/hooks/useWorkbench";
 
-const DRAFT_REQUEST = "Create PPTX and DOCX drafts from this conversation, grounded in the permitted sources.";
 // Conversation for one engagement. Messages go through the existing
 // conversation pipeline (POST /api/projects/{pid}/conversation/messages); the
 // active thread, skill and source scope come from /api/engagements/{pid}/conversations.
@@ -86,6 +85,7 @@ export default function EngagementConversationPage() {
 
   return (
     <PageFrame
+      back={<BackButton href="/conversation" label="Back to conversations" />}
       breadcrumb={
         <>
           <Link href={`/engagements/${id}`}>{engagementData.name}</Link> / Conversation
@@ -139,8 +139,6 @@ export default function EngagementConversationPage() {
         </Card>
       ) : null}
 
-      <RunProgressCard pid={id} />
-
       <div className="grid gap-4 lg:grid-cols-[280px_1fr_340px]">
         <div className="space-y-4">
           <EngagementContextPanel
@@ -169,11 +167,11 @@ export default function EngagementConversationPage() {
 
         <div className="space-y-4">
           <ConversationThread
+            pid={id}
             scopeSummary={scopeSummary}
             messages={data.messages}
             pendingText={sendMessage.isPending ? sendMessage.variables : null}
             busy={sendMessage.isPending}
-            onCreateDrafts={() => sendMessage.mutate(DRAFT_REQUEST)}
             onReply={(text) => sendMessage.mutate(text)}
             onDraft={(text) => setDraft((prev) => ({ id: prev.id + 1, text }))}
           />

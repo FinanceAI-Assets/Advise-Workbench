@@ -332,7 +332,7 @@ def test_admin_routes_reviews_and_manages_retention_but_cannot_bypass_gates() ->
     assert export.status_code == 200 and rid in export.text
 
 
-def test_practice_cannot_be_published_before_independent_approval() -> None:
+def test_admin_approves_a_practice_by_publishing_it_unless_changes_were_requested() -> None:
     client = TestClient(fastapi_app)
     admin_email = _email("admin")
     admin = _login(client, admin_email)
@@ -340,13 +340,15 @@ def test_practice_cannot_be_published_before_independent_approval() -> None:
     practice = _practice("Quality review")
     with session_scope() as db:
         db.add(Review(id=practice.upper(), title="Ownership playbook", artifact_type="practice", version_label="v1.0",
-                      state="Quality review"))
+                      state="Changes requested"))
     reason = {"reason": "Release for the autumn catalogue"}
 
     assert client.post(f"/api/admin/library/{practice}/publish", json=reason, headers=admin).status_code == 409
     with session_scope() as db:
-        db.scalar(select(Review).where(Review.id == practice.upper())).state = "Approved"
+        db.scalar(select(Review).where(Review.id == practice.upper())).state = "Quality review"
     assert client.post(f"/api/admin/library/{practice}/publish", json=reason, headers=admin).json()["status"] == "Approved"
+    with session_scope() as db:
+        assert db.scalar(select(Review).where(Review.id == practice.upper())).state == "Approved"
 
 
 def test_correction_request_blocks_the_candidate_and_returns_its_id() -> None:

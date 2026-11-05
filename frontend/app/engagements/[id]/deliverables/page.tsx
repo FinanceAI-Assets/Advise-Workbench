@@ -27,6 +27,7 @@ import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useDeliverablesQuery } from "@/hooks/useDeliverables";
 import { useEngagementDetailQuery, useExportReadinessQuery } from "@/hooks/useEngagements";
@@ -163,7 +164,7 @@ export default function EngagementDeliverablesPage() {
 
   if (deliverables.isError || !deliverables.data) {
     return (
-      <PageFrame breadcrumb={breadcrumb} title="Deliverables & artifacts">
+      <PageFrame back={<BackButton href="/deliverables" label="Back to deliverables" />} breadcrumb={breadcrumb} title="Deliverables & artifacts">
         <RunProgressCard pid={id} showArtifactsLink={false} />
         <ErrorNote error={deliverables.error} />
         <EmptyState
@@ -294,8 +295,16 @@ export default function EngagementDeliverablesPage() {
 
   const empty = (what: string) => <EmptyState title="Nothing here yet" description={`This run did not produce ${what}.`} />;
 
+  // A single artifact or the submit form steps back to All artifacts; from there, to the deliverables list.
+  const back =
+    tab !== "all" || submitting ? (
+      <BackButton onClick={() => openTab("all")} label="Back to all artifacts" />
+    ) : (
+      <BackButton href="/deliverables" label="Back to deliverables" />
+    );
+
   return (
-    <PageFrame breadcrumb={breadcrumb} title={header[tab].title} subtitle={header[tab].subtitle} actions={actions}>
+    <PageFrame back={back} breadcrumb={breadcrumb} title={header[tab].title} subtitle={header[tab].subtitle} actions={actions}>
       <RunProgressCard pid={id} showArtifactsLink={false} />
 
       <EngagementTabs tabs={tabs} active={tab} onChange={openTab} />

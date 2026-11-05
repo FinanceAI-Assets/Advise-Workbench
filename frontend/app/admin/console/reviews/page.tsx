@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ExportButton, ReasonAction, RecordsTable } from "@/components/workbench/AdminControls";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useAdminReviewsQuery } from "@/hooks/useAdminConsole";
 
@@ -52,6 +53,7 @@ export default function AdminConsoleReviewsPage() {
 
   return (
     <PageFrame
+      back={tab === "review-queue" ? undefined : <BackButton onClick={() => setTab("review-queue")} label="Back to review queue" />}
       breadcrumb="Admin console / Reviews & governance"
       title="Review operations & governance"
       subtitle="Route approvals, resolve evidence risks and enforce the policy boundary between drafting, approval and export."

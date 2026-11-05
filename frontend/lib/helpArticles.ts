@@ -131,7 +131,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       },
       {
         heading: "Create drafts",
-        body: "Choose Create PPTX + DOCX drafts. When a plan is ready, approve it to start generation, then open View artifacts.",
+        body: "Ask Sheldon to create the PPTX and DOCX drafts. When a plan is ready, approve it to start generation, then open View artifacts.",
       },
     ],
   },

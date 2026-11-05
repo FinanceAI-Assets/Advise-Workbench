@@ -37,7 +37,7 @@ from src.app.api.engagements import (
     records,
 )
 from src.app.api.reviews import _notify, _type_label
-from src.core.auth import PLATFORM_ROLES, require_admin
+from src.core.auth import PLATFORM_ROLES, provision_user, require_admin
 from src.core.db.models import (
     ActivityEvent,
     EngagementMeta,
@@ -58,6 +58,24 @@ class UpdateUserRoleRequest(BaseModel):
     role: str
 
 
+class CreateUserRequest(BaseModel):
+    email: str
+    password: str
+    role: str
+    full_name: str | None = None
+    job_title: str | None = None
+
+
+def _platform_user(row: User) -> dict[str, str | bool]:
+    return {
+        "id": row.id,
+        "email": row.email,
+        "name": (row.full_name or "").strip() or row.email.split("@")[0],
+        "role": "admin" if row.is_admin else (row.role or "user"),
+        "isAdmin": bool(row.is_admin or row.role == "admin"),
+    }
+
+
 @router.get("/users")
 def list_platform_users(
     _admin: User = Depends(require_admin),
@@ -65,16 +83,28 @@ def list_platform_users(
 ) -> list[dict[str, str | bool]]:
     """List users and their platform roles for administrator access management."""
     rows = db.scalars(select(User).order_by(User.email.asc())).all()
-    return [
-        {
-            "id": row.id,
-            "email": row.email,
-            "name": (row.full_name or "").strip() or row.email.split("@")[0],
-            "role": "admin" if row.is_admin else (row.role or "user"),
-            "isAdmin": bool(row.is_admin or row.role == "admin"),
-        }
-        for row in rows
-    ]
+    return [_platform_user(row) for row in rows]
+
+
+@router.post("/users", status_code=201)
+def create_platform_user(
+    body: CreateUserRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, str | bool]:
+    """Create an account. Role `admin` can switch between both workspaces; role `user` has the user workspace only."""
+    row = provision_user(
+        db,
+        email=body.email,
+        password=body.password,
+        role=body.role,
+        full_name=body.full_name,
+        job_title=body.job_title,
+    )
+    title = "Administrator account created" if body.role == "admin" else "User account created"
+    record_activity(db, project_id=None, actor=display_name(admin), kind="admin", title=title, detail=row.email)
+    db.commit()
+    return _platform_user(row)
 
 
 @router.patch("/users/{user_id}/role")
@@ -95,13 +125,7 @@ def update_platform_user_role(
     row.role = body.role
     row.is_admin = body.role == "admin"
     db.commit()
-    return {
-        "id": row.id,
-        "email": row.email,
-        "name": (row.full_name or "").strip() or row.email.split("@")[0],
-        "role": row.role,
-        "isAdmin": bool(row.is_admin),
-    }
+    return _platform_user(row)
 
 _OPEN = {"Approved", "Draft"}
 _SEED_HINT = "Governance reference data is not loaded. Run `make seed.demo` to load the sample set."
@@ -493,14 +517,9 @@ def request_practice_correction(
 def publish_practice(
     practice_id: str, body: ReasonedRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ) -> dict:
-    """Publish only after the assigned approver has approved this version."""
+    """Approve and publish this version. Without an earlier approval, the publishing administrator is the approver."""
     practice, review = _practice_review(db, practice_id)
-    if review is None or review.state != "Approved":
-        state = review.state if review else "not submitted for review"
-        raise HTTPException(
-            status_code=409,
-            detail=f"{practice.id.upper()} cannot be published: its independent review is {state.lower()}.",
-        )
+    review = admin_library.approve_as_admin(db, practice, review, admin)
     admin_library.release(db, practice, review, admin)
     practice.status = "Approved"
     practice.updated_at = utcnow()

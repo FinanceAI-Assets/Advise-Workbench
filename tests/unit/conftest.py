@@ -1,14 +1,10 @@
-"""Use in-memory SQLite for tests (StaticPool in session.py shares one DB across threads)."""
+"""Unit test defaults. tests/conftest.py selects in-memory SQLite (StaticPool in session.py shares one DB across threads)."""
 
 import os
 import time
 
 import pytest
 
-# src/app/main.py loads the repo `.env` with override=True; without this flag a developer's `.env` would replace the
-# in-memory database below with the real (shared) one as soon as a test imports the app.
-os.environ["ADVISE_WORKBENCH_SKIP_DOTENV"] = "1"
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-chars-long-ok!")
 # Prevent optional localhost Redis from connecting during tests (draw.io collab fan-out / timing).
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"

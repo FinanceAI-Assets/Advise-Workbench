@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, Field, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useEngagementsQuery } from "@/hooks/useEngagements";
 import { useUpdateProfileMutation } from "@/hooks/useWorkbench";
@@ -73,6 +74,7 @@ export default function ProfilePage() {
   return (
     <form onSubmit={(e) => void onSubmit(e)}>
       <PageFrame
+        back={<BackButton />}
         breadcrumb="User workspace / Side nav / Profile"
         title="Your profile"
         subtitle="Manage your workspace preferences. Identity and access are governed by your organization."
