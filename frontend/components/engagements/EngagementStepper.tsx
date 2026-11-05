@@ -32,7 +32,7 @@ export function EngagementStepper({
             onClick={() => onSelect?.(step.id)}
             aria-current={step.id === activeId ? "step" : undefined}
             className={cn(
-              "flex items-center gap-2 p-1 text-left font-normal disabled:cursor-default disabled:opacity-100",
+              "flex items-center justify-start gap-2 p-1 text-left font-normal disabled:cursor-default disabled:opacity-100",
               step.id === activeId && "bg-[var(--surface-muted)] ring-1 ring-[var(--accent-green)]"
             )}
           >

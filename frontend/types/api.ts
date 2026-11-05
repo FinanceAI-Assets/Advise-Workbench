@@ -639,6 +639,7 @@ export type LibraryQualityGatesDetail = {
   approvers?: Array<{ id: string; name: string }>;
   canSubmit?: boolean;
   canPublish?: boolean;
+  blockers?: string[];
 };
 
 export type LibraryReleaseDetail = {

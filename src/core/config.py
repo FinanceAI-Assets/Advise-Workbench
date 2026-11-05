@@ -8,11 +8,16 @@ from typing import Any
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.core.env_files import dotenv_ignored
+
 logger = logging.getLogger(__name__)
 
 
 def _get_env_files() -> list[str]:
     """Calculate .env file paths relative to this config.py file."""
+    if dotenv_ignored():
+        return []
+
     repo_root = Path(__file__).resolve().parents[2]  # src/core/config.py -> repo root
 
     env_files = [str(repo_root / ".env")]
@@ -174,6 +179,8 @@ class Settings(BaseSettings):
     auth_allow_self_signup: bool = False
     # Comma-separated email domains that may sign in. Empty allows any domain.
     auth_allowed_email_domains: str = "deloitte.com"
+    # Lets POST /api/auth/bootstrap-admin create an administrator without a token. Empty disables the route.
+    admin_bootstrap_secret: str = ""
     # Microsoft Entra ID (OIDC) sign-in. Disabled until a client ID and secret are configured.
     microsoft_sso_client_id: str = ""
     microsoft_sso_client_secret: str = ""
@@ -668,6 +675,8 @@ class Settings(BaseSettings):
                 "For local development run `make dev.secret` or: "
                 "python -c \"import secrets; print(secrets.token_urlsafe(32))\" and add JWT_SECRET to .env"
             )
+        if 0 < len(self.admin_bootstrap_secret.strip()) < 32:
+            raise ValueError("ADMIN_BOOTSTRAP_SECRET must be at least 32 characters, or unset to disable the route")
         if not (self.database_url or "").strip():
             raise ValueError("DATABASE_URL must not be empty")
         if self.run_queue_backend not in {"local", "redis"}:

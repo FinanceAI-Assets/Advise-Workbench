@@ -32,7 +32,7 @@ export function PipelineStepper({
               onClick={() => onSelect(step.id)}
               aria-current={step.id === activeId ? "step" : undefined}
               className={cn(
-                "flex w-full items-start gap-2.5 px-2 py-2 text-left font-normal hover:bg-[var(--surface-muted)]",
+                "flex w-full items-start justify-start gap-2.5 px-2 py-2 text-left font-normal hover:bg-[var(--surface-muted)]",
                 // The first step's view is the library overview, which the design shows without a highlight.
                 step.id === activeId && activeId !== steps[0]?.id && "bg-[var(--surface-muted)]"
               )}

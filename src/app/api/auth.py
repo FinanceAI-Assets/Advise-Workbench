@@ -2,7 +2,7 @@ import secrets
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -13,17 +13,17 @@ from src.core.auth import (
     create_access_token,
     create_refresh_token,
     create_sse_token,
-    development_admin_access_enabled,
     ensure_oauth_user,
     ensure_user,
     get_current_user,
+    provision_user,
     require_project_role,
     rotate_refresh_token,
 )
 from src.core.cache import cache_service
 from src.core.config import settings
 from src.core.rate_limit import limiter
-from src.core.db.models import Run, User
+from src.core.db.models import ActivityEvent, Run, User
 from src.core.db.session import get_db
 
 router = APIRouter()
@@ -79,6 +79,13 @@ class MicrosoftExchangeRequest(BaseModel):
     code: str
 
 
+class BootstrapAdminRequest(BaseModel):
+    email: str
+    password: str
+    full_name: str | None = None
+    job_title: str | None = None
+
+
 @router.post("/login")
 @limiter.limit(_auth_login_rate_limit)
 def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)) -> dict[str, str]:
@@ -89,6 +96,41 @@ def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)) -
         "token_type": "bearer",
         "role": "admin" if user.is_admin else (user.role or "user"),
     }
+
+
+@router.post("/bootstrap-admin", status_code=status.HTTP_201_CREATED)
+@limiter.limit(_auth_login_rate_limit)
+def bootstrap_admin(
+    request: Request,
+    body: BootstrapAdminRequest,
+    x_admin_bootstrap_secret: str = Header(default=""),
+    db: Session = Depends(get_db),
+) -> dict[str, str | bool]:
+    """Create an administrator without a token, for a caller holding ADMIN_BOOTSTRAP_SECRET. Absent when unset."""
+    expected = settings.admin_bootstrap_secret.strip()
+    if not expected:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    if not secrets.compare_digest(x_admin_bootstrap_secret.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid bootstrap secret")
+    row = provision_user(
+        db,
+        email=body.email,
+        password=body.password,
+        role="admin",
+        full_name=body.full_name,
+        job_title=body.job_title,
+    )
+    db.add(
+        ActivityEvent(
+            project_id=None,
+            actor="Admin bootstrap",
+            kind="admin",
+            title="Administrator account created",
+            detail=row.email,
+        )
+    )
+    db.commit()
+    return {"id": row.id, "email": row.email, "role": "admin", "isAdmin": True}
 
 
 @router.get("/microsoft/status")
@@ -271,7 +313,7 @@ def _profile(user: User) -> dict:
         "jobTitle": user.job_title or "",
         "isAdmin": bool(user.is_admin or user.role == "admin"),
         "role": "admin" if user.is_admin else (user.role or "user"),
-        "canSwitchAdmin": bool(user.is_admin or user.role == "admin" or development_admin_access_enabled()),
+        "canSwitchAdmin": bool(user.is_admin or user.role == "admin"),
     }
 
 
