@@ -292,9 +292,15 @@ class Settings(BaseSettings):
     coordinator_llm_planning_enabled: bool = True
     anthropic_thinking_budget_tokens: int = 8000
     anthropic_coordinator_plan_max_tokens: int = 8192
-    # Anthropic pricing ($/MTok) — update when rates change or override via env
-    llm_price_input_per_mtok: float = 3.00
-    llm_price_output_per_mtok: float = 15.00
+    # Anthropic pricing ($/MTok) — Workstream F: per-model pricing support
+    # Workstream F: model-specific prices as JSON override
+    llm_model_prices_json: str = ""  # {"claude-opus-4-8": [3.00, 15.00], "claude-haiku-4-5": [1.00, 5.00]}
+    # Old hardcoded prices (kept for reference):
+    # llm_price_input_per_mtok: float = 3.00
+    # llm_price_output_per_mtok: float = 15.00
+    # Legacy global fallback (used if model price not found):
+    llm_price_input_per_mtok: float = 3.00  # Fallback when no model-specific price
+    llm_price_output_per_mtok: float = 15.00  # Fallback when no model-specific price
     llm_price_cache_read_per_mtok: float = 0.30
     llm_price_cache_creation_per_mtok: float = 3.75
     # Token budget & compression settings
@@ -303,10 +309,22 @@ class Settings(BaseSettings):
     prompt_compression_enabled: bool = True
     prompt_compression_strategy: str = "aggressive"  # "conservative" or "aggressive"
     prompt_compression_log_verbose: bool = True
-    # Per-call budget limits (in tokens)
+    # Per-call budget limits (in tokens) — Workstream B2: now enforced via check_budget
     subagent_max_prompt_tokens: int = 6000  # max prompt tokens for subagent calls
     coordinator_max_prompt_tokens: int = 12000  # max prompt tokens for coordinator planning
     proposal_max_prompt_tokens: int = 8000  # max prompt tokens for proposal generation
+    # Workstream C: per-agent context token limits (replacing char-based slices)
+    subagent_context_tokens_xlsx: int = 1700  # ~6000 chars / 3.5
+    subagent_context_tokens_narrative: int = 1150  # ~4000 chars / 3.5
+    subagent_context_tokens_docx: int = 1150  # ~4000 chars / 3.5
+    subagent_context_tokens_pptx: int = 1000  # ~3500 chars / 3.5
+    subagent_context_tokens_pdf: int = 1000  # ~3500 chars / 3.5
+    # Old char-based limits (kept for reference, Workstream C converts to tokens):
+    # subagent_context_chars_xlsx: int = 6000
+    # subagent_context_chars_narrative: int = 4000
+    # subagent_context_chars_docx: int = 4000
+    # subagent_context_chars_pptx: int = 3500
+    # subagent_context_chars_pdf: int = 3500
     # Cowork-style context: conversation digest + planner retrieval excerpt caps.
     conversation_digest_max_chars: int = 12000
     conversation_digest_message_limit: int = 45
@@ -467,7 +485,16 @@ class Settings(BaseSettings):
     memory_v2_retrieval_enabled: bool = True
     # When True, coordinator uses assemble_v2 so MemoryItem, MemoryEvent, and ProjectMemoryProfile feed assembled_context.
     memory_compaction_v1_enabled: bool = True
+    # DEPRECATED (Workstream A): kept for backward compat, use memory_context_token_budget instead
     memory_compaction_char_cap: int = 32000
+    # Token-aware context budget (per-model allocation)
+    memory_context_token_budget: int = 32000  # total budget for memory pool
+    memory_context_output_reserve_tokens: int = 4096  # reserve for model output
+    memory_context_system_reserve_tokens: int = 4000  # min system prompt tokens
+    memory_context_share_memory: float = 0.40  # fraction for memory sections
+    memory_context_share_retrieved: float = 0.40  # fraction for retrieved chunks
+    memory_context_share_history: float = 0.20  # fraction for run history (WhatChanged)
+    memory_token_count_exact: bool = True  # use Anthropic count_tokens API when available
     # Block MemoryItem rows with consent_state != allowed from context and memory_items tool (DPDP-aware).
     memory_respect_consent_in_context: bool = True
     # When True, MemoryItem rows with principal_id set require a matching Consent Ledger grant (latest row).
@@ -757,6 +784,26 @@ def log_memory_config_warnings() -> None:
             "MEMORY_COMPACTION_V1_ENABLED is true but MEMORY_V2_RETRIEVAL_ENABLED is false: "
             "MemoryItem rows from the Memory page are not merged into assembled_context; "
             "memory events and project profile still apply."
+        )
+
+    # Validate memory token budget
+    if settings.anthropic_max_tokens_per_run > 0 and settings.memory_context_token_budget > settings.anthropic_max_tokens_per_run:
+        log.warning(
+            f"MEMORY_CONTEXT_TOKEN_BUDGET ({settings.memory_context_token_budget}) exceeds "
+            f"ANTHROPIC_MAX_TOKENS_PER_RUN ({settings.anthropic_max_tokens_per_run}); "
+            "memory pool may be constrained by the per-run limit."
+        )
+
+    # Validate share sum
+    share_sum = (
+        settings.memory_context_share_memory +
+        settings.memory_context_share_retrieved +
+        settings.memory_context_share_history
+    )
+    if abs(share_sum - 1.0) > 0.01:
+        log.warning(
+            f"MEMORY_CONTEXT_SHARE_* settings sum to {share_sum:.2f}, not 1.0; "
+            "shares will be normalized but may not match intent."
         )
 
 

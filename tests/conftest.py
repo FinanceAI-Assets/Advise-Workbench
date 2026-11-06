@@ -10,6 +10,8 @@ import pytest
 
 os.environ["ADVISE_WORKBENCH_IGNORE_DOTENV"] = "1"
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# Workstream A: disable exact token counting in tests (no API calls)
+os.environ["MEMORY_TOKEN_COUNT_EXACT"] = "0"
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
