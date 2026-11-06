@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -28,7 +29,7 @@ def extract_artifact_text(run_dir: Path) -> dict[str, str]:
         try:
             from docx import Document
 
-            doc = Document(str(docx_path))
+            doc = Document(io.BytesIO(docx_path.read_bytes()))
             out["docx"] = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         except Exception as exc:
             logger.warning("final_artifact_qa: docx extract failed: %s", exc)
@@ -46,7 +47,7 @@ def extract_artifact_text(run_dir: Path) -> dict[str, str]:
         try:
             import pypdfium2 as pdfium
 
-            pdf = pdfium.PdfDocument(str(pdf_path))
+            pdf = pdfium.PdfDocument(pdf_path.read_bytes())
             pages: list[str] = []
             for i in range(len(pdf)):
                 page = pdf[i]
@@ -61,7 +62,7 @@ def extract_artifact_text(run_dir: Path) -> dict[str, str]:
         try:
             from openpyxl import load_workbook
 
-            wb = load_workbook(str(xlsx_path), read_only=True, data_only=True)
+            wb = load_workbook(io.BytesIO(xlsx_path.read_bytes()), read_only=True, data_only=True)
             parts: list[str] = []
             for ws in wb.worksheets:
                 for row in ws.iter_rows(values_only=True):

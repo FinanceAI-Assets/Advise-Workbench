@@ -1208,8 +1208,10 @@ def fail_run_job(job: RunJob, exc: Exception) -> RunOutcome:
         session,
         run_id,
         "recovery_mode",
+        # Workstream A: use token_budget instead of char_cap (with fallback)
         overflow_recovery_event(
-            char_cap=int(getattr(settings, "memory_compaction_char_cap", 32000)),
+            token_budget=int(getattr(settings, "memory_context_token_budget", 32000)),
+            char_cap=int(getattr(settings, "memory_compaction_char_cap", 32000)),  # fallback
             applied_tier="tier4_context_collapse",
         ),
     )

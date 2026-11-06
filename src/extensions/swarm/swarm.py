@@ -366,7 +366,8 @@ def ensure_teammate_workspace_dirs(*, session: Session, project_id: str, run_id:
     mates = list_teammates(session, run_id=run_id)
     if not mates:
         return
-    if bool(getattr(settings, "swarm_git_worktrees_enabled", False)):
+    # Git worktrees need a real repository on disk, which the store-backed workspace does not have.
+    if bool(getattr(settings, "swarm_git_worktrees_enabled", False)) and settings.workspace_backend != "db_s3":
         _maybe_create_git_worktrees(project_id=project_id, run_id=run_id, teammates=mates)
         return
     for m in mates:
@@ -429,8 +430,12 @@ def _maybe_create_git_worktrees(
 
 
 def ensure_path_within_teammate_workspace(project_id: str, run_id: str, teammate_id: str, candidate: str | Path) -> Path:
+    from src.core.workspace_store import WsPath
+
     root = teammate_workspace_dir(project_id, run_id, teammate_id).resolve()
-    path = Path(candidate).resolve()
+    if isinstance(root, WsPath) and isinstance(candidate, str):
+        candidate = root / candidate  # a relative name inside the store-backed teammate folder
+    path = (candidate if isinstance(candidate, (Path, WsPath)) else Path(candidate)).resolve()
     try:
         path.relative_to(root)
     except ValueError as exc:

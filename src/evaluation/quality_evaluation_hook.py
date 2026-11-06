@@ -237,8 +237,7 @@ def trigger_quality_evaluation(
             safe_print("[TRIGGER_EVAL] Report already exists, loading from cache")
             logger.info(f"Quality evaluation already exists: {report_path}")
             import json
-            with open(report_path) as f:
-                return json.load(f)
+            return json.loads(report_path.read_text(encoding="utf-8"))
 
         # Get all artifact files from workspace run directory
         run_dir = workspace_path(project_id) / "runs" / run_id

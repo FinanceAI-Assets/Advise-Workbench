@@ -11,6 +11,8 @@ from src.core.config import settings
 from src.core.db.models import User
 from src.core.db.session import SessionLocal
 from src.extensions.financial_models.model_realtime import ensure_channel
+# NEW: Phase 4 - WebSocket integration for session management
+from src.extensions.conversation_session import EngagementSessionRegistry
 
 router = APIRouter()
 
@@ -57,6 +59,28 @@ async def model_ws(websocket: WebSocket, pid: str, mid: str) -> None:
         with contextlib.suppress(Exception):
             await websocket.close()
     finally:
+        # NEW: Phase 4 - Close engagement session on WebSocket disconnect
+        try:
+            session_meta = await EngagementSessionRegistry.close_session(pid)
+            # Generate summary if idle > 5 minutes (already in async context, use await)
+            if session_meta.get("idle_duration_sec", 0) > 300:
+                from src.workflows.conversation_summary_worker import (
+                    _generate_engagement_summary,
+                    _upsert_conversation_summary,
+                )
+
+                try:
+                    summary = await _generate_engagement_summary(
+                        db, pid, "ws_disconnect", session_meta.get("idle_duration_sec", 0)
+                    )
+                    if summary:
+                        await _upsert_conversation_summary(db, summary)
+                except Exception:
+                    pass  # Best-effort, non-fatal
+        except Exception:  # noqa: S110 — best-effort, non-fatal
+            pass
+        # END NEW
+
         try:
             channel = await ensure_channel(pid, mid)
             channel.clients.discard(websocket)

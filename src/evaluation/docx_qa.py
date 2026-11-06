@@ -9,6 +9,7 @@ headings) rather than pixel clipping.
 
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ _MAX_TABLE_COLS = 8
 
 def validate_docx(docx_path: Path) -> dict[str, Any]:
     """Deterministic post-render checks on a saved .docx file."""
-    if not Path(docx_path).exists():
+    if not docx_path.exists():
         return {
             "status": "fail",
             "summary": f"DOCX file not found: {docx_path}",
@@ -43,7 +44,7 @@ def validate_docx(docx_path: Path) -> dict[str, Any]:
     try:
         from docx import Document
 
-        doc = Document(str(docx_path))
+        doc = Document(io.BytesIO(docx_path.read_bytes()))
         paragraphs = [p for p in doc.paragraphs if (p.text or "").strip()]
         body_text = "\n".join(p.text for p in paragraphs)
         heading_count = sum(

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "u_cdca680ce9",
+    "email": "prgupta19@deloitte.com",
+    "hashed_password": "$2b$12$sGN8EHs2bE1U8hlxY2/U..8sucQ5QmWCTwjOwZkRMZP4vb3f3Yet.",
+    "created_at": "2026-11-03 17:12:36.366217",
+    "full_name": null,
+    "job_title": null,
+    "is_admin": false,
+    "role": "user"
+  }
+]

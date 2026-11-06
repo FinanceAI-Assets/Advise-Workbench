@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Advise Workbench: check the environment, then run bridge + backend + frontend together.
 #
-#   ./scripts/run_agent.sh           prechecks, then start everything (Ctrl+C stops it all)
-#   ./scripts/run_agent.sh --check   prechecks only
-#   ./scripts/run_agent.sh --fix     prechecks, repairing what is safe to repair, then start
-#   ./scripts/run_agent.sh --check --fix   repair, report, and exit
+#   ./scripts/run_agent.sh           prechecks, then start everything (Ctrl+C stops it all); missing Python and
+#                                    frontend packages (and .venv) are installed automatically
+#   ./scripts/run_agent.sh --check   prechecks only (reports missing packages, installs nothing)
+#   ./scripts/run_agent.sh --fix     also repairs .env settings that are safe to repair, then start
+#   ./scripts/run_agent.sh --check --fix   repair and install, report, and exit
 #
 # Before the other checks it makes sure Postgres, Redis and RabbitMQ answer (starting local ones with
 # scripts/infra.sh) and that the shared-service links in .env (Qdrant, S3, embeddings, ...) are reachable.
@@ -35,6 +36,9 @@ FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 IS_WIN=0; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) IS_WIN=1 ;; esac
 # Python on Windows otherwise writes the console code page (cp1252) and crashes on non-ASCII log output.
 [ "$IS_WIN" = 1 ] && export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
+# Service output goes to .run/<service>.log and is shown here as it is written. Without this, Python holds print()
+# output (the agents' [PHASE2] / [PHASE-CONTEXT] / investigator lines) in an 8 KB buffer, so it arrives late or in bursts.
+export PYTHONUNBUFFERED=1
 CHECK_ONLY=0
 FIX=0
 for arg in "$@"; do
@@ -165,8 +169,9 @@ else
   done
 fi
 
-section "Shared services (public links in .env)"
-# link_state HTTP-code -> up | down. 000 = no connection; 502/504/52x = a dead tunnel or unreachable origin.
+section "Shared services (local addresses in .env)"
+SHARED_LOG="$RUN_DIR/infra/shared-services.txt"; mkdir -p "$RUN_DIR/infra"; : > "$SHARED_LOG"   # captured each run, shown after the prechecks
+# link_state HTTP-code -> up | down. 000 = no connection; 502/504/52x = a dead proxy or unreachable origin.
 link_state() { case "$1" in 000|502|504|52[0-9]) echo down ;; *) echo up ;; esac; }
 # Team settings that travel with `git pull`: when .env.example carries an active "team-shared-services" block,
 # its managed keys are brought into .env (with --fix) or reported (without). The personal settings (collection prefix,
@@ -187,9 +192,13 @@ if [ "$(env_get TEAM_SYNC)" != false ] && [ -f "$ENV_FILE" ] && grep -q '^# >>> 
         env_append "$k=$(example_get "$k")"
       done
       fixed "updated $n shared-service setting(s) in .env from the team block in .env.example:$TEAM_DIFF"
+      printf 'team settings: UPDATED %s key(s) in .env from .env.example:%s\n' "$n" "$TEAM_DIFF" >> "$SHARED_LOG"
     else
       warn "$n shared-service setting(s) in .env differ from the team's current values in .env.example:$TEAM_DIFF" "run with --fix to update .env (personal settings are kept; TEAM_SYNC=false opts out)"
+      printf 'team settings: %s key(s) DIFFER from .env.example, run with --fix to update:%s\n' "$n" "$TEAM_DIFF" >> "$SHARED_LOG"
     fi
+  else
+    echo "team settings: in sync with .env.example" >> "$SHARED_LOG"
   fi
 fi
 SHARED_REQUIRED="$(env_get SHARED_SERVICES_REQUIRED)"
@@ -201,10 +210,10 @@ check_link() { # label ENV_VAR path need200(1|0)
   SHARED_SEEN=$((SHARED_SEEN + 1))
   code="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' "${url%/}$3" 2>/dev/null)"
   state="$(link_state "$code")"
+  printf '%-18s HTTP %-4s %-5s %s\n' "$1" "$code" "$state" "${url%/}" >> "$SHARED_LOG"
   if [ "$state" = up ] && { [ "$4" = 0 ] || [ "$code" = 200 ]; }; then pass "$1 answers (HTTP $code) at ${url%/}"
   else
-    hint="check the link and its key in .env"
-    case "$url" in *trycloudflare.com*) hint="quick-tunnel links change when the tunnels restart: ask the service owner for the current advise-workbench-team.env" ;; esac
+    hint="check the address, the shared server's port and its key in .env"
     if [ "$SHARED_REQUIRED" = true ]; then fail "$1 link does not answer (HTTP $code): ${url%/}" "$hint"
     else warn "$1 link does not answer (HTTP $code): ${url%/}" "$hint"; fi
   fi
@@ -318,65 +327,68 @@ fi
 
 pass "run orchestrator: LangGraph (runs resume from checkpoints after a restart)"
 
+# Packages are installed automatically when missing (no --fix needed); only "--check" on its own just reports.
+INSTALL=1; [ "$CHECK_ONLY" = 1 ] && [ "$FIX" = 0 ] && INSTALL=0
+PIP_LOG="$RUN_DIR/pip-install.log"; NPM_LOG="$RUN_DIR/npm-install.log"; mkdir -p "$RUN_DIR"
+pip_install() { # requirements-file -> 0 when installed; output in $PIP_LOG
+  "$VPY" -m pip install --upgrade pip setuptools wheel >>"$PIP_LOG" 2>&1
+  "$VPY" -m pip install -r "$1" >>"$PIP_LOG" 2>&1
+}
+
 section "Backend packages"
 if [ ! -x "$VPY" ]; then
-  if [ "$FIX" = 1 ] && [ -n "$PY" ]; then
-    echo "        creating virtual environment and installing packages (several minutes)..."
-    "$PY" -m venv "$VENV"
+  if [ "$INSTALL" = 1 ] && [ -n "$PY" ]; then
+    echo "        .venv is missing: creating it and installing packages (several minutes; log: $PIP_LOG)..."
+    : > "$PIP_LOG"
+    "$PY" -m venv "$VENV" >>"$PIP_LOG" 2>&1
     [ -x "$VENV/Scripts/python.exe" ] && VPY="$VENV/Scripts/python.exe" || VPY="$VENV/bin/python"
-    if [ -x "$VPY" ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then
+    if [ -x "$VPY" ] && pip_install "$ROOT/requirements-dev.txt"; then
       fixed "created .venv and installed packages"
-    else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
-  else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+    else fail "package installation failed (see $PIP_LOG)" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
+  elif [ -z "$PY" ]; then fail ".venv is missing and no Python 3.11 was found to create it" "install Python 3.11, then run this script again"
+  else fail ".venv is missing" "run without --check (it is created automatically), or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
 fi
-
 if [ -x "$VPY" ]; then
-  MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
-# if [ ! -x "$VPY" ]; then
-#   if [ "$FIX" = 1 ] && [ -n "$PY" ]; then
-#     echo "        creating virtual environment and installing packages (several minutes)..."
-#     if "$PY" -m venv "$VENV" && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then
-#       fixed "created .venv and installed packages"
-#     else fail "package installation failed" "$PY -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
-#   else fail ".venv is missing" "run with --fix, or: python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"; fi
-# fi
-# if [ -x "$VPY" ]; then
-#   MISSING="$("$VPY" - <<'PYEOF' 2>/dev/null
+  missing_packages() {
+    "$VPY" - <<'PYEOF' 2>/dev/null
 import importlib
 names = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "anthropic", "pptx", "docx", "openpyxl", "reportlab", "sentence_transformers", "faiss",
          "celery", "boto3", "qdrant_client", "docling"]
 print(" ".join(n for n in names if importlib.util.find_spec(n) is None))
 PYEOF
-)"
+  }
+  MISSING="$(missing_packages)"
   if [ -z "$MISSING" ]; then pass "key Python packages are installed"
-  else
-    echo "        installing missing packages: $MISSING..."
-    if "$VPY" -m pip install -r "$ROOT/requirements-dev.txt"; then
-      fixed "installed packages"
-    else
-      fail "package installation failed" "$VENV_BIN/pip install -r requirements-dev.txt"
-    fi
-  fi
-  # if [ -z "$MISSING" ]; then pass "key Python packages are installed"
-  # elif [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements-dev.txt"; then fixed "installed missing packages: $MISSING"
-  # else fail "missing Python packages: $MISSING" ".venv/bin/pip install -r requirements-dev.txt"; fi
+  elif [ "$INSTALL" = 1 ]; then
+    echo "        installing missing Python packages: $MISSING (log: $PIP_LOG)..."
+    : > "$PIP_LOG"
+    if pip_install "$ROOT/requirements-dev.txt" && [ -z "$(missing_packages)" ]; then fixed "installed missing packages: $MISSING"
+    else fail "package installation failed; still missing: $(missing_packages) (see $PIP_LOG)" ".venv/bin/pip install -r requirements-dev.txt"; fi
+  else fail "missing Python packages: $MISSING" "run without --check (they are installed automatically), or: .venv/bin/pip install -r requirements-dev.txt"; fi
 
   ANTHROPIC_V="$("$VPY" -c 'from importlib.metadata import version; print(version("anthropic"))' 2>/dev/null)"
   case "$ANTHROPIC_V" in
     0.*) pass "anthropic $ANTHROPIC_V (below 1.0, as this code needs)" ;;
     "") : ;;
-    *) if [ "$FIX" = 1 ] && "$VPY" -m pip install -q -r "$ROOT/requirements.txt"; then fixed "reinstalled pinned packages (anthropic below 1.0)"
+    *) if [ "$INSTALL" = 1 ] && pip_install "$ROOT/requirements.txt"; then fixed "reinstalled pinned packages (anthropic below 1.0)"
        else fail "anthropic $ANTHROPIC_V rejects the 'temperature' argument this code sends" ".venv/bin/pip install -r requirements.txt"; fi ;;
   esac
 fi
 
 section "Frontend packages"
+npm_install() { (cd "$FRONTEND" && npm install --no-fund --no-audit >"$NPM_LOG" 2>&1); }
 if [ ! -x "$FRONTEND/node_modules/.bin/next" ]; then
-  if [ "$FIX" = 1 ] && (cd "$FRONTEND" && npm install --no-fund --no-audit >/dev/null 2>&1); then fixed "ran npm install"
-  else fail "frontend packages are not installed" "cd frontend && npm install   (or run with --fix)"; fi
+  if [ "$INSTALL" = 1 ]; then
+    echo "        frontend packages are missing: running npm install (a few minutes; log: $NPM_LOG)..."
+    if npm_install; then fixed "ran npm install"
+    else fail "npm install failed (see $NPM_LOG)" "cd frontend && npm install"; fi
+  else fail "frontend packages are not installed" "run without --check (installed automatically), or: cd frontend && npm install"; fi
 elif [ "$FRONTEND/package-lock.json" -nt "$FRONTEND/node_modules/.package-lock.json" ]; then
-  if [ "$FIX" = 1 ] && (cd "$FRONTEND" && npm install --no-fund --no-audit >/dev/null 2>&1); then fixed "refreshed frontend packages (npm install)"
-  else warn "package-lock.json changed after the last npm install; packages may be out of date" "cd frontend && npm install   (or run with --fix)"; fi
+  if [ "$INSTALL" = 1 ]; then
+    echo "        package-lock.json changed since the last npm install: refreshing (log: $NPM_LOG)..."
+    if npm_install; then fixed "refreshed frontend packages (npm install)"
+    else warn "npm install failed; packages may be out of date (see $NPM_LOG)" "cd frontend && npm install"; fi
+  else warn "package-lock.json changed after the last npm install; packages may be out of date" "run without --check, or: cd frontend && npm install"; fi
 else pass "frontend packages are installed"; fi
 
 section "Database and folders"
@@ -418,6 +430,33 @@ fi
 
 section "Ports"
 BRIDGE_UP=0; BACKEND_UP=0; FRONTEND_UP=0
+
+kill_tree() { # stop a process and everything it started
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
+    # Git Bash cannot see native Windows grandchildren (uvicorn's reloader, node's workers): end the whole tree.
+    winpid="$(ps 2>/dev/null | awk -v p="$1" '$1 == p {print $4}')"
+    [ -n "$winpid" ] && taskkill //PID "$winpid" //T //F >/dev/null 2>&1 ;;
+  esac
+  if command -v pgrep >/dev/null 2>&1; then kids="$(pgrep -P "$1" 2>/dev/null)"
+  else kids="$(ps -A -o pid=,ppid= 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"
+       [ -n "$kids" ] || kids="$(ps 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"; fi   # Git Bash: plain ps
+  for child in $kids; do kill_tree "$child"; done
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) kill -f "$1" 2>/dev/null ;; *) kill "$1" 2>/dev/null ;; esac
+}
+# Stop the worker, backend and frontend that the previous run recorded in .run/*.pid, so this run starts them fresh.
+stop_previous() {
+  for name in worker backend frontend; do
+    f="$RUN_DIR/$name.pid"; [ -f "$f" ] || continue
+    pid="$(tr -d '\r\n ' < "$f")"
+    if [ -n "$pid" ]; then kill_tree "$pid"; printf '  STOP  previous %s (pid %s)\n' "$name" "$pid"; fi
+    rm -f "$f"
+  done
+  for _ in $(seq 15); do   # wait up to 15 s for the ports to be released
+    [ -z "$(port_owner "$BACKEND_PORT")" ] && [ -z "$(port_owner "$FRONTEND_PORT")" ] && break
+    sleep 1
+  done
+}
+[ "$CHECK_ONLY" = 1 ] || stop_previous
 check_port() { # name port health-url ; echoes up | free | busy:<owner>
   if http_ok "$3"; then echo up; return; fi
   owner="$(port_owner "$2")"
@@ -429,7 +468,10 @@ if [ "$BRIDGE_MODE" = 1 ]; then
     *) fail "port $BRIDGE_PORT is used by ${S#busy:}" "stop that process or set BRIDGE_PORT" ;; esac
 fi
 S="$(check_port backend "$BACKEND_PORT" "http://127.0.0.1:$BACKEND_PORT/health")"
-case "$S" in up) BACKEND_UP=1; pass "backend already running on $BACKEND_PORT" ;; free) pass "port $BACKEND_PORT is free for the backend" ;;
+case "$S" in up) BACKEND_UP=1
+    warn "backend already running on $BACKEND_PORT (started elsewhere${IS_WIN:+, $(port_owner "$BACKEND_PORT")}): it is used as is, and its logs ([SHELDON], [RAG_AGENT], [QUERY], [PHASE2] ...) are NOT shown here" \
+         "to see them here, stop that backend (Ctrl+C in its window, or end the process) and run this script again" ;;
+  free) pass "port $BACKEND_PORT is free for the backend" ;;
   *) fail "port $BACKEND_PORT is used by ${S#busy:}" "stop that process or set BACKEND_PORT" ;; esac
 S="$(check_port frontend "$FRONTEND_PORT" "http://localhost:$FRONTEND_PORT/")"
 case "$S" in up) FRONTEND_UP=1; pass "frontend already running on $FRONTEND_PORT" ;; free) pass "port $FRONTEND_PORT is free for the frontend" ;;
@@ -448,11 +490,15 @@ if [ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 1 ]; then
   OO_UP=1
 elif [ "$OO_ENABLED" = "true" ]; then
   S="$(check_port openobserve "$OO_PORT" "$OO_URL/healthz")"
+  # Monitoring is optional: when the local OpenObserve cannot be started, warn and start everything else
+  # (OO_UP=1 here only means "do not start it"); the app runs without exporting telemetry.
   case "$S" in up) OO_UP=1; pass "OpenObserve already running on $OO_PORT" ;;
-    free) if [ -x "$ROOT/.tools/openobserve/openobserve" ]; then pass "port $OO_PORT is free for OpenObserve"; OO_START_LOCAL=1
-          else fail "OPENOBSERVE_ENABLED=true but OpenObserve is not installed" "./scripts/openobserve.sh setup"; fi ;;
-    *) fail "port $OO_PORT is used by ${S#busy:}" "stop that process or change OPENOBSERVE_URL" ;; esac
+    free) if [ -x "$ROOT/.tools/openobserve/openobserve" ]; then pass "port $OO_PORT is free for OpenObserve"
+          else OO_UP=1; warn "OPENOBSERVE_ENABLED=true but OpenObserve is not installed; starting without it" "./scripts/openobserve.sh setup, or set OPENOBSERVE_ENABLED=false"; fi ;;
+    *) OO_UP=1; warn "port $OO_PORT is used by ${S#busy:}; starting without OpenObserve" "stop that process or change OPENOBSERVE_URL" ;; esac
 fi
+OO_START_LOCAL=0
+[ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 0 ] && [ "$OO_UP" = 0 ] && OO_START_LOCAL=1
 
 section "Optional tools"
 [ "$OO_ENABLED" = "true" ] || warn "OpenObserve monitoring is off: no traces, metrics or logs are collected" "./scripts/openobserve.sh setup"
@@ -465,6 +511,7 @@ if command -v tesseract >/dev/null 2>&1 || [ -f "/c/Program Files/Tesseract-OCR/
 else warn "Tesseract not installed: scanned PDFs cannot be read" "$(hint tesseract)"; fi
 
 printf '\nPrechecks: %d passed, %d warnings, %d failed\n' "$PASS_N" "$WARN_N" "$FAIL_N"
+printf '\nShared services (captured in %s):\n' "$SHARED_LOG"; sed 's/^/  /' "$SHARED_LOG"
 if [ "$FAIL_N" -gt 0 ]; then
   echo "Fix the FAIL items above and run again (--fix repairs the ones marked 'run with --fix')."
   abort_prechecks 1
@@ -476,18 +523,6 @@ mkdir -p "$RUN_DIR"
 STARTED_PIDS=""
 TAIL_PIDS=""
 
-kill_tree() { # stop a process and everything it started
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
-    # Git Bash cannot see native Windows grandchildren (uvicorn's reloader, node's workers): end the whole tree.
-    winpid="$(ps 2>/dev/null | awk -v p="$1" '$1 == p {print $4}')"
-    [ -n "$winpid" ] && taskkill //PID "$winpid" //T //F >/dev/null 2>&1 ;;
-  esac
-  if command -v pgrep >/dev/null 2>&1; then kids="$(pgrep -P "$1" 2>/dev/null)"
-  else kids="$(ps -A -o pid=,ppid= 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"
-       [ -n "$kids" ] || kids="$(ps 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"; fi   # Git Bash: plain ps
-  for child in $kids; do kill_tree "$child"; done
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) kill -f "$1" 2>/dev/null ;; *) kill "$1" 2>/dev/null ;; esac
-}
 cleanup() {
   trap - INT TERM EXIT
   printf '\nStopping...\n'
@@ -532,21 +567,44 @@ if [ "$BRIDGE_MODE" = 1 ] && [ "$BRIDGE_UP" = 0 ]; then
   start_service bridge "$ROOT" "$PY" "$BRIDGE" --port "$BRIDGE_PORT" --claude "$(command -v claude)"
   wait_http bridge "http://127.0.0.1:$BRIDGE_PORT/" 20 "$PID_bridge" || cleanup 1
 fi
-if [ "$OO_START_LOCAL" = 1 ]; then
-  # Start local OpenObserve only if configured for local and port is free
+if [ "$OO_ENABLED" = "true" ] && [ "$OO_UP" = 0 ]; then
   start_service openobserve "$ROOT" "$ROOT/scripts/openobserve.sh" start
   wait_http openobserve "$OO_URL/healthz" 60 "$PID_openobserve" || cleanup 1
 fi
 if [ "$BACKEND_UP" = 0 ]; then
   start_service backend "$ROOT" "$VPY" -m uvicorn src.app.main:app --reload --reload-dir src --host 0.0.0.0 --port "$BACKEND_PORT"
   wait_http backend "http://127.0.0.1:$BACKEND_PORT/health" 120 "$PID_backend" || cleanup 1
-  # Document ingestion pipeline worker (S3 -> Docling -> Postgres chunks -> Qdrant); solo pool works on Windows.
-  if bash "$INFRA_SH" check rabbitmq >/dev/null 2>&1; then
-    start_service worker "$ROOT" "$VPY" -m celery -A src.workers.celery_app worker --pool=solo --loglevel=INFO
-    WORKER_STARTED=1
+fi
+# Document ingestion pipeline worker (S3 -> Docling -> Postgres chunks -> Qdrant); solo pool works on Windows.
+# Started even when the backend was already running: without it, uploads stay "pending". A worker this script
+# started earlier is reused. (Other workers on a shared broker are not counted: they may run other code.)
+WORKER_PID_FILE="$RUN_DIR/worker.pid"
+stray_workers() { # pids of ingestion workers on this machine (any terminal), Windows or Unix
+  if [ "$IS_WIN" = 1 ]; then
+    powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | Where-Object { \$_.CommandLine -match 'celery -A src.workers.celery_app worker' -and \$_.CommandLine -notmatch 'spawn_main' } | ForEach-Object { \$_.ProcessId }" 2>/dev/null | tr -d '\r'
   else
-    echo "[worker] RabbitMQ is not running, so the ingestion worker was not started (./scripts/infra.sh start rabbitmq)"
+    pgrep -f "celery -A src.workers.celery_app worker" 2>/dev/null
   fi
+}
+if [ -f "$WORKER_PID_FILE" ] && kill -0 "$(cat "$WORKER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
+  echo "[worker] already running (pid $(cat "$WORKER_PID_FILE"), log: $RUN_DIR/worker.log)"
+  WORKER_STARTED=1
+elif bash "$INFRA_SH" check rabbitmq >/dev/null 2>&1; then
+  # A worker left from an earlier run or another terminal would take half of every upload's tasks, with the code it
+  # started with, and log elsewhere. Stop it so this run's worker processes (and shows) everything.
+  STRAY="$(stray_workers | tr '\n' ' ')"
+  if [ -n "${STRAY// /}" ]; then
+    echo "[worker] stopping ingestion workers not started by this run (pid $STRAY): they would split uploads and run old code"
+    for p in $STRAY; do
+      if [ "$IS_WIN" = 1 ]; then taskkill //PID "$p" //T //F >/dev/null 2>&1; else kill "$p" 2>/dev/null; fi
+    done
+    sleep 2
+  fi
+  start_service worker "$ROOT" "$VPY" -m celery -A src.workers.celery_app worker --pool=solo --loglevel=INFO
+  WORKER_STARTED=1
+else
+  echo "[worker] RabbitMQ (CELERY_BROKER_URL) does not answer, so the ingestion worker was not started:" \
+       "uploads will stay 'pending' (./scripts/infra.sh start rabbitmq, or fix CELERY_BROKER_URL in .env)"
 fi
 if [ "$FRONTEND_UP" = 0 ]; then
   export API_PROXY_TARGET="http://127.0.0.1:$BACKEND_PORT"

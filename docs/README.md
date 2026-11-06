@@ -61,7 +61,7 @@ Working on the code: integration guides and conventions.
 |---|---|
 | [anthropic_skills_reconciliation.md](04-development/anthropic_skills_reconciliation.md) | Anthropic skills reconciliation (mapped built-ins) |
 | [layering.md](04-development/layering.md) | Layering rules |
-| [library-query-api.md](04-development/library-query-api.md) | Library Q&A API (frontend integration) |
+| [library-query-api.md](04-development/library-query-api.md) | Query pipeline: Sheldon's rag_agent, Talk to data, `POST /api/query` (Postman) |
 | [model-providers.md](04-development/model-providers.md) | Model providers |
 
 ## 05-testing
@@ -72,6 +72,7 @@ Test reports, quality evaluations, sample outputs and parity reports.
 |---|---|
 | [CODE_QUALITY_EVAL.md](05-testing/CODE_QUALITY_EVAL.md) | Code Quality Eval — Advise Workbench |
 | [TEST_REPORT.md](05-testing/TEST_REPORT.md) | PPTX Artifact Renderer - Comprehensive Test Report |
+| [engagement-rag-test-plan.md](05-testing/engagement-rag-test-plan.md) | Test plan: Sheldon answers from engagement documents (files, questions, expected answers) |
 | [TestEngagement2_Analysismodel_20260410.xlsx](05-testing/TestEngagement2_Analysismodel_20260410.xlsx) |  |
 | [TestEngagement2_Executivereport_20260528.pdf](05-testing/TestEngagement2_Executivereport_20260528.pdf) |  |
 | [reports/](05-testing/reports/) | PPTX canvas parity reports and visual-diff images |

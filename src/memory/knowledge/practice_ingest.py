@@ -56,8 +56,10 @@ class SourceRejected(ValueError):
 # --- storage -------------------------------------------------------------------------------------------------------
 
 
-def library_root() -> Path:
-    return Path(settings.workspace_root) / "leading_practices"
+def library_root():
+    from src.core.storage import workspace_path
+
+    return workspace_path("leading_practices")
 
 
 def published_dir() -> Path:

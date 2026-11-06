@@ -14,6 +14,7 @@ RouterIntent = Literal[
     "clarify",
     "refine",
     "out_of_scope",
+    "knowledge_question",   # A question answered from the engagement's documents / the library (Sheldon's rag_agent)
     # Collaborative story-building intents (Phase 2)
     "storyline_feedback",   # User reacting to a narrative arc proposal (agree / redirect)
     "slide_agree",          # User agrees with the current slide concept
@@ -44,7 +45,7 @@ _VALID_STATES = {
 
 _VALID_INTENTS = {
     "greeting", "ack", "smalltalk", "commit", "discovery_answer",
-    "clarify", "refine", "out_of_scope",
+    "clarify", "refine", "out_of_scope", "knowledge_question",
     "storyline_feedback", "slide_agree", "slide_modify", "structure_approve",
 }
 
@@ -101,7 +102,9 @@ def route_turn(
     recent_messages: list[dict[str, Any]],
     project_context: str,
     available_output_types: list[dict[str, Any]],
-    history_summary: str = "",
+    # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+    # history_summary: str = "",
+    conversation_summary: str = "",
     memory_profile: dict[str, Any] | None = None,
 ) -> RouterDecision:
     catalog = [
@@ -118,8 +121,12 @@ def route_turn(
         "Return ONLY JSON with keys:\n"
         "intent, confidence, extracted_slots, output_types, representations, content_skill_hint, "
         "next_state, missing_slots, reply_hint, rationale.\n\n"
-        "intent enum: greeting|ack|smalltalk|commit|discovery_answer|clarify|refine|out_of_scope"
+        "intent enum: greeting|ack|smalltalk|commit|discovery_answer|clarify|refine|out_of_scope|knowledge_question"
         "|storyline_feedback|slide_agree|slide_modify|structure_approve.\n"
+        "  knowledge_question = the user asks for facts or information to be looked up in the engagement's uploaded "
+        "documents or the Leading Practice Library (e.g. 'what does the discovery workshop say about vendor master "
+        "changes?', 'what are the leading practices for three-way match?'), and does NOT ask for a deliverable "
+        "(deck, document, spreadsheet) to be created. Not for answers to discovery questions.\n"
         "  storyline_feedback = user reacting to a narrative arc proposal (e.g. 'I prefer SCQA', 'looks good', 'use pyramid').\n"
         "  slide_agree = user agrees with the current proposed slide concept.\n"
         "  slide_modify = user wants to change the current slide concept.\n"
@@ -136,11 +143,15 @@ def route_turn(
         "{client:{name,industry}, outcome:{primary,decision}, win_themes:[...], audience, narrative_arc, tone}.\n"
         "missing_slots values should come from: client, outcome, win_themes.\n"
     )
-    summary_prefix = (
-        f"Conversation summary (prior turns):\n{history_summary}\n\n"
-        if history_summary.strip()
-        else ""
-    )
+    # [CHANGED: Build context with unified conversation_summary (rolling inline + session idle)]
+    summary_parts = []
+    if conversation_summary.strip():
+        summary_parts.append(f"Session summary (auto-generated on idle/checkpoint):\n{conversation_summary}")
+    # [DEPRECATED: history_summary block removed - consolidated into conversation_summary]
+    # if history_summary.strip():
+    #     summary_parts.append(f"Rolling conversation summary (prior 20+ messages):\n{history_summary}")
+    summary_prefix = "\n\n".join(summary_parts) + "\n\n" if summary_parts else ""
+
     user = (
         f"{summary_prefix}"
         f"Current state: {conv_state}\n\n"

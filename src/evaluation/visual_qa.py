@@ -869,6 +869,14 @@ def _render_text_to_png_images(run_dir: Path) -> tuple[list[bytes], list[str], l
 
 
 def run_visual_quality_check(project_id: str, run_id: str, run_dir: Path) -> dict[str, Any]:
+    # LibreOffice and the PDF/Office readers need real files: work on a local copy of the run folder.
+    from src.core.workspace_store import scratch
+
+    with scratch(project_id, f"runs/{run_id}", hydrate=True) as local_run_dir:
+        return _run_visual_quality_check(project_id, run_id, local_run_dir)
+
+
+def _run_visual_quality_check(project_id: str, run_id: str, run_dir: Path) -> dict[str, Any]:
     # ── Per-artifact PPTX evaluation (structural metadata, separate Claude call) ──
     pptx_path = run_dir / "output.pptx"
     print(f"[VQA] 1. Starting PPTX evaluation...")

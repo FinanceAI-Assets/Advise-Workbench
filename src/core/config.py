@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # When False, Redis must be reachable or CacheService startup fails (avoids split-brain cache across API replicas).
     cache_allow_memory_fallback: bool = True
     workspace_root: str = "./workspace"
+    # fs: project files in workspace_root (default). db_s3: text in Postgres workspace_files, binaries in S3.
+    workspace_backend: str = "fs"
+    s3_endpoint_url: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_bucket: str = ""
+    s3_ca_file: str = ""
     redis_url: str = "redis://localhost:6379/0"
     # Shared connection pool for SSE pub/sub. Each active SSE stream borrows one
     # pubsub connection; size to >= peak concurrent streams expected.
@@ -144,7 +151,8 @@ class Settings(BaseSettings):
     query_llm_timeout_sec: float = 90.0  # per answer attempt
     query_llm_retries: int = 2  # extra attempts after a timeout or API error
     query_llm_retry_backoff_sec: float = 1.0  # wait before retry n is n x this (doubled when rate limited)
-    query_event_retention_days: int = 90  # question log behind /api/admin/library/query/metrics
+    query_max_concurrent_answers: int = 8  # answer calls running at once per process; others wait (counted in the timeout)
+    query_rate_limit: str = "30/minute"  # POST /api/query per user
 
     anthropic_api_key: str = ""
 
@@ -284,9 +292,15 @@ class Settings(BaseSettings):
     coordinator_llm_planning_enabled: bool = True
     anthropic_thinking_budget_tokens: int = 8000
     anthropic_coordinator_plan_max_tokens: int = 8192
-    # Anthropic pricing ($/MTok) — update when rates change or override via env
-    llm_price_input_per_mtok: float = 3.00
-    llm_price_output_per_mtok: float = 15.00
+    # Anthropic pricing ($/MTok) — Workstream F: per-model pricing support
+    # Workstream F: model-specific prices as JSON override
+    llm_model_prices_json: str = ""  # {"claude-opus-4-8": [3.00, 15.00], "claude-haiku-4-5": [1.00, 5.00]}
+    # Old hardcoded prices (kept for reference):
+    # llm_price_input_per_mtok: float = 3.00
+    # llm_price_output_per_mtok: float = 15.00
+    # Legacy global fallback (used if model price not found):
+    llm_price_input_per_mtok: float = 3.00  # Fallback when no model-specific price
+    llm_price_output_per_mtok: float = 15.00  # Fallback when no model-specific price
     llm_price_cache_read_per_mtok: float = 0.30
     llm_price_cache_creation_per_mtok: float = 3.75
     # Token budget & compression settings
@@ -295,10 +309,22 @@ class Settings(BaseSettings):
     prompt_compression_enabled: bool = True
     prompt_compression_strategy: str = "aggressive"  # "conservative" or "aggressive"
     prompt_compression_log_verbose: bool = True
-    # Per-call budget limits (in tokens)
+    # Per-call budget limits (in tokens) — Workstream B2: now enforced via check_budget
     subagent_max_prompt_tokens: int = 6000  # max prompt tokens for subagent calls
     coordinator_max_prompt_tokens: int = 12000  # max prompt tokens for coordinator planning
     proposal_max_prompt_tokens: int = 8000  # max prompt tokens for proposal generation
+    # Workstream C: per-agent context token limits (replacing char-based slices)
+    subagent_context_tokens_xlsx: int = 1700  # ~6000 chars / 3.5
+    subagent_context_tokens_narrative: int = 1150  # ~4000 chars / 3.5
+    subagent_context_tokens_docx: int = 1150  # ~4000 chars / 3.5
+    subagent_context_tokens_pptx: int = 1000  # ~3500 chars / 3.5
+    subagent_context_tokens_pdf: int = 1000  # ~3500 chars / 3.5
+    # Old char-based limits (kept for reference, Workstream C converts to tokens):
+    # subagent_context_chars_xlsx: int = 6000
+    # subagent_context_chars_narrative: int = 4000
+    # subagent_context_chars_docx: int = 4000
+    # subagent_context_chars_pptx: int = 3500
+    # subagent_context_chars_pdf: int = 3500
     # Cowork-style context: conversation digest + planner retrieval excerpt caps.
     conversation_digest_max_chars: int = 12000
     conversation_digest_message_limit: int = 45
@@ -310,6 +336,19 @@ class Settings(BaseSettings):
     conversation_digest_exclude_stale_sources: bool = True
     subagent_conversation_digest_max_chars: int = 3500
     coordinator_planning_context_chars: int = 7000
+    # Conversation summary trigger configuration for inline generation
+    conversation_summary_trigger_interval: int = Field(
+        default=6,
+        ge=1,
+        le=100,
+        description="Message count interval for triggering conversation summary generation (e.g., 6 = trigger at 6, 12, 18... messages)"
+    )
+    conversation_summary_recent_exclude_count: int = Field(
+        default=6,
+        ge=0,
+        le=50,
+        description="Number of recent messages to exclude from summary (kept verbatim in recent context)"
+    )
     # Optional extended thinking for narrative subagent (extra cost when enabled).
     subagent_narrative_thinking_enabled: bool = False
     anthropic_subagent_thinking_budget_tokens: int = 8000
@@ -450,7 +489,16 @@ class Settings(BaseSettings):
     memory_v2_retrieval_enabled: bool = True
     # When True, coordinator uses assemble_v2 so MemoryItem, MemoryEvent, and ProjectMemoryProfile feed assembled_context.
     memory_compaction_v1_enabled: bool = True
+    # DEPRECATED (Workstream A): kept for backward compat, use memory_context_token_budget instead
     memory_compaction_char_cap: int = 32000
+    # Token-aware context budget (per-model allocation)
+    memory_context_token_budget: int = 32000  # total budget for memory pool
+    memory_context_output_reserve_tokens: int = 4096  # reserve for model output
+    memory_context_system_reserve_tokens: int = 4000  # min system prompt tokens
+    memory_context_share_memory: float = 0.40  # fraction for memory sections
+    memory_context_share_retrieved: float = 0.40  # fraction for retrieved chunks
+    memory_context_share_history: float = 0.20  # fraction for run history (WhatChanged)
+    memory_token_count_exact: bool = True  # use Anthropic count_tokens API when available
     # Block MemoryItem rows with consent_state != allowed from context and memory_items tool (DPDP-aware).
     memory_respect_consent_in_context: bool = True
     # When True, MemoryItem rows with principal_id set require a matching Consent Ledger grant (latest row).
@@ -462,6 +510,9 @@ class Settings(BaseSettings):
     advise_workbench_runs_debug_log: str = ""
     observability_snapshot_path: str = ""
     structured_logging_enabled: bool = False
+    # Console log level of the API process (DEBUG, INFO, WARNING). INFO shows the [UPLOAD], [SHELDON], [RAG_AGENT] and
+    # [QUERY] lines; the Celery worker prints its stage lines ([S3], [PARSE], [CHUNK], [EMBED]) with --loglevel=INFO.
+    log_level: str = "INFO"
 
     model_realtime_redis_channel_prefix: str = "advise-workbench:model-events"
     drawio_collab_channel_prefix: str = "advise-workbench:drawio-collab"
@@ -739,6 +790,26 @@ def log_memory_config_warnings() -> None:
             "memory events and project profile still apply."
         )
 
+    # Validate memory token budget
+    if settings.anthropic_max_tokens_per_run > 0 and settings.memory_context_token_budget > settings.anthropic_max_tokens_per_run:
+        log.warning(
+            f"MEMORY_CONTEXT_TOKEN_BUDGET ({settings.memory_context_token_budget}) exceeds "
+            f"ANTHROPIC_MAX_TOKENS_PER_RUN ({settings.anthropic_max_tokens_per_run}); "
+            "memory pool may be constrained by the per-run limit."
+        )
+
+    # Validate share sum
+    share_sum = (
+        settings.memory_context_share_memory +
+        settings.memory_context_share_retrieved +
+        settings.memory_context_share_history
+    )
+    if abs(share_sum - 1.0) > 0.01:
+        log.warning(
+            f"MEMORY_CONTEXT_SHARE_* settings sum to {share_sum:.2f}, not 1.0; "
+            "shares will be normalized but may not match intent."
+        )
+
 
 def log_wiki_config_warnings() -> None:
     """Warn when LP wiki is writable by any authenticated user due to missing allowlist."""
@@ -799,6 +870,44 @@ def log_run_queue_startup_config(*, repo_env_present: bool) -> None:
             "local Redis-queue testing; switch DATABASE_URL to Postgres before staging/production "
             "(enforced there — see Settings._validate_secrets_and_urls)."
         )
+
+
+def _endpoint_for_logs(url: str) -> str:
+    """scheme://host:port of a service URL, without credentials, path or query (or "(not set)")."""
+    from urllib.parse import urlsplit
+
+    if not url:
+        return "(not set)"
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+    except ValueError:
+        return "(unparseable)"
+
+
+def log_document_pipeline_config(process: str) -> None:
+    """One startup line per service the document pipeline uses (engagement uploads, Sheldon's rag_agent, the query
+    pipeline), so a wrong or missing .env value shows in the backend / worker log. No secrets are logged."""
+    import logging
+
+    log = logging.getLogger("advise_workbench.config")
+    prefix = settings.qdrant_collection_prefix
+    log.info("[STARTUP] %s document pipeline: database=%s broker=%s", process,
+             describe_database_url_for_logs(settings.database_url), _endpoint_for_logs(settings.celery_broker_url))
+    log.info("[STARTUP] %s SeaweedFS (S3)=%s bucket=%s prefix=%s | Qdrant=%s collections=%s%s, %s%s",
+             process, _endpoint_for_logs(settings.s3_endpoint_url), settings.s3_bucket or "(not set)",
+             settings.s3_intake_prefix, _endpoint_for_logs(settings.qdrant_url), prefix, settings.qdrant_collection,
+             prefix, settings.qdrant_wiki_collection)
+    log.info("[STARTUP] %s embeddings=%s model=%s | Docling OCR=%s | LLM provider=%s | LOG_LEVEL=%s",
+             process, _endpoint_for_logs(settings.embedding_base_url) if settings.embedding_base_url else "(local model)",
+             settings.embedding_model, settings.docling_ocr_enabled, settings.llm_provider or "(default)",
+             settings.log_level)
+    missing = [name for name, value in (("S3_ENDPOINT_URL", settings.s3_endpoint_url), ("S3_BUCKET", settings.s3_bucket),
+                                        ("QDRANT_URL", settings.qdrant_url)) if not value]
+    if missing:
+        log.warning("[STARTUP] %s: %s not set in .env; engagement uploads cannot be processed", process,
+                    ", ".join(missing))
 
 
 def bash_allowlist_set() -> frozenset[str]:

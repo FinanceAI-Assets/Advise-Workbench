@@ -2,7 +2,7 @@ import base64
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from src.core.db.models import MemoryEvent, Project, ProjectMemoryProfile, Run, 
 from src.core.db.session import get_db
 from src.deliverables.artifact_integrity import pptx_base64_from_file, verify_pptx_on_disk
 from src.core.storage import workspace_path
+from src.core.workspace_store import download_response, scratch
 
 router = APIRouter()
 
@@ -555,8 +556,8 @@ def download_run_pptx(
     run_date = run.created_at.date().strftime("%Y%m%d") if run.created_at else "UnknownDate"
     filename = f"{client_name}_ExecutiveDeck_{run_date}.pptx"
 
-    return FileResponse(
-        path=str(pptx_path),
+    return download_response(
+        pptx_path,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=filename,
     )
@@ -579,8 +580,8 @@ def download_run_docx(
         raise HTTPException(status_code=404, detail="DOCX output not found for this run")
     project = db.scalar(select(Project).where(Project.id == project_id))
     name = _tokenize_filename(str(project.name or "").strip() if project else "") or "Deliverable"
-    return FileResponse(
-        path=str(docx_path),
+    return download_response(
+        docx_path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=f"{name}_Document.docx",
     )
@@ -623,23 +624,26 @@ def get_run_handoff_bundle(
     run_date = run.created_at.date().strftime("%Y%m%d") if run.created_at else "UnknownDate"
     filename = f"{_tokenize_filename(project_name or 'Project')}_HandoffBundle_{run_date}.zip"
 
-    result = build_handoff_bundle(
-        run_dir,
-        metadata={
-            "project_id": project_id,
-            "run_id": run_id,
-            "status": run.status,
-            "instruction": run.instruction,
-            "output_types": output_types if isinstance(output_types, list) else [],
-            "plan_hash": plan_hash,
-        },
-    )
-    if not result.zip_path or not result.zip_path.exists():
-        raise HTTPException(status_code=500, detail="Handoff bundle unavailable")
+    # The bundle is built on a local copy of the run folder; the zip is read before that copy is removed.
+    with scratch(project_id, f"runs/{run_id}", hydrate=True) as local_run_dir:
+        result = build_handoff_bundle(
+            local_run_dir,
+            metadata={
+                "project_id": project_id,
+                "run_id": run_id,
+                "status": run.status,
+                "instruction": run.instruction,
+                "output_types": output_types if isinstance(output_types, list) else [],
+                "plan_hash": plan_hash,
+            },
+        )
+        if not result.zip_path or not result.zip_path.exists():
+            raise HTTPException(status_code=500, detail="Handoff bundle unavailable")
+        zip_bytes = result.zip_path.read_bytes()
 
-    return FileResponse(
-        path=str(result.zip_path),
+    return Response(
+        content=zip_bytes,
         media_type="application/zip",
-        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

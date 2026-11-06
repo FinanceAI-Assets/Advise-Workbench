@@ -1,7 +1,9 @@
 import importlib.util
 import json
 import logging
+import os
 import shutil
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -29,7 +31,14 @@ from src.app.api.routes import router
 from src.app.api.wiki import router as wiki_router
 from src.app.api.failure_tracking import router as failure_tracking_router
 from src.app.api.phase5_hitl import router as phase5_router
-from src.core.config import log_memory_config_warnings, log_run_queue_startup_config, log_wiki_config_warnings, settings
+from src.app.api.quality_evaluation import router as quality_evaluation_router
+from src.core.config import (
+    log_document_pipeline_config,
+    log_memory_config_warnings,
+    log_run_queue_startup_config,
+    log_wiki_config_warnings,
+    settings,
+)
 from src.deliverables.deliverable import DeliverableRegistry
 from src.deliverables.docx.deliverable_docx import DOCXDeliverable
 from src.deliverables.pdf.deliverable_pdf import PDFDeliverable
@@ -39,7 +48,7 @@ from src.deliverables.xlsx.deliverable_xlsx import XLSXDeliverable
 from src.core.middleware import request_timing_middleware
 from src.core.rate_limit import limiter
 from src.core.request_context import get_correlation_id
-from src.core.db.session import engine, init_db
+from src.core.db.session import engine, init_db, SessionLocal
 from src.llm.startup import shutdown_llm, validate_llm_on_startup
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
@@ -55,6 +64,10 @@ from src.workflows.orchestrator import (
     start_execution_worker,
 )
 from src.extensions.scheduler.scheduled_tasks import start_scheduler_worker
+from src.workflows.workers.conversation_idle_worker import (
+    start_idle_detection_worker,
+    stop_idle_detection_worker,
+)
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -71,6 +84,22 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=True)
 
 
+for _stream in {sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__} - {None}:
+    # Some modules print status lines with emoji; on a console or log file that cannot encode them (Windows cp1252
+    # when output is redirected) print() would raise and fail the request. Escape such characters instead.
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="backslashreplace")
+
+if not logging.getLogger().handlers:
+    # Application logs on the console (uvicorn only configures its own loggers); LOG_LEVEL sets how much.
+    logging.basicConfig(
+        level=getattr(logging, str(settings.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    for _noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3", "s3transfer", "multipart"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 if settings.structured_logging_enabled:
     root = logging.getLogger()
     if root.handlers:
@@ -86,6 +115,7 @@ async def lifespan(_app: FastAPI):
     log_run_queue_startup_config(
         repo_env_present=(_repo_root / ".env").is_file(),
     )
+    log_document_pipeline_config("backend")
     init_otel_if_enabled()
     validate_llm_on_startup()
     init_db()
@@ -100,7 +130,30 @@ async def lifespan(_app: FastAPI):
     reconcile_stalled_approved_runs_on_startup()
     if settings.scheduler_enabled:
         start_scheduler_worker()
+    # NEW: Crash recovery - reconcile orphaned summaries from previous crashes
+    try:
+        import asyncio
+        from src.workflows.conversation_summary_worker import reconcile_orphaned_summaries
+
+        db = SessionLocal()
+        try:
+            logger = logging.getLogger(__name__)
+            result = asyncio.run(reconcile_orphaned_summaries(db))
+            recovered = result.get("orphaned_summaries_recovered", 0)
+            if recovered > 0:
+                logger.info(f"[STARTUP] Crash recovery complete: {recovered} orphaned summaries restored from JSON files")
+        finally:
+            db.close()
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[STARTUP] Crash recovery skipped: {e}")
+    # END NEW
+    # NEW: Start conversation idle detection worker (Phase 2: Idle Detection & Session Management)
+    start_idle_detection_worker()
     yield
+    # NEW: Stop conversation idle detection worker (Phase 2: Idle Detection & Session Management)
+    stop_idle_detection_worker(timeout_sec=5)
+    # END NEW
     drain_execution_worker(timeout_sec=settings.run_drain_timeout_sec)
     await shutdown_mcp_servers()
     shutdown_llm()
@@ -178,6 +231,8 @@ app.include_router(wiki_router)
 app.include_router(failure_tracking_router)
 
 app.include_router(phase5_router)
+
+app.include_router(quality_evaluation_router)
 
 
 @app.get("/health")

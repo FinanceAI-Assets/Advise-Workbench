@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
+
+from src.core.workspace_store import WsPath
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -71,7 +73,7 @@ def _storable(value: Any) -> Any:
     """
     if isinstance(value, _PLAIN):
         return value
-    if isinstance(value, Path):
+    if isinstance(value, (Path, WsPath)):
         return str(value)
     if isinstance(value, dict):
         return {k: kept for k, v in value.items() if isinstance(k, _PLAIN) and (kept := _storable(v)) is not _DROP}

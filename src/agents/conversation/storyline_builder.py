@@ -12,6 +12,8 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+from src.core.workspace_store import as_path
 from src.core.tz import IST
 from typing import Any
 
@@ -473,7 +475,7 @@ def build_storyline_contract(
 def persist_storyline_contract(run_dir: str | Path, contract: dict[str, Any]) -> str | None:
     """Write the contract to ``<run_dir>/storyline.json``. Fail-open; returns path or None."""
     try:
-        p = Path(run_dir)
+        p = as_path(run_dir)
         p.mkdir(parents=True, exist_ok=True)
         out = p / "storyline.json"
         out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -486,7 +488,7 @@ def persist_storyline_contract(run_dir: str | Path, contract: dict[str, Any]) ->
 def load_storyline_contract(run_dir: str | Path) -> dict[str, Any] | None:
     """Load ``<run_dir>/storyline.json`` if present. Fail-open; returns None on any error."""
     try:
-        out = Path(run_dir) / "storyline.json"
+        out = as_path(run_dir) / "storyline.json"
         if not out.exists():
             return None
         data = json.loads(out.read_text(encoding="utf-8"))

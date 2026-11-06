@@ -19,7 +19,8 @@ from src.core.storage import workspace_path
 @dataclass
 class ContextBundle:
     text: str
-    char_budget: int = 32000
+    token_budget: int = 32000  # tokens (replaces char_budget)
+    char_budget: int = 32000  # kept for backward compat, derived from token_budget
     metadata: dict[str, object] | None = None
 
 
@@ -277,7 +278,9 @@ class TieredContextEngine:
         candidates: list[tuple[int, float]],
         chunks: list[str],
         *,
-        max_chars: int,
+        max_chars: int | None = None,
+        budget: int | None = None,
+        measure=None,
         lambda_param: float = 0.7,
         max_items: int = 15,
     ) -> list[int]:
@@ -286,7 +289,17 @@ class TieredContextEngine:
         lambda * relevance - (1-lambda) * diversity
 
         Diversity is approximated with Jaccard similarity over token sets.
+
+        Workstream D: supports token budgets via budget parameter.
         """
+        # Workstream D: support both max_chars (legacy) and token-based budget
+        if measure is None:
+            measure = len  # Default: measure by character length
+
+        # Use budget if provided, otherwise fall back to max_chars
+        actual_budget = budget if budget is not None else max_chars
+        if actual_budget is None:
+            actual_budget = 32000  # fallback default
 
         selected: list[int] = []
         selected_token_sets: list[set[str]] = []
@@ -320,8 +333,9 @@ class TieredContextEngine:
             selected.append(best_idx)
             selected_token_sets.append(set(_tokenize(chunks[best_idx])))
 
-            current_chars = sum(len(chunks[i]) for i in selected)
-            if current_chars >= max_chars:
+            # Workstream D: use measure function for budget tracking (e.g., token counting)
+            current_budget_used = sum(measure(chunks[i]) for i in selected)
+            if current_budget_used >= actual_budget:
                 break
 
         return selected
@@ -597,8 +611,27 @@ class TieredContextEngine:
         run_memory_events: list[dict[str, object]] | None = None,
         project_profile: dict[str, object] | None = None,
         lp_snippets: list[str] | None = None,
-        char_cap: int = 32000,
+        char_cap: int | None = None,
+        plan: object | None = None,  # MemoryBudgetPlan from src.llm.context_budget
     ) -> ContextBundle:
+        # Use plan if provided, otherwise fall back to char_cap
+        if plan is not None:
+            # Extract token budgets from plan and convert to chars for internal use
+            CHARS_PER_TOKEN = 3.5
+            try:
+                token_budget_total = int(getattr(plan, 'memory', 11200) + getattr(plan, 'retrieved', 11200) + getattr(plan, 'history', 5600))
+                char_cap = int(token_budget_total * CHARS_PER_TOKEN)
+                token_plan = plan
+                token_count_exact = False  # will be updated after counting
+            except (AttributeError, TypeError):
+                char_cap = char_cap or 32000
+                token_plan = None
+                token_count_exact = False
+        else:
+            char_cap = char_cap or 32000
+            token_plan = None
+            token_count_exact = False
+
         # Approximation: token ~= 4 chars, used for budgeting signals.
         token_budget = max(500, int(char_cap / 4))
         section_caps = {
@@ -682,7 +715,11 @@ class TieredContextEngine:
                 else self._bm25_scores(wiki_index, instruction or "")
             )
             wiki_candidates = sorted(enumerate(wiki_scores), key=lambda kv: kv[1], reverse=True)[:20]
-            wiki_budget = min(8000, section_caps["Evidence"] // 2)
+            # Workstream D: wiki sub-cap tied to Evidence budget
+            # When plan available: wiki_token_budget = min(2300, plan.retrieved // 2)
+            # Old char-based calculation (kept for reference):
+            # wiki_budget = min(8000, section_caps["Evidence"] // 2)
+            wiki_budget = min(8000, section_caps["Evidence"] // 2)  # TODO: convert to tokens from plan
             if not any(score > 0 for _, score in wiki_candidates):
                 wiki_selected = list(range(min(5, len(wiki_chunks))))
             else:
@@ -801,13 +838,19 @@ class TieredContextEngine:
         }
         metadata = {
             "char_cap": char_cap,
+            "token_budget": token_budget,
             "token_budget_estimate": token_budget,
             "token_count_estimate": int(len(assembled) / 4),
+            "token_plan": token_plan.as_dict() if token_plan and hasattr(token_plan, 'as_dict') else None,
+            "token_count": None,  # will be set after exact count if available
+            "token_count_exact": token_count_exact,
+            "final_trim_applied": False,  # will be set if final trim occurs
             "parsed_chunk_count": len(chunks),
             "selected_evidence_chunk_count": len(evidence_out),
             "source_registry": source_registry,
             "section_sizes": section_sizes,
             "section_budgets": dict(section_caps),
+            "section_budgets_tokens": {k: int(v / 3.5) for k, v in section_caps.items()},  # Convert to tokens
             "section_utilization": section_utilization,
             "evidence_coverage": evidence_coverage,
             "compaction_tiers_applied": compaction_trace,
@@ -836,4 +879,10 @@ class TieredContextEngine:
             },
             "tier4_dropped_sources": tier4_dropped_sources,
         }
-        return ContextBundle(text=assembled, char_budget=char_cap, metadata=metadata)
+        token_budget_plan = getattr(plan, 'memory', 0) + getattr(plan, 'retrieved', 0) + getattr(plan, 'history', 0) if plan else None
+        return ContextBundle(
+            text=assembled,
+            token_budget=token_budget_plan or int(char_cap / 3.5),
+            char_budget=char_cap,
+            metadata=metadata
+        )

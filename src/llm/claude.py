@@ -15,6 +15,7 @@ from src.core.config import settings
 from src.core.run_control import poll_abort
 from src.llm import gateway
 from src.llm.errors import LLMBadRequestError
+from src.llm.providers._common import call_timeout
 
 _NOT_CONFIGURED = "Model provider is not configured: set LLM_PROVIDER in .env (see .env.example and docs/SETUP.md)"
 
@@ -100,8 +101,10 @@ def claude_generate(
     temperature: float | None = None,
     max_tokens: int | None = None,
     cache_system: bool = True,
+    timeout_sec: float | None = None,
 ) -> str:
-    """Low-level Claude call; returns raw text."""
+    """Low-level Claude call; returns raw text. ``timeout_sec`` is a hard limit for this call (an out-of-process
+    provider such as the Claude CLI is stopped at it)."""
     if not is_claude_enabled():
         raise RuntimeError(_NOT_CONFIGURED)
 
@@ -147,9 +150,15 @@ def claude_generate(
         temperature=temperature if temperature is not None else settings.anthropic_temperature,
         messages=[{"role": "user", "content": user}],
         system=_build_cached_system(system) if cache_system else system,
-        timeout=max(1, float(settings.anthropic_timeout_sec)),
+        timeout=max(1, float(timeout_sec or settings.anthropic_timeout_sec)),
     )
-    msg = gateway.create_message(stream=True, on_event=poll_abort, **kwargs)
+    # ``timeout_sec`` also reaches out-of-process providers (the Claude CLI reads it and stops at that limit).
+    limit = call_timeout.set(timeout_sec) if timeout_sec else None
+    try:
+        msg = gateway.create_message(stream=True, on_event=poll_abort, **kwargs)
+    finally:
+        if limit is not None:
+            call_timeout.reset(limit)
     return _extract_text(msg)
 
 

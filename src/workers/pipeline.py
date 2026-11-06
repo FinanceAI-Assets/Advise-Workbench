@@ -5,7 +5,9 @@ A project file that is added or changed runs, as one Celery chain:
   uploading -> parsing -> chunking -> embedding -> extracting_facts -> generating_wiki -> deduplicating
   -> indexing_wiki -> completed
 
-(the four knowledge stages only when KNOWLEDGE_BUILDING_ENABLED). Each stage receives the context dict
+(the four knowledge stages only for the library when KNOWLEDGE_BUILDING_ENABLED). Library uploads add intake and
+library_validation around the search stages; an engagement upload runs uploading -> parsing -> chunking -> embedding
+and is searchable in its engagement only (its passages are never shared with the library or another engagement). Each stage receives the context dict
 returned by the previous one and records its progress on ``DocumentJob.status``. A failing stage is
 retried (``retrying``); when it gives up the job becomes ``failed`` with ``failed_stage`` and
 ``error_message``, a ``task_failures`` row and an in-app notification. Re-uploading identical content
@@ -42,14 +44,15 @@ from src.core.db.session import session_scope
 from src.core.notifications.notification_service import notify_in_app
 from src.core.observability.otel_tracing import start_span
 from src.core.tz import ist_now
+from src.memory.knowledge.library_release import LIBRARY_SCOPE  # noqa: F401 — re-exported for the ingestion modules
 from src.workers.celery_app import app
 
 logger = logging.getLogger(__name__)
 
-LIBRARY_SCOPE = "library"  # scope id of Leading Practice Library sources (stored in the project_id columns)
-
 SEARCH_STAGES = ["intake", "uploading", "parsing", "chunking", "embedding", "library_validation"]
 KNOWLEDGE_STAGES = ["extracting_facts", "generating_wiki", "deduplicating", "indexing_wiki"]
+# Engagement uploads: searchable passages only (no library review, no wiki building).
+ENGAGEMENT_STAGES = ["uploading", "parsing", "chunking", "embedding"]
 TERMINAL_STATUSES = {"completed", "failed", "deleted"}
 
 
@@ -91,6 +94,9 @@ class IngestionTask(Task):
 
     def on_retry(self, exc, task_id, args, kwargs, einfo):
         ctx = args[0] if args else {}
+        logger.warning("[PIPELINE] job=%s project=%s file=%s stage %s failed, retrying (%d/%d): %s", ctx.get("job_id"),
+                       ctx.get("project_id"), ctx.get("filename"), self.stage, self.request.retries + 1,
+                       self.max_retries, exc)
         try:
             with session_scope() as db:
                 update_job(db, ctx["job_id"], status="retrying", error_message=f"{self.stage}: {exc}"[:1000])
@@ -100,7 +106,8 @@ class IngestionTask(Task):
     def on_failure(self, exc, task_id, args, kwargs, einfo):
         ctx = args[0] if args else {}
         job_id = ctx.get("job_id")
-        logger.error("[PIPELINE] %s failed for job %s: %s", self.stage, job_id, exc)
+        logger.error("[PIPELINE] job=%s project=%s file=%s FAILED at stage %s: %s", job_id, ctx.get("project_id"),
+                     ctx.get("filename"), self.stage, exc)
         try:
             with session_scope() as db:
                 db.add(
@@ -147,7 +154,8 @@ def complete_job(db: Session, ctx: dict[str, Any], summary: str) -> None:
         message=summary,
         document_file_id=ctx.get("document_file_id"),
     )
-    logger.info("[PIPELINE] job %s completed: %s", ctx["job_id"], summary)
+    logger.info("[PIPELINE] job=%s project=%s file=%s COMPLETED, searchable now: %s", ctx["job_id"], ctx["project_id"],
+                ctx["filename"], summary)
 
 
 # ------------------------------------------------------------------------------------- versions
@@ -196,7 +204,42 @@ def purge_document_file(db: Session, doc: DocumentFile, *, delete_object: bool =
         db.query(WikiPageDraft).filter(WikiPageDraft.parsed_document_id.in_(parsed_ids)).delete(synchronize_session=False)
     remove_wiki_contributions(db, doc.project_id, doc.id)
     db.commit()
-    logger.info("[PIPELINE] purged derived data of %s (%s)", doc.id, doc.filename)
+    logger.info("[PIPELINE] project=%s file=%s version %s removed: SeaweedFS object%s, %d passages + vectors "
+                "(Postgres, Qdrant)", doc.project_id, doc.filename, doc.id,
+                "" if delete_object and doc.seaweedfs_file_id else " kept", len(orphaned) + len(legacy))
+
+
+def replace_older_versions(db: Session, doc: DocumentFile) -> bool:
+    """An engagement file finished processing: one version of a file name stays searchable.
+
+    Versions queued before this one are removed. If a version queued after it has already completed (this job was the
+    slower one), this version is removed instead. Search keeps the old version until the new one is ready. Returns
+    whether ``doc`` itself stays."""
+    versions = other_versions(db, doc.project_id, doc.filename, None)
+    jobs = {j.job_id: j for j in db.query(DocumentJob).filter(DocumentJob.job_id.in_([v.job_id for v in versions]))}
+    mine = jobs.get(doc.job_id)
+    if mine is None:
+        return True
+
+    def queued(v: DocumentFile):
+        job = jobs.get(v.job_id)
+        return job.created_at if job else None
+
+    newer_done = any(
+        v.id != doc.id and queued(v) and queued(v) > mine.created_at and jobs[v.job_id].status == "completed"
+        for v in versions
+    )
+    drop = [doc] if newer_done else [v for v in versions if v.id != doc.id and (queued(v) is None or queued(v) <= mine.created_at)]
+    for version in drop:
+        purge_document_file(db, version)
+        job = jobs.get(version.job_id)
+        if job is not None and job.status != "failed":
+            job.status = "deleted"
+            job.updated_at = ist_now()
+    db.commit()
+    if drop:
+        logger.info("[PIPELINE] %s/%s: replaced %d older version(s)", doc.project_id, doc.filename, len(drop))
+    return not newer_done
 
 
 def remove_wiki_contributions(db: Session, project_id: str, document_file_id: str) -> None:
@@ -254,14 +297,11 @@ def start_pipeline(ctx: dict[str, Any]) -> str:
     from src.workers.document_parsing_tasks import chunk_parsed_content, parse_document_with_docling
     from src.workers.library_tasks import library_intake, library_validation
 
-    steps = [
-        library_intake.s(ctx),
-        upload_to_seaweedfs.s(),
-        parse_document_with_docling.s(),
-        chunk_parsed_content.s(),
-        embed_chunks.s(),
-        library_validation.s(),
-    ]
+    search = [upload_to_seaweedfs.s(), parse_document_with_docling.s(), chunk_parsed_content.s(), embed_chunks.s()]
+    if ctx.get("library") is None:  # an engagement upload: searchable once embedded
+        search[0] = upload_to_seaweedfs.s(ctx)
+        return chain(*search).apply_async(retry=False).id
+    steps = [library_intake.s(ctx), *search, library_validation.s()]
     if ctx.get("knowledge"):
         steps += [
             extract_facts_from_chunks.s(),
@@ -363,7 +403,7 @@ def queue_document(
         "filename": filename,
         "s3_key": key,
         "sha256": sha256,
-        "knowledge": bool(settings.knowledge_building_enabled),
+        "knowledge": library is not None and bool(settings.knowledge_building_enabled),
         "library": library,
     }
     try:
@@ -375,7 +415,9 @@ def queue_document(
             except Exception:
                 logger.warning("[PIPELINE] Could not remove s3 object %s of unqueued job %s", key, job.job_id)
     else:
-        logger.info("[PIPELINE] Queued job %s for %s", job.job_id, filename)
+        logger.info("[PIPELINE] job=%s project=%s file=%s stored in SeaweedFS (%s) and queued for the worker: %s",
+                    job.job_id, project_id, filename, key,
+                    " -> ".join(SEARCH_STAGES if library is not None else ENGAGEMENT_STAGES))
     return job
 
 

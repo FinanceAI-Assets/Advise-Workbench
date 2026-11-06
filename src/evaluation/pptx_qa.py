@@ -7,6 +7,7 @@ status and remediation hints.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -16,6 +17,11 @@ from typing import Any
 from pptx import Presentation
 
 logger = logging.getLogger(__name__)
+
+
+def _open_pptx(pptx_path: Path) -> Presentation:
+    """Read through the path object, so this works for local files and stored files."""
+    return Presentation(io.BytesIO(pptx_path.read_bytes()))
 
 # Patterns that indicate unfulfilled placeholders or low-quality content.
 # Bare "[" / "]" are deliberately NOT listed: real decks carry footnote markers
@@ -70,7 +76,7 @@ def check_pptx_geometry(pptx_path: Path) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     try:
         from pptx.util import Emu
-        prs = Presentation(str(pptx_path))
+        prs = _open_pptx(pptx_path)
         emu_per_in = 914400.0
 
         for si, slide in enumerate(prs.slides):
@@ -132,7 +138,7 @@ def _extract_pptx_text(pptx_path: Path) -> dict[int, list[str]]:
     """
     text_by_slide: dict[int, list[str]] = {}
     try:
-        prs = Presentation(str(pptx_path))
+        prs = _open_pptx(pptx_path)
         for slide_idx, slide in enumerate(prs.slides):
             text_blocks = []
             for shape in slide.shapes:
@@ -282,7 +288,7 @@ def validate_pptx_against_slides(
     text_by_slide = _extract_pptx_text(pptx_path)
     prs = None
     try:
-        prs = Presentation(str(pptx_path))
+        prs = _open_pptx(pptx_path)
         slide_count = len(prs.slides)
     except Exception:
         slide_count = 0
