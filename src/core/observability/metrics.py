@@ -75,9 +75,17 @@ _PROMETHEUS_COUNTER_HELP: dict[str, str] = {
     "conversation_digest_tiered_compaction_total": "Runs where tiered conversation digest compaction was applied.",
     "planner_excerpt_chars_total": "Sum of character lengths of planner retrieval excerpts attached to coordinator planning.",
     "narrative_thinking_used_total": "Narrative subagent calls that used extended thinking (when flag enabled).",
-    # Per-agent variants also exist: subagent_context_offered_chars_<agent>_total /
-    # subagent_context_consumed_chars_<agent>_total (agent = pptx, docx, xlsx, pdf, narrative).
+    # Old metrics (kept for reference):
+    # "subagent_context_offered_chars_<agent>_total": "Character count of context offered to subagents.",
+    # "subagent_context_consumed_chars_<agent>_total": "Character count of context consumed by subagents.",
     "subagent_context_truncated_total": "Subagent prompt-context assemblies where offered context exceeded the consumed excerpt cap.",
+    # Workstream E: token-based context metrics (complement char-based metrics)
+    # Per-agent variants: subagent_context_offered_tokens_<agent>_total / subagent_context_consumed_tokens_<agent>_total
+    "subagent_context_offered_tokens_total": "Sum of token counts of context offered to subagents.",
+    "subagent_context_consumed_tokens_total": "Sum of token counts of context consumed by subagents.",
+    "token_count_exact_total": "Token counts obtained via exact Anthropic API.",
+    "token_count_fallback_total": "Token counts that fell back to estimation (API unavailable or error).",
+    "token_count_offline_backoff_started_total": "Instances when offline backoff (5-min wait) started after API failure.",
     # AGENT METRICS
     "agent_coordinator_call_count_total": "Coordinator agent call invocations.",
     "agent_coordinator_retry_total": "Coordinator agent retry calls.",

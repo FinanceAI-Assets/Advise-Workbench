@@ -893,7 +893,7 @@ def _deliverable_type_for_skill(skill_id: str) -> str:
     return "generic"
 
 
-def _grounded_context_excerpt(ctx: AgentContext, char_cap: int) -> str:
+def _grounded_context_excerpt(ctx: AgentContext, char_cap: int | None = None, token_cap: int | None = None) -> str:
     """Context excerpt that keeps query-ranked retrieval chunks in the prompt.
 
     assembled_context is tier-ordered (CONTEXT.md → LP snippets → ranked doc
@@ -901,8 +901,16 @@ def _grounded_context_excerpt(ctx: AgentContext, char_cap: int) -> str:
     chunks. Split the cap between the head of assembled_context (curated
     context plus any prepended QA remediation) and the relevance-ordered
     retrieval excerpt, which is safe to head-slice.
+
+    Workstream C: supports both char_cap (legacy) and token_cap (new).
     """
-    cap = max(0, int(char_cap))
+    # Workstream C: convert token_cap to char_cap if provided
+    CHARS_PER_TOKEN = 3.5
+    if token_cap is not None:
+        char_cap = int(token_cap * CHARS_PER_TOKEN)
+    # Old code (kept for reference):
+    # cap = max(0, int(char_cap))
+    cap = max(0, int(char_cap or 32000))
     ac = (ctx.assembled_context or "").strip()
     ranked = str(ctx.retrieval_excerpt or "").strip()
     if ranked.startswith("## Planner retrieval excerpt"):

@@ -24,22 +24,42 @@ class TokenBudgetExceeded(Exception):
 class TokenBudgetChecker:
     """Pre-call budget verification and intelligent prompt compression."""
 
-    # Token estimation: empirically ~3.5 characters per token
+    # Fallback defaults (used when settings unavailable)
     CHARS_PER_TOKEN = 3.5
-
-    # Safety margin to account for estimation errors
     SAFETY_MARGIN_TOKENS = 100
+
+    @staticmethod
+    def _get_chars_per_token() -> float:
+        """Get chars-per-token ratio from settings or fallback."""
+        try:
+            from src.core.config import settings
+            return settings.token_estimate_ratio or TokenBudgetChecker.CHARS_PER_TOKEN
+        except Exception:
+            return TokenBudgetChecker.CHARS_PER_TOKEN
+
+    @staticmethod
+    def _get_safety_margin() -> int:
+        """Get safety margin tokens from settings or fallback."""
+        try:
+            from src.core.config import settings
+            return settings.token_budget_safety_margin_tokens or TokenBudgetChecker.SAFETY_MARGIN_TOKENS
+        except Exception:
+            return TokenBudgetChecker.SAFETY_MARGIN_TOKENS
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
         """
         Estimate tokens from character count.
 
-        Uses empirical ratio of ~3.5 chars/token (more accurate than /4).
+        Uses ratio from settings (token_estimate_ratio) or empirical ~3.5 chars/token.
         """
         if not text:
             return 0
-        return max(1, int(len(text) / TokenBudgetChecker.CHARS_PER_TOKEN))
+        # Workstream B1: read from settings instead of hardcoded constant
+        ratio = TokenBudgetChecker._get_chars_per_token()
+        return max(1, int(len(text) / ratio))
+        # Old hardcoded version (kept for reference):
+        # return max(1, int(len(text) / TokenBudgetChecker.CHARS_PER_TOKEN))
 
     @staticmethod
     def estimate_prompt_tokens(system: str, user: str) -> int:
@@ -78,6 +98,7 @@ class TokenBudgetChecker:
         user: str,
         needed_output_tokens: int = 4096,
         throw_on_exceed: bool = False,
+        max_prompt_tokens: int | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """
         Check if an API call would fit within remaining budget.
@@ -101,9 +122,18 @@ class TokenBudgetChecker:
         remaining = TokenBudgetChecker.get_remaining_budget()
         prompt_tokens = TokenBudgetChecker.estimate_prompt_tokens(system, user)
         output_tokens = int(needed_output_tokens or 4096)
-        total_needed = prompt_tokens + output_tokens + TokenBudgetChecker.SAFETY_MARGIN_TOKENS
+        # Workstream B1: read safety margin from settings
+        safety_margin = TokenBudgetChecker._get_safety_margin()
+        total_needed = prompt_tokens + output_tokens + safety_margin
 
-        compression_needed = max(0, total_needed - remaining)
+        # Workstream B2: enforce per-call prompt limit if specified
+        per_call_exceeded = False
+        if max_prompt_tokens and prompt_tokens > max_prompt_tokens:
+            per_call_exceeded = True
+            compression_needed = prompt_tokens - max_prompt_tokens
+        else:
+            compression_needed = max(0, total_needed - remaining)
+
         fits = compression_needed == 0
 
         info = {
@@ -111,9 +141,11 @@ class TokenBudgetChecker:
             "output_tokens": output_tokens,
             "total_tokens_needed": total_needed,
             "remaining_budget": remaining,
-            "safety_margin": TokenBudgetChecker.SAFETY_MARGIN_TOKENS,
+            "safety_margin": safety_margin,
             "compression_needed_tokens": compression_needed,
             "fits_in_budget": fits,
+            "per_call_limit_tokens": max_prompt_tokens,
+            "per_call_exceeded": per_call_exceeded,
         }
 
         if throw_on_exceed and not fits and remaining < 1000:

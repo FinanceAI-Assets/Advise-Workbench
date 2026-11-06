@@ -1,0 +1,58 @@
+BASELINE TEST RESULTS (Step 0)
+==============================
+Run Date: 2026-11-06
+Branch: dev-master
+Command: pytest tests/unit --continue-on-collection-errors -rf
+
+SUMMARY
+-------
+98 failed, 1900 passed, 16 skipped, 20 warnings, 1 error
+Time: 198.61s (3m18s)
+
+COLLECTION ERROR
+----------------
+test_conversation_summary_worker.py:
+  ImportError: cannot import name '_generate_summary_text'
+  (Known: only a comment at conversation_summary_worker.py:409)
+
+KNOWN ENVIRONMENTAL FAILURES
+-----------------------------
+1. test_run_graph.py — Redis connection refused at 127.0.0.1:1
+2. test_conversation_summary_worker.py — import error (above)
+
+FAILED TESTS (98)
+-----------------
+test_bash_executor.py::test_execute_echo
+test_branding_service_design_ingest.py::test_ingests_project_tokens_json_when_project_brand_missing
+test_conversation_digest.py::test_build_conversation_digest_orders_oldest_first
+test_conversation_router.py::test_wiki_prefills_client_slot_from_wiki
+test_coordinator_planning.py::test_plan_with_reasoning_invalid_json_fallback
+test_coordinator_planning.py::test_plan_with_reasoning_success_reorder
+test_coordinator_planning.py::test_plan_with_reasoning_user_payload_includes_digest_and_grounding
+test_guardrails.py::test_local_mode_fails_when_references_missing
+test_guardrails.py::test_local_mode_passes_and_respects_gate7
+test_investigator_agent.py (12 tests in 4 classes)
+test_observability_openobserve.py::test_each_run_phase_gets_a_span
+test_observability_openobserve.py::test_model_call_span_carries_model_and_token_counts
+test_output_formats_routing.py (2 tests)
+test_output_payload_contracts.py::test_pptx_slides_contract_renders_table_and_chart
+test_phase1_pptx_fixes.py (2 tests)
+test_plan_storyline_and_grounding.py::test_generate_document_outline_preview_uses_claude_and_project_context
+test_pptx_agent_field_variants.py::test_quadrants_and_bullets_render_with_their_text
+test_pptx_brand_rendering.py (26 tests)
+test_pptx_download.py::test_pptx_download_streams_on_disk_output
+test_proposal_pptx_pipeline.py (4 tests)
+test_remaining_hardening.py::test_patch_slide_element_endpoint_renders_the_deck_again
+test_run_graph.py (6 tests)
+test_storyline_contract.py (2 tests)
+test_subagents.py::test_narrative_thinking_emits_event_when_enabled
+test_swarm.py::test_lead_plan_llm_merges_extra_tasks
+test_targeted_rewrite.py (3 tests)
+test_text_editor_executor.py (2 tests)
+test_visual_critic_signals.py (4 tests)
+test_workbench_api.py::test_asking_selected_sources_is_honest_when_they_cannot_answer
+
+ACCEPTANCE CRITERIA
+-------------------
+✅ Baseline recorded
+→ All workstreams must not introduce NEW failures beyond these 98 + 1 error
