@@ -111,12 +111,6 @@ a:hover {
   font-size: 11px;
 }
 
-.admin-console-shell th {
-  font-size: 9px;
-  letter-spacing: 0.01em;
-  text-transform: none;
-}
-
 .admin-console-shell td,
 .admin-console-shell th {
   padding-top: 10px;

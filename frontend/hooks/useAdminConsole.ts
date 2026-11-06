@@ -62,11 +62,16 @@ export const useAdminEngagementsQuery = (q: string, selected: string) =>
     `/api/admin/engagements?q=${encodeURIComponent(q)}&selected=${encodeURIComponent(selected)}`
   );
 
-/** The library pipeline for one practice; with no practice, the latest upload (or the sample walkthrough). */
-export const useAdminLibraryQuery = (practice = "") =>
-  useAdminQuery<AdminLibrary>(["library", practice], `/api/admin/library?practice=${encodeURIComponent(practice)}`, {
-    keepPrevious: true,
-  });
+/**
+ * The library pipeline for one practice; with no practice, the latest upload (or the sample walkthrough).
+ * `source` names one of the practice's sources; the API ignores it until it keeps several sources per practice.
+ */
+export const useAdminLibraryQuery = (practice = "", source = "") =>
+  useAdminQuery<AdminLibrary>(
+    ["library", practice, source],
+    `/api/admin/library?practice=${encodeURIComponent(practice)}${source ? `&source=${encodeURIComponent(source)}` : ""}`,
+    { keepPrevious: true },
+  );
 
 /** One uploaded file as queued on the ingestion pipeline; poll `job_id` for its progress. */
 export type QueuedIngestion = {
@@ -86,6 +91,8 @@ export type QueuedIngestion = {
 export type LibraryUploadJob = {
   id: string;
   practiceId: string;
+  /** The source the file was added to, once the API keeps several sources per practice. */
+  sourceId?: string;
   stage: string;
   outcome: string;
   readable: boolean | null;
@@ -103,6 +110,32 @@ export function useLibraryUpload() {
         body: form,
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["admin"] }),
+  });
+}
+
+/** The details a practice is created with (POST /api/admin/library/practices). */
+export type NewPractice = {
+  title: string;
+  description: string;
+  category: string;
+  maturity: string;
+  version: string;
+  owner: string;
+  classification: string;
+  rights: string;
+};
+
+/** Create a practice with no sources; it stays a draft until a source is uploaded, reviewed and published. */
+export function useCreatePractice() {
+  const { api } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (practice: NewPractice) =>
+      fetchJson<{ id: string; status: string }>(api, "/api/admin/library/practices", "The practice could not be created", {
+        method: "POST",
+        body: JSON.stringify(practice),
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["admin", "library"] }),
   });
 }
 

@@ -178,3 +178,169 @@ def test_go_commits_the_run_before_it_is_queued(monkeypatch: pytest.MonkeyPatch)
     assert went.status_code == 200, went.text
     assert went.json().get("auto_executed") is True
     assert seen == [False]
+
+
+def test_only_a_run_in_progress_blocks_a_new_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A finished run must not stop another conversation in the engagement from generating."""
+    from unittest.mock import patch
+
+    from src.app.api.projects import conversation
+    from src.core.db.models import Run
+    from src.core.db.session import SessionLocal
+    from tests.unit.plan_helpers import DEFAULT_PLAN_USER_MESSAGE, _stub_route_turn
+
+    monkeypatch.setattr(conversation, "enqueue_run_execution", lambda pid, run_id: True)
+    client, headers, pid = _client_and_project()
+
+    def generate_in_new_conversation(title: str) -> dict:
+        started = client.post(f"/api/engagements/{pid}/conversations", json={"title": title}, headers=headers)
+        assert started.status_code == 201, started.text
+        url = f"/api/projects/{pid}/conversation/messages"
+        assert client.post(url, json={"content": DEFAULT_PLAN_USER_MESSAGE}, headers=headers).json().get("plan_hash")
+        went = client.post(url, json={"content": "go ahead"}, headers=headers)
+        assert went.status_code == 200, went.text
+        return went.json()
+
+    with (
+        patch("src.app.api.projects.conversation.route_turn", side_effect=_stub_route_turn),
+        patch("src.workflows.task_router.output_format_detection.resolve_output_formats", return_value=([], {}, "")),
+    ):
+        first = generate_in_new_conversation("First thread")
+        assert first["auto_executed"] is True
+
+        blocked = generate_in_new_conversation("While the first is in progress")
+        assert blocked["auto_executed"] is False
+        assert blocked["run_id"] == first["run_id"]
+
+        session = SessionLocal()
+        try:
+            session.get(Run, first["run_id"]).status = "review_ready"
+            session.commit()
+        finally:
+            session.close()
+
+        second = generate_in_new_conversation("After the first finished")
+
+    assert second["auto_executed"] is True
+    assert second["run_id"] != first["run_id"]
+
+
+@pytest.mark.parametrize(("last_status", "starts_a_new_run"), [("failed", True), ("running", False)])
+def test_go_again_retries_a_failed_run_but_not_one_in_progress(
+    monkeypatch: pytest.MonkeyPatch, last_status: str, starts_a_new_run: bool
+) -> None:
+    from unittest.mock import patch
+
+    from sqlalchemy import select
+
+    from src.app.api.projects import conversation
+    from src.core.db.models import Run
+    from src.core.db.session import SessionLocal
+    from tests.unit.plan_helpers import DEFAULT_PLAN_USER_MESSAGE, _stub_route_turn
+
+    monkeypatch.setattr(conversation, "enqueue_run_execution", lambda pid, run_id: True)
+    client, headers, pid = _client_and_project()
+    url = f"/api/projects/{pid}/conversation/messages"
+
+    with (
+        patch("src.app.api.projects.conversation.route_turn", side_effect=_stub_route_turn),
+        patch("src.workflows.task_router.output_format_detection.resolve_output_formats", return_value=([], {}, "")),
+    ):
+        assert client.post(url, json={"content": DEFAULT_PLAN_USER_MESSAGE}, headers=headers).json().get("plan_hash")
+        first = client.post(url, json={"content": "go ahead"}, headers=headers).json()
+        assert first["auto_executed"] is True
+
+        session = SessionLocal()
+        try:
+            session.get(Run, first["run_id"]).status = last_status
+            session.commit()
+        finally:
+            session.close()
+
+        again = client.post(url, json={"content": "go ahead"}, headers=headers)
+        assert again.status_code == 200, again.text
+
+    session = SessionLocal()
+    try:
+        runs = session.scalars(select(Run.id).where(Run.project_id == pid)).all()
+    finally:
+        session.close()
+    assert len(runs) == (2 if starts_a_new_run else 1)
+    assert again.json()["auto_executed"] is starts_a_new_run
+
+
+@pytest.mark.parametrize("reply", ["yes", "go ahead"])
+def test_go_after_a_finished_run_asks_before_generating_again(monkeypatch: pytest.MonkeyPatch, reply: str) -> None:
+    from unittest.mock import patch
+
+    from sqlalchemy import select
+
+    from src.app.api.projects import conversation
+    from src.core.db.models import Run
+    from src.core.db.session import SessionLocal
+    from tests.unit.plan_helpers import DEFAULT_PLAN_USER_MESSAGE, _stub_route_turn
+
+    monkeypatch.setattr(conversation, "enqueue_run_execution", lambda pid, run_id: True)
+    client, headers, pid = _client_and_project()
+    url = f"/api/projects/{pid}/conversation/messages"
+
+    def run_ids() -> list[str]:
+        session = SessionLocal()
+        try:
+            return list(session.scalars(select(Run.id).where(Run.project_id == pid)).all())
+        finally:
+            session.close()
+
+    with (
+        patch("src.app.api.projects.conversation.route_turn", side_effect=_stub_route_turn),
+        patch("src.workflows.task_router.output_format_detection.resolve_output_formats", return_value=([], {}, "")),
+    ):
+        assert client.post(url, json={"content": DEFAULT_PLAN_USER_MESSAGE}, headers=headers).json().get("plan_hash")
+        first = client.post(url, json={"content": "go ahead"}, headers=headers).json()
+
+        session = SessionLocal()
+        try:
+            session.get(Run, first["run_id"]).status = "review_ready"
+            session.commit()
+        finally:
+            session.close()
+
+        asked = client.post(url, json={"content": "go"}, headers=headers).json()
+        assert asked["auto_executed"] is False
+        assert asked["messages"][-1]["metadata"]["kind"] == "regeneration_confirmation"
+        assert run_ids() == [first["run_id"]]
+
+        confirmed = client.post(url, json={"content": reply}, headers=headers).json()
+
+    assert confirmed["auto_executed"] is True
+    assert confirmed["run_id"] != first["run_id"]
+    assert len(run_ids()) == 2
+
+
+def test_a_plain_yes_starts_nothing_unless_sheldon_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import patch
+
+    from sqlalchemy import select
+
+    from src.app.api.projects import conversation
+    from src.core.db.models import Run
+    from src.core.db.session import SessionLocal
+    from tests.unit.plan_helpers import DEFAULT_PLAN_USER_MESSAGE, _stub_route_turn
+
+    monkeypatch.setattr(conversation, "enqueue_run_execution", lambda pid, run_id: True)
+    client, headers, pid = _client_and_project()
+    url = f"/api/projects/{pid}/conversation/messages"
+
+    with (
+        patch("src.app.api.projects.conversation.route_turn", side_effect=_stub_route_turn),
+        patch("src.workflows.task_router.output_format_detection.resolve_output_formats", return_value=([], {}, "")),
+    ):
+        assert client.post(url, json={"content": DEFAULT_PLAN_USER_MESSAGE}, headers=headers).json().get("plan_hash")
+        answer = client.post(url, json={"content": "yes"}, headers=headers)
+    assert answer.status_code == 200, answer.text
+
+    session = SessionLocal()
+    try:
+        assert session.scalars(select(Run.id).where(Run.project_id == pid)).all() == []
+    finally:
+        session.close()

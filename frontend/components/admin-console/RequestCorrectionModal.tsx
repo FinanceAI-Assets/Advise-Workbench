@@ -26,11 +26,14 @@ function formatDate(value: string) {
 /** Sends a publication-blocking correction to the practice owner. The candidate stays unpublished. */
 export function RequestCorrectionModal({
   practiceId,
+  sourceId,
   draft,
   onClose,
   onSent,
 }: {
   practiceId: string;
+  /** The source whose latest version needs the correction. */
+  sourceId?: string;
   draft: LibraryCorrectionDraft;
   onClose: () => void;
   onSent: (correctionId: string) => void;
@@ -63,6 +66,7 @@ export function RequestCorrectionModal({
         severity: draft.severity,
         assignee: assignee.trim(),
         due: formatDate(due),
+        ...(sourceId ? { sourceId } : {}),
       },
     })) as { correctionId?: string };
     const id = result.correctionId ?? "Correction";

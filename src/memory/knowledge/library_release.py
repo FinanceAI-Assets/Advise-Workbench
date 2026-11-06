@@ -1,7 +1,7 @@
-"""Which ingested Library content users may retrieve: the released version of each Approved practice.
+"""Which ingested Library content users may retrieve: the released version of each source of each Approved practice.
 
 The ingestion pipeline indexes every uploaded version (so reviewers can inspect candidates); user-facing search
-(Leading Practice search/Ask, /api/query) only serves the version that was published.
+(Leading Practice search/Ask, /api/query) only serves the versions that were published.
 """
 
 from __future__ import annotations
@@ -25,18 +25,21 @@ def _number(value: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def released_jobs(db: Session) -> dict[str, dict[str, Any]]:
-    """practice id -> latest released library job payload (with ``id``), for Approved practices only."""
+def released_jobs(db: Session) -> dict[tuple[str, str], dict[str, Any]]:
+    """(practice id, source id) -> latest released library job payload (with ``id``), for Approved practices only.
+
+    Jobs from before practices had several sources have no ``sourceId`` and belong to the first source."""
     approved = set(db.scalars(select(LpPractice.id).where(LpPractice.status == "Approved")).all())
-    latest: dict[str, dict[str, Any]] = {}
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
     for row in db.scalars(select(WorkbenchRecord).where(WorkbenchRecord.collection == JOBS)).all():
         payload = json.loads(row.payload_json or "{}")
         practice_id = payload.get("practiceId")
         if not practice_id or practice_id not in approved or not payload.get("release"):
             continue
-        current = latest.get(practice_id)
+        key = (practice_id, payload.get("sourceId") or "SRC-1")
+        current = latest.get(key)
         if current is None or _number(row.record_id) > _number(current["id"]):
-            latest[practice_id] = {"id": row.record_id, **payload}
+            latest[key] = {"id": row.record_id, **payload}
     return latest
 
 
@@ -55,7 +58,7 @@ def published_passages(db: Session) -> list[dict[str, Any]]:
     releases from before the pipeline have no ``job_id`` and are embedded locally by the caller.
     """
     passages: list[dict[str, Any]] = []
-    for practice_id, job in released_jobs(db).items():
+    for (practice_id, _source), job in released_jobs(db).items():
         row = db.scalar(
             select(WorkbenchRecord).where(WorkbenchRecord.collection == CHUNKS, WorkbenchRecord.record_id == job["id"])
         )

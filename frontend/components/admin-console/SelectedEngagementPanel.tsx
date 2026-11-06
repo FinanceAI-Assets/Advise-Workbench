@@ -1,7 +1,18 @@
+"use client";
+
 import type { ReactNode } from "react";
 
 import { Card } from "@/components/ui/Card";
+import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import type { SelectedEngagementDetail } from "@/types/api";
+
+type Member = SelectedEngagementDetail["members"][number];
+
+const MEMBER_COLUMNS: DataTableColumn<Member>[] = [
+  { key: "name", header: "Member", sortValue: (m) => m.name, cell: (m) => <span className="font-semibold text-[var(--text-default)]">{m.name}</span> },
+  { key: "role", header: "Role", sortValue: (m) => m.role, cell: (m) => <span className="text-[var(--text-muted)]">{m.role}</span> },
+  { key: "permission", header: "Permission", sortValue: (m) => m.permission, cell: (m) => <span className="text-[var(--text-muted)]">{m.permission}</span> },
+];
 
 function MetaField({ label, value }: { label: string; value: string }) {
   return (
@@ -27,24 +38,17 @@ export function SelectedEngagementPanel({ engagement, actions }: { engagement: S
         <MetaField label="Scheduled disposition" value={engagement.scheduledDisposition} />
       </div>
 
-      <table className="w-full text-left text-sm">
-        <thead>
-          <tr className="border-y border-[var(--surface-border)] bg-[var(--surface-muted)] text-xs text-[var(--text-muted)]">
-            <th className="px-3 py-2 font-medium">Member</th>
-            <th className="px-3 py-2 font-medium">Role</th>
-            <th className="px-3 py-2 font-medium">Permission</th>
-          </tr>
-        </thead>
-        <tbody>
-          {engagement.members.map((member) => (
-            <tr key={member.id} className="border-b border-[var(--surface-border)] last:border-b-0">
-              <td className="px-3 py-2 font-medium text-[var(--text-default)]">{member.name}</td>
-              <td className="px-3 py-2 text-[var(--text-muted)]">{member.role}</td>
-              <td className="px-3 py-2 text-[var(--text-muted)]">{member.permission}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-hidden rounded-md border border-[var(--surface-border)]">
+        <DataTable
+          bare
+          paginate={false}
+          label="Engagement members"
+          columns={MEMBER_COLUMNS}
+          rows={engagement.members}
+          rowKey={(member) => member.id}
+          empty={<p className="text-center text-sm text-[var(--text-muted)]">No members yet.</p>}
+        />
+      </div>
 
       {actions}
     </Card>

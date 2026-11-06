@@ -6,8 +6,8 @@ export { ControlsAuditPanel } from "@/components/admin-console/ControlsAuditPane
 export { AdminEngagementsTable } from "@/components/admin-console/AdminEngagementsTable";
 export { SelectedEngagementPanel } from "@/components/admin-console/SelectedEngagementPanel";
 export { DeliverableLifecyclePanel } from "@/components/admin-console/DeliverableLifecyclePanel";
-export { PracticeInventoryPanel } from "@/components/admin-console/PracticeInventoryPanel";
-export { PipelineStepper } from "@/components/admin-console/PipelineStepper";
+export { INITIAL_PRACTICE_LIST, PracticeInventoryPanel, type PracticeListState } from "@/components/admin-console/PracticeInventoryPanel";
+export { PipelineStepper, StepperFooter } from "@/components/admin-console/PipelineStepper";
 export { LibraryBadge, LibraryWarning } from "@/components/admin-console/LibraryStatus";
 export { IngestionJobPanel } from "@/components/admin-console/IngestionJobPanel";
 export { QualityReviewPanel } from "@/components/admin-console/QualityReviewPanel";
@@ -16,10 +16,13 @@ export { SelectedReviewPanel } from "@/components/admin-console/SelectedReviewPa
 export { PolicyControlsPanel } from "@/components/admin-console/PolicyControlsPanel";
 export { RoleAccessTable } from "@/components/admin-console/RoleAccessTable";
 export { AuditTrailPanel } from "@/components/admin-console/AuditTrailPanel";
-export { UploadSourcesModal } from "@/components/admin-console/UploadSourcesModal";
+export { SourceUploadForm, type UploadTarget } from "@/components/admin-console/SourceUploadForm";
+export { PracticeDetailsCard, PracticeDetailsForm, PracticeSourcesPanel } from "@/components/admin-console/PracticeOverview";
 export {
   DeletePracticeButton,
   LibraryUploadsPanel,
+  SourceFilePanel,
+  stageLabel,
   StoredDataPanel,
   UploadProgressPanel,
 } from "@/components/admin-console/LibraryIngestion";
@@ -30,4 +33,4 @@ export {
   QualityGatesTab,
 } from "@/components/admin-console/LibraryPipelineTabs";
 export { RequestCorrectionModal } from "@/components/admin-console/RequestCorrectionModal";
-export { LibraryApprovalControls, PublishControl } from "@/components/admin-console/LibraryApprovalControls";
+export { PublishControl } from "@/components/admin-console/LibraryApprovalControls";

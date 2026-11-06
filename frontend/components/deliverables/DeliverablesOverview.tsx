@@ -26,7 +26,7 @@ export function formatRunTime(iso: string | null): string {
   return date.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-/** Engagement page, Deliverables tab: the latest run's artifacts at a glance, linking into each artifact's view. */
+/** Engagement page, Deliverables tab: the latest drafts at a glance, linking into each artifact's view. */
 export function DeliverablesOverview({ id, detail }: { id: string; detail: EngagementDetail }) {
   const deliverables = useDeliverablesQuery(id);
   const readiness = useExportReadinessQuery(id);

@@ -350,7 +350,15 @@ def _evaluate_pptx(path: Path, project_id: str, run_id: str) -> dict[str, Any]:
             result = _extract_first_json_object(text)
     except Exception:
         # Fail-open: visual critic issues should not block pipeline progression.
-        return {**_empty, "summary": "PPTX visual critic call failed; continuing without critic output"}
+        return {
+            **_empty,
+            "summary": "PPTX visual critic call failed; continuing without critic output",
+            "error_details": {
+                "error_type": error_type,
+                "error_message": error_msg,
+                "full_trace": error_trace[:500],  # First 500 chars of traceback
+            }
+        }
 
     if not isinstance(result, dict):
         return {**_empty, "summary": "Invalid response from PPTX evaluation"}

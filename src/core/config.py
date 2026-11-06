@@ -447,6 +447,10 @@ class Settings(BaseSettings):
     # the coordinator deadline aborts it mid-stream and the stuck-run watchdog auto-fails it,
     # freeing the admission slot. Set 0 to disable both (no wall-clock timeout).
     run_stuck_timeout_sec: int = 600
+    # A run found in status="running" at start-up may still be alive on another server using this
+    # database, so it counts as orphaned (resumed from its checkpoint, or failed) only after this
+    # many seconds without a RunEvent. 0 treats every such run as orphaned immediately.
+    run_orphan_idle_sec: int = 600
     # On SIGTERM/SIGINT (docker stop, rolling deploy), the local dispatch loop stops
     # pulling new jobs and waits up to this long for in-flight runs to finish before
     # the process exits. See app.services.run_worker.drain_execution_worker.
@@ -478,7 +482,7 @@ class Settings(BaseSettings):
 
     # Phase 0: Agentic loop - event-driven coordinator using CoordinatorStateManager (opt-in, defaults to False for backward compat).
     # When True, coordinator uses state machine loop instead of linear ThreadPoolExecutor execution.
-    coordinator_agentic_loop_enabled: bool = False
+    coordinator_agentic_loop_enabled: bool = True
     # When True and coordinator_agentic_loop_enabled, use subprocess-based teammate execution (Phase 2 feature).
     subprocess_execution_enabled: bool = False
 

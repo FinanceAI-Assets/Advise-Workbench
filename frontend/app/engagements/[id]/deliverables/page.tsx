@@ -1,129 +1,104 @@
 "use client";
 
-import { ClipboardCheck, Download, Plus, Send } from "lucide-react";
+import { Download, Loader2, Plus } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import {
-  ArtifactViewer,
-  DocumentOutline,
-  EngagementFilesPanel,
+  ArtifactApproval,
+  DeckDecisionButtons,
   EvidenceRegisterView,
   ExportApprovalNotice,
   formatRunTime,
+  RegeneratingNotice,
+  RegeneratingSlideOverlay,
   SlideCanvas,
-  SlideEvidencePanel,
   SlideNavigator,
-  toPages,
+  SlideReviewBar,
+  type SlideReview,
   VersionHistoryPanel,
-  WordArtifactPanel,
-  WordDocumentReader,
 } from "@/components/deliverables";
 import { RunProgressCard } from "@/components/conversation/RunProgressCard";
-import { EngagementTabs } from "@/components/engagements";
+import { Badge, type BadgeVariant } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
 import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
-import { useDeliverablesQuery } from "@/hooks/useDeliverables";
+import { useDeliverablesQuery, useSlideDecisions } from "@/hooks/useDeliverables";
+import { type ArtifactDesignReview, useArtifactDesignReview, useDeckDesignReview } from "@/hooks/usePhase5Review";
 import { useEngagementDetailQuery, useExportReadinessQuery } from "@/hooks/useEngagements";
-import { useRunProgressQuery, useSubmitForReviewMutation } from "@/hooks/useWorkbench";
+import { useRunProgressQuery } from "@/hooks/useWorkbench";
 import { useAuth } from "@/lib/auth-context";
 import { toSlideDetail } from "@/lib/deliverableAdapters";
 import { downloadFile } from "@/lib/workbenchApi";
 import type { ArtifactStatus } from "@/types/api";
 
-type DeliverableTabKey = "all" | "powerpoint" | "word" | "evidence-register";
+type DeliverableView = "list" | "powerpoint" | "word" | "evidence-register";
 type ArtifactKind = "pptx" | "docx";
 
-/** Send one artifact of the run for review: to another member, or to yourself. */
-function SubmitForReview({
-  pid,
-  runId,
-  kind,
-  title,
-  onDone,
-}: {
-  pid: string;
-  runId: string;
-  kind: ArtifactKind;
-  title: string;
-  onDone: () => void;
-}) {
-  const { user } = useAuth();
-  const engagement = useEngagementDetailQuery(pid);
-  const submit = useSubmitForReviewMutation();
-  // Other members first, so a second pair of eyes is the default; you can always review it yourself.
-  const members = (engagement.data?.teamMembers ?? []).filter((m) => m.userId);
-  const reviewers = [...members.filter((m) => m.userId !== user?.id), ...members.filter((m) => m.userId === user?.id)];
-  const [reviewerId, setReviewerId] = useState("");
-  const [name, setName] = useState(title);
-  const [dueDate, setDueDate] = useState("");
-  const chosen = reviewerId || reviewers[0]?.userId || "";
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    await submit.mutateAsync({ projectId: pid, runId, artifactType: kind, title: name.trim(), reviewerId: chosen, dueDate });
-    onDone();
-  }
-
-  return (
-    <Card>
-      <form onSubmit={(e) => void onSubmit(e)} className="grid gap-3 md:grid-cols-4 md:items-end">
-        <label className="grid gap-1.5 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-          Artifact title
-          <Input required minLength={3} value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label className="grid gap-1.5 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-          Reviewer
-          <Select required value={chosen} onChange={(e) => setReviewerId(e.target.value)}>
-            {reviewers.map((member) => (
-              <option key={member.id} value={member.userId}>
-                {member.userId === user?.id ? `${member.name} (me, self-review)` : `${member.name} · ${member.role}`}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="grid gap-1.5 text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-          Due date
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-        </label>
-        <div className="flex gap-2">
-          <Button type="submit" disabled={!chosen || submit.isPending}>
-            {submit.isPending ? "Submitting…" : `Submit ${kind.toUpperCase()}`}
-          </Button>
-          <Button type="button" variant="secondary" onClick={onDone}>
-            Cancel
-          </Button>
-        </div>
-        <div className="md:col-span-4">
-          {chosen === user?.id ? (
-            <p className="text-xs text-[var(--text-muted)]">
-              You will review this yourself. It is recorded as a self-review; add another member under Manage access if
-              you want a second reviewer.
-            </p>
-          ) : null}
-          <ErrorNote error={submit.error} />
-        </div>
-      </form>
-    </Card>
-  );
-}
-
-const TAB_KEYS: DeliverableTabKey[] = ["all", "powerpoint", "word", "evidence-register"];
-const TAB_CRUMB: Record<DeliverableTabKey, string> = {
-  all: "",
+const VIEWS: DeliverableView[] = ["list", "powerpoint", "word", "evidence-register"];
+const VIEW_CRUMB: Record<DeliverableView, string> = {
+  list: "",
   powerpoint: " / PowerPoint",
   word: " / Word",
   "evidence-register": " / Evidence register",
 };
+// A Word draft is reviewed under whichever output the run requested for it.
+const WORD_REVIEW_TYPES = ["docx", "narrative", "sop"];
 
-// Deliverables for one engagement: the latest run's deck, document and evidence register, each with its own
-// tab, plus review submission and downloads that open once the version is approved.
+/** Review state of an artifact as the list shows it. */
+type ReviewState = { label: string; variant: BadgeVariant; busy?: boolean };
+
+function reviewState(design: ArtifactDesignReview | null): ReviewState {
+  if (!design) return { label: "Draft", variant: "secondary" };
+  if (design.approved) return { label: "Approved", variant: "success" };
+  if (design.regenerating) return { label: `Regenerating ${design.version}`, variant: "info", busy: true };
+  if (design.waiting) return { label: "Awaiting approval", variant: "warning" };
+  return { label: "Not approved", variant: "secondary" };
+}
+
+type ListItem = { view: DeliverableView; name: string; meta: string; state?: ReviewState };
+
+/** The run's artifacts, grouped by kind; choosing one opens it. */
+function ArtifactList({ groups, onOpen }: { groups: Array<{ title: string; items: ListItem[] }>; onOpen: (view: DeliverableView) => void }) {
+  return (
+    <Card className="space-y-4">
+      <h2 className="text-base font-semibold text-[var(--text-default)]">Generated artifacts</h2>
+      {groups.map((group) => (
+        <section key={group.title} className="space-y-2">
+          <h3 className="text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">{group.title}</h3>
+          <ul className="divide-y divide-[var(--surface-border)] rounded-lg border border-[var(--surface-border)]">
+            {group.items.map((item) => (
+              <li key={item.view}>
+                <button
+                  type="button"
+                  onClick={() => onOpen(item.view)}
+                  className="flex w-full flex-wrap items-center justify-between gap-2 px-4 py-3 text-left transition hover:bg-[var(--surface-muted)]"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-[var(--text-default)]">{item.name}</span>
+                    <span className="block text-xs text-[var(--text-muted)]">{item.meta}</span>
+                  </span>
+                  {item.state ? (
+                    <Badge variant={item.state.variant} className="flex items-center gap-1.5">
+                      {item.state.busy ? <Loader2 size={12} className="animate-spin" aria-hidden /> : null}
+                      {item.state.label}
+                    </Badge>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </Card>
+  );
+}
+
+// Deliverables for one engagement: first the list of the latest run's artifacts by kind, then the chosen one. A
+// deck opens slide by slide for review; anything else shows a summary with a final approve or reject.
 export default function EngagementDeliverablesPage() {
   const params = useParams();
   const router = useRouter();
@@ -133,6 +108,11 @@ export default function EngagementDeliverablesPage() {
   const deliverables = useDeliverablesQuery(id);
   const readiness = useExportReadinessQuery(id);
   const engagement = useEngagementDetailQuery(id);
+  const slideDecisions = useSlideDecisions(deliverables.data?.runId ?? "");
+  // A run waiting in design review is answered per artifact: the deck's Accept PPT and Reject PPT, and the
+  // Word draft's Approve and Reject.
+  const deckReview = useDeckDesignReview(deliverables.data?.runId ?? "", deliverables.data?.pptx.slides.length ?? 0);
+  const wordReview = useArtifactDesignReview(deliverables.data?.runId ?? "", WORD_REVIEW_TYPES);
   // When generation finishes, load the new drafts without a manual refresh.
   const latestRun = useRunProgressQuery(id).data?.run;
   const finishedRun = latestRun?.finished ? latestRun.id : "";
@@ -140,17 +120,20 @@ export default function EngagementDeliverablesPage() {
   useEffect(() => {
     if (finishedRun) void refetchDeliverables();
   }, [finishedRun, refetchDeliverables]);
-  const [tab, setTab] = useState<DeliverableTabKey>("all");
+  // Load the rebuilt artifact once a regenerated version is ready.
+  const readyVersions = [deckReview, wordReview].map((r) => (r && !r.regenerating ? r.version : "")).join("|");
+  useEffect(() => {
+    if (readyVersions !== "|") void refetchDeliverables();
+  }, [readyVersions, refetchDeliverables]);
+  const [view, setView] = useState<DeliverableView>("list");
   const [slideIndex, setSlideIndex] = useState(0);
-  const [docPage, setDocPage] = useState(0);
-  const [submitting, setSubmitting] = useState<ArtifactKind | null>(null);
   const [downloadError, setDownloadError] = useState<unknown>(null);
 
-  // Links such as ?tab=powerpoint (from the engagement's Deliverables tab) open that view.
+  // Links such as ?tab=powerpoint (from the engagement's Deliverables tab) open that artifact.
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab") as DeliverableTabKey | null;
+    const requested = new URLSearchParams(window.location.search).get("tab") as DeliverableView | null;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reading the URL once on mount
-    if (requested && TAB_KEYS.includes(requested)) setTab(requested);
+    if (requested && VIEWS.includes(requested)) setView(requested);
   }, []);
 
   if (deliverables.isPending) return <PageSkeleton />;
@@ -158,7 +141,7 @@ export default function EngagementDeliverablesPage() {
   const engagementName = deliverables.data?.engagementName ?? engagement.data?.name ?? "Engagement";
   const breadcrumb = (
     <>
-      <Link href={`/engagements/${id}`}>{engagementName}</Link> / Deliverables{TAB_CRUMB[tab]}
+      <Link href={`/engagements/${id}`}>{engagementName}</Link> / Deliverables{VIEW_CRUMB[view]}
     </>
   );
 
@@ -199,28 +182,66 @@ export default function EngagementDeliverablesPage() {
         status: docxReview.review as ArtifactStatus,
       }
     : data.docx;
-  const files = data.files.map((file) => {
-    const review = file.type === "pptx" ? pptxReview : file.type === "docx" ? docxReview : undefined;
-    return review ? { ...file, name: review.name, status: review.review as ArtifactStatus } : file;
-  });
-  const canDownload = (kind: ArtifactKind) => reviewOf(kind)?.export === "Available";
+  // A download unlocks once its artifact is approved, or for drafts approved in an earlier review.
+  const canDownload = (kind: ArtifactKind) =>
+    Boolean((kind === "pptx" ? deckReview : wordReview)?.approved) || reviewOf(kind)?.export === "Available";
   const hasPptx = data.tabCounts.powerpoint > 0;
   const hasDocx = data.tabCounts.word > 0;
   const pptxVersion = pptx.versionLabel.split(" ").pop() ?? "";
   const docxVersion = docx.versionLabel.split(" ").pop() ?? "";
   const unsupported = data.claims.filter((c) => !c.grounded).length;
+  const supported = data.claims.length - unsupported;
   const slideLinks = data.claimsBySlideIndex[slideIndex] ?? [];
 
-  const tabs = [
-    { key: "all" as const, label: "All artifacts", count: data.tabCounts.all },
-    { key: "powerpoint" as const, label: "PowerPoint", count: data.tabCounts.powerpoint },
-    { key: "word" as const, label: "Word", count: data.tabCounts.word },
-    { key: "evidence-register" as const, label: "Evidence register", count: data.tabCounts.evidenceRegister },
-  ];
+  const groups = [
+    {
+      title: "Presentations",
+      items: hasPptx
+        ? [
+            {
+              view: "powerpoint" as const,
+              name: pptx.name,
+              meta: `PowerPoint · ${pptx.slides.length} slides · ${deckReview?.version ?? pptxVersion}`,
+              state: reviewState(deckReview),
+            },
+          ]
+        : [],
+    },
+    {
+      title: "Documents",
+      items: hasDocx
+        ? [
+            {
+              view: "word" as const,
+              name: docx.name,
+              meta: `Word · ${docx.preview.sections.length} sections · ${wordReview?.version ?? docxVersion}`,
+              state: reviewState(wordReview),
+            },
+          ]
+        : [],
+    },
+    {
+      title: "Supporting evidence",
+      items: data.claims.length
+        ? [{ view: "evidence-register" as const, name: "Evidence register", meta: `${data.claims.length} claims · ${supported} supported` }]
+        : [],
+    },
+  ].filter((group) => group.items.length > 0);
 
   const getSlideDetail = (index: number) =>
     toSlideDetail(data.rawSlides[index], index, data.rawSlides.length, data.slideBreadcrumb, data.slideSourcesSummary, data.slideFooterMeta);
+  // While the deck regenerates, its rebuilt slides (every slide, for a whole rebuild) show as in progress.
+  const slideRebuilding = (slideNumber: number) =>
+    Boolean(deckReview?.regenerating) &&
+    (deckReview!.rebuildingSlides.length === 0 || deckReview!.rebuildingSlides.includes(slideNumber));
   const claimCounts = Object.fromEntries(Object.entries(data.claimsBySlideIndex).map(([i, links]) => [i, links.length]));
+  const slideReview: SlideReview = {
+    decisionOf: slideDecisions.decisionOf,
+    onDecide: slideDecisions.decide,
+    onDecideAll: slideDecisions.decideAll,
+    locked: pptxReview?.review === "Approved" || Boolean(deckReview?.approved),
+    designReview: deckReview,
+  };
 
   async function download(kind: ArtifactKind) {
     setDownloadError(null);
@@ -231,36 +252,20 @@ export default function EngagementDeliverablesPage() {
     }
   }
 
-  function reviewAction(kind: ArtifactKind) {
-    const review = reviewOf(kind);
-    if (review && review.review !== "Draft") return () => router.push(`/reviews/${encodeURIComponent(review.id)}`);
-    return () => setSubmitting(kind);
-  }
+  // How to unlock a locked download.
+  const exportNotice = (kind: ArtifactKind) =>
+    canDownload(kind) ? null : (
+      <ExportApprovalNotice
+        description={
+          kind === "pptx"
+            ? "Review the slides, then use Accept PPT to unlock the PPTX download."
+            : "Approve the document to unlock the DOCX download."
+        }
+      />
+    );
 
-  const reviewLabel = (kind: ArtifactKind) => {
-    const review = reviewOf(kind);
-    return review && review.review !== "Draft" ? `Open review · ${review.review}` : "Submit for review";
-  };
-
-  // Why downloads are still locked, artifact by artifact.
-  const lockedReasons = (["pptx", "docx"] as const)
-    .filter((kind) => (kind === "pptx" ? hasPptx : hasDocx) && !canDownload(kind))
-    .map((kind) => {
-      const review = reviewOf(kind);
-      if (!review || review.review === "Draft") return `${kind.toUpperCase()} is not yet submitted`;
-      return `${kind.toUpperCase()} is ${review.review.toLowerCase()}`;
-    });
-  const exportNotice = lockedReasons.length ? (
-    <ExportApprovalNotice description={`${lockedReasons.join(". ")}. Downloads unlock after reviewer approval.`} />
-  ) : null;
-
-  const openTab = (key: DeliverableTabKey) => {
-    setTab(key);
-    setSubmitting(null);
-  };
-
-  const header: Record<DeliverableTabKey, { title: string; subtitle: string }> = {
-    all: { title: data.title, subtitle: data.subtitle },
+  const header: Record<DeliverableView, { title: string; subtitle: string }> = {
+    list: { title: data.title, subtitle: data.subtitle },
     powerpoint: {
       title: "PowerPoint artifact",
       subtitle: [pptx.name, `PPTX ${pptxVersion}`, `${pptx.slides.length} slides`, code].filter(Boolean).join(" · "),
@@ -276,17 +281,7 @@ export default function EngagementDeliverablesPage() {
   };
 
   const actions =
-    tab === "powerpoint" && hasPptx ? (
-      <Button type="button" className="flex items-center gap-2" onClick={reviewAction("pptx")}>
-        <ClipboardCheck size={16} aria-hidden />
-        {reviewLabel("pptx")}
-      </Button>
-    ) : tab === "word" && hasDocx ? (
-      <Button type="button" className="flex items-center gap-2" onClick={reviewAction("docx")}>
-        <Send size={16} aria-hidden />
-        {reviewLabel("docx")}
-      </Button>
-    ) : tab === "all" ? (
+    view === "list" ? (
       <Button type="button" className="flex items-center gap-2" onClick={() => router.push(`/engagements/${id}/conversation`)}>
         <Plus size={16} aria-hidden />
         Create deliverable
@@ -295,77 +290,51 @@ export default function EngagementDeliverablesPage() {
 
   const empty = (what: string) => <EmptyState title="Nothing here yet" description={`This run did not produce ${what}.`} />;
 
-  // A single artifact or the submit form steps back to All artifacts; from there, to the deliverables list.
+  // An artifact steps back to the artifact list; from there, to the engagements' deliverables.
   const back =
-    tab !== "all" || submitting ? (
-      <BackButton onClick={() => openTab("all")} label="Back to all artifacts" />
+    view !== "list" ? (
+      <BackButton onClick={() => setView("list")} label="Back to all artifacts" />
     ) : (
       <BackButton href="/deliverables" label="Back to deliverables" />
     );
 
   return (
-    <PageFrame back={back} breadcrumb={breadcrumb} title={header[tab].title} subtitle={header[tab].subtitle} actions={actions}>
+    <PageFrame back={back} breadcrumb={breadcrumb} title={header[view].title} subtitle={header[view].subtitle} actions={actions}>
       <RunProgressCard pid={id} showArtifactsLink={false} />
-
-      <EngagementTabs tabs={tabs} active={tab} onChange={openTab} />
-
-      {submitting ? (
-        <SubmitForReview
-          pid={id}
-          runId={runId}
-          kind={submitting}
-          title={submitting === "pptx" ? pptx.name : docx.name}
-          onDone={() => setSubmitting(null)}
-        />
+      {data.fromEarlierRun ? (
+        <p className="text-sm text-[var(--text-muted)]">
+          The latest run produced no drafts, so these are from the run of {formatRunTime(data.run.createdAt)}.
+        </p>
       ) : null}
+
       <ErrorNote error={downloadError} />
 
-      {tab === "all" ? (
-        <div className="grid gap-4 lg:grid-cols-[240px_1fr] xl:grid-cols-[240px_1fr_320px]">
-          <div className="space-y-4">
-            <EngagementFilesPanel
-              files={files}
-              activeFileId=""
-              onSelect={(fileId) => openTab(fileId === "pptx" ? "powerpoint" : fileId === "docx" ? "word" : "evidence-register")}
-            />
-            <VersionHistoryPanel versions={data.versions} />
-          </div>
-          <div className="space-y-4">
-            {hasPptx ? (
-              <>
-                <ArtifactViewer
-                  pptx={pptx}
-                  getSlideDetail={getSlideDetail}
-                  onSlideChange={setSlideIndex}
-                  reviewLabel={reviewLabel("pptx")}
-                  onOpenReview={reviewAction("pptx")}
-                  onDownload={canDownload("pptx") ? () => void download("pptx") : undefined}
-                />
-                <SlideEvidencePanel links={slideLinks} />
-              </>
-            ) : (
-              empty("a deck")
-            )}
-          </div>
-          <div className="space-y-4 lg:col-span-2 xl:col-span-1">
-            {hasDocx ? (
-              <WordArtifactPanel
-                docx={{ ...docx, preview: { ...docx.preview, pageLabel: `1 / ${toPages(docx.preview.sections).length}` } }}
-                previewSections={2}
-                onOpen={() => openTab("word")}
-                onDownload={canDownload("docx") ? () => void download("docx") : undefined}
-              />
-            ) : null}
-            {exportNotice}
-          </div>
+      {view === "list" ? (
+        <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+          {groups.length ? <ArtifactList groups={groups} onOpen={setView} /> : empty("any artifacts")}
+          <VersionHistoryPanel versions={data.versions} />
         </div>
       ) : null}
 
-      {tab === "powerpoint" ? (
+      {view === "powerpoint" ? (
         hasPptx ? (
           <>
+            {deckReview?.regenerating ? (
+              <RegeneratingNotice
+                label="deck"
+                version={deckReview.version}
+                rebuildingSlides={deckReview.rebuildingSlides}
+                totalSlides={pptx.slides.length}
+              />
+            ) : null}
             <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-              <SlideNavigator slides={pptx.slides} activeIndex={slideIndex} claimCounts={claimCounts} onSelect={setSlideIndex} />
+              <SlideNavigator
+                slides={pptx.slides}
+                activeIndex={slideIndex}
+                claimCounts={claimCounts}
+                onSelect={setSlideIndex}
+                decisionOf={slideReview.decisionOf}
+              />
               <Card className="space-y-4">
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h2 className="text-base font-semibold text-[var(--text-default)]">{pptx.name}</h2>
@@ -373,24 +342,17 @@ export default function EngagementDeliverablesPage() {
                     · Slide {slideIndex + 1} / {pptx.slides.length}
                   </span>
                 </div>
-                <SlideCanvas slide={getSlideDetail(slideIndex)} />
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" type="button" disabled={slideIndex === 0} onClick={() => setSlideIndex(slideIndex - 1)}>
-                    Previous
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    disabled={slideIndex >= pptx.slides.length - 1}
-                    onClick={() => setSlideIndex(slideIndex + 1)}
-                  >
-                    Next
-                  </Button>
+                <div className="relative">
+                  <SlideCanvas slide={getSlideDetail(slideIndex)} />
+                  {slideRebuilding(slideIndex + 1) ? <RegeneratingSlideOverlay /> : null}
+                </div>
+                <SlideReviewBar index={slideIndex} total={pptx.slides.length} onSelect={setSlideIndex} review={slideReview} />
+                <div className="flex flex-wrap justify-end gap-2">
                   <Button
                     variant="secondary"
                     type="button"
                     disabled={!canDownload("pptx")}
-                    title={canDownload("pptx") ? undefined : "Available after independent approval"}
+                    title={canDownload("pptx") ? undefined : "Available after the deck is accepted"}
                     className="flex items-center gap-2"
                     onClick={() => void download("pptx")}
                   >
@@ -398,6 +360,7 @@ export default function EngagementDeliverablesPage() {
                     Download PPTX
                   </Button>
                 </div>
+                <DeckDecisionButtons slides={pptx.slides} review={slideReview} />
                 <ul className="space-y-2 border-t border-[var(--surface-border)] pt-3">
                   {slideLinks.map((link) => (
                     <li key={link.id}>
@@ -414,42 +377,67 @@ export default function EngagementDeliverablesPage() {
                 </ul>
               </Card>
             </div>
-            {exportNotice}
+            {exportNotice("pptx")}
           </>
         ) : (
           empty("a deck")
         )
       ) : null}
 
-      {tab === "word" ? (
+      {view === "word" ? (
         hasDocx ? (
-          <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-            <DocumentOutline sections={docx.preview.sections} page={docPage} onSelectPage={setDocPage} />
-            <WordDocumentReader
-              docx={docx}
-              page={docPage}
-              onPageChange={setDocPage}
-              assumption={
-                unsupported
-                  ? {
-                      title: "Assumptions to caveat",
-                      description: `${unsupported} claim${unsupported === 1 ? " has" : "s have"} no validated source. Do not present ${
-                        unsupported === 1 ? "it" : "them"
-                      } as established fact; see the evidence register.`,
-                    }
-                  : null
-              }
-              reviewLabel={reviewLabel("docx")}
-              onReview={reviewAction("docx")}
-              onDownload={canDownload("docx") ? () => void download("docx") : undefined}
-            />
-          </div>
+          <>
+            {wordReview?.regenerating ? <RegeneratingNotice label="document" version={wordReview.version} /> : null}
+            <Card className="space-y-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-base font-semibold text-[var(--text-default)]">{docx.name}</h2>
+                <span className="text-xs text-[var(--text-muted)]">
+                  Word · {wordReview?.version ?? docxVersion} · {docx.citationSummary}
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Summary</p>
+                <p className="text-sm text-[var(--text-default)]">
+                  {docx.preview.sections.length} section{docx.preview.sections.length === 1 ? "" : "s"}
+                  {data.claims.length ? ` · ${supported} of ${data.claims.length} claims supported by a source` : ""}.
+                </p>
+                <ol className="list-decimal space-y-0.5 pl-5 text-sm text-[var(--text-default)]">
+                  {docx.preview.sections.map((section, i) => (
+                    <li key={`${section.heading}-${i}`}>{section.heading}</li>
+                  ))}
+                </ol>
+              </div>
+              {unsupported ? (
+                <div className="rounded-lg border border-[#F3E2C0] bg-[#FCF3E2] p-3">
+                  <p className="text-sm font-semibold text-[#8C5B12]">Assumptions to caveat</p>
+                  <p className="text-xs text-[#8C5B12]">
+                    {unsupported} claim{unsupported === 1 ? " has" : "s have"} no validated source; see the evidence register.
+                  </p>
+                </div>
+              ) : null}
+              <div className="flex justify-end">
+                <Button
+                  variant="secondary"
+                  type="button"
+                  disabled={!canDownload("docx")}
+                  title={canDownload("docx") ? undefined : "Available after the document is approved"}
+                  className="flex items-center gap-2"
+                  onClick={() => void download("docx")}
+                >
+                  <Download size={16} aria-hidden />
+                  Download DOCX
+                </Button>
+              </div>
+              <ArtifactApproval label="Document" design={wordReview} />
+            </Card>
+            {exportNotice("docx")}
+          </>
         ) : (
           empty("a document")
         )
       ) : null}
 
-      {tab === "evidence-register" ? (
+      {view === "evidence-register" ? (
         <EvidenceRegisterView
           pid={id}
           claims={data.claims}

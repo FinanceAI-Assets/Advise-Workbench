@@ -368,6 +368,56 @@ def _generate_and_execute_plan(
     )
 
 
+_REGENERATION_YES = {"yes", "yes please", "ok", "okay", "sure", "confirm"}
+
+
+def _regeneration_asked(messages: list[dict]) -> bool:
+    """Whether Sheldon's latest message asked to confirm generating again."""
+    for message in reversed(messages):
+        if message.get("role") == "assistant":
+            metadata = message.get("metadata")
+            return isinstance(metadata, dict) and metadata.get("kind") == "regeneration_confirmation"
+    return False
+
+
+def _last_generation_succeeded(db: Session, messages: list[dict]) -> bool:
+    """Whether this conversation's last run finished well, with no newer plan proposed since."""
+    for message in reversed(messages):
+        metadata = message.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        if message.get("role") == "assistant" and metadata.get("plan_hash"):
+            return False
+        if metadata.get("kind") == "auto_executed":
+            return db.scalar(select(Run.status).where(Run.id == metadata.get("run_id"))) in {"review_ready", "done"}
+    return False
+
+
+def _ask_before_regenerating(db: Session, conv: Conversation) -> dict:
+    db.add(
+        ConversationMessage(
+            conversation_id=conv.id,
+            role="assistant",
+            content=(
+                "The drafts from this conversation are already finished and are in Deliverables. "
+                "Generating again starts a new run, which can take a while. "
+                "Do you want to generate them again? Say yes to start, or tell me what to change."
+            ),
+            metadata_json=json.dumps({"kind": "regeneration_confirmation"}),
+        )
+    )
+    conv.updated_at = datetime.now(IST).replace(tzinfo=None)
+    db.commit()
+    return {
+        "conversation_id": conv.id,
+        "messages": _serialize_messages(db, conv.id),
+        "auto_executed": False,
+        "open_questions": [],
+        "ready_for_confirmation": False,
+        "plan_hash": None,
+    }
+
+
 def _execute_plan_now(
     *,
     db: Session,
@@ -415,19 +465,19 @@ def _execute_plan_now(
     selected_strategy = resolve_selected_strategy(dossier, da)
     discovery = _normalize_discovery(plan_meta.get("discovery"))
 
-    # Guard: don't create a duplicate run for the same conversation.
+    # Guard: one run in progress per engagement. A finished run does not block a new one.
     existing_run = db.scalar(
         select(Run)
         .where(Run.project_id == pid)
-        .where(Run.status.in_({"plan_ready", "approved", "running", "review_ready"}))
-        .order_by(Run.id.desc())
+        .where(Run.status.in_({"plan_ready", "approved", "running"}))
+        .order_by(Run.created_at.desc())
         .limit(1)
     )
     if existing_run:
         assistant_msg = ConversationMessage(
             conversation_id=conv.id,
             role="assistant",
-            content="Drafts are already being generated. The progress panel above this conversation shows where they are.",
+            content="Drafts are already being generated. The progress panel in this conversation shows where they are.",
             metadata_json=json.dumps({"kind": "auto_execute_skipped", "run_id": existing_run.id}),
         )
         db.add(assistant_msg)
@@ -592,11 +642,11 @@ def _execute_plan_now(
     save_state(conv, state)
 
     queue_msg = (
-        "Generation has started. The progress panel above this conversation shows each step; "
+        "Generation has started. The progress panel in this conversation shows each step; "
         "when it finishes, open Deliverables to see the drafts and submit them for review."
         if enqueued
         else "The plan is saved but generation could not start right now. "
-        "Use Approve plan and generate in the progress panel above this conversation to try again."
+        "Use Approve plan and generate in the progress panel in this conversation to try again."
     )
     assistant_msg = ConversationMessage(
         conversation_id=conv.id,
@@ -2621,7 +2671,12 @@ def _turn_receive(turn: Turn) -> dict | None:
                 )
 
         # ── Auto-execute: user says 'go' — execute existing plan or generate+execute ──
-        if _is_execute_now_intent(content) and state.state not in {"run_queued", "done"}:
+        regeneration_asked = _regeneration_asked(prior_messages)
+        regeneration_confirmed = regeneration_asked and content.lower().strip().rstrip("!.") in _REGENERATION_YES
+        if (_is_execute_now_intent(content) or regeneration_confirmed) and state.state not in {"run_queued", "done"}:
+            if not regeneration_asked and _last_generation_succeeded(db, prior_messages):
+                return _ask_before_regenerating(db, conv)
+
             # Case 1: a plan message already exists → execute it directly.
             if (
                 isinstance(prior_plan_meta, dict)

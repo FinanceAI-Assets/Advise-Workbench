@@ -538,6 +538,44 @@ export type PracticeInventoryRow = {
   version: string;
   indexing: string;
   lifecycle: string;
+  /** Number of sources uploaded to the practice. Not sent by the API yet; the screen counts uploads until it is. */
+  sources?: number;
+};
+
+/** One uploaded version of a practice source. */
+export type LibrarySourceVersion = {
+  /** Pipeline job id; with `jobId` from the uploads list, the ingestion job. */
+  jobId: string;
+  /** 1 for the first upload of the source. */
+  number: number;
+  filename: string;
+  uploadedAt: string;
+  status: string;
+  sizeBytes: number | null;
+};
+
+/** A document of a practice, uploaded once and then in further versions. */
+export type LibrarySource = {
+  /** "SRC-1". */
+  id: string;
+  name: string;
+  versions: LibrarySourceVersion[];
+};
+
+/** A practice as created: the details entered for it, with its sources. Not sent by the API yet. */
+export type LibraryPracticeDetail = {
+  id: string;
+  code: string;
+  title: string;
+  description?: string;
+  taxonomy: string;
+  maturity: string;
+  versionLabel: string;
+  owner: string;
+  classification: string;
+  rights: string;
+  status: string;
+  sources: LibrarySource[];
 };
 
 export type IngestionJobDetail = {
@@ -633,11 +671,7 @@ export type LibraryQualityGatesDetail = {
   blocker: LibraryNotice | null;
   metadata: LibraryField[];
   correction: LibraryCorrectionDraft;
-  // Present for uploaded sources; the sample walkthrough has no live review.
-  review?: { id: string; state: string; reviewer: string; selfReview: boolean } | null;
   openCorrection?: LibraryCorrectionRecord | null;
-  approvers?: Array<{ id: string; name: string }>;
-  canSubmit?: boolean;
   canPublish?: boolean;
   blockers?: string[];
 };
@@ -663,6 +697,10 @@ export type AdminLibraryDetail = {
   selectedPracticeId: string;
   /** "upload" when the steps show a real uploaded source; "sample" for the illustrative walkthrough. */
   pipelineSource: "upload" | "sample";
+  /** The source the pipeline steps describe, once the API has sources per practice. */
+  selectedSourceId?: string;
+  /** The requested practice with its sources, once the API sends it. */
+  practice?: LibraryPracticeDetail | null;
   // Pipeline tab content.
   extraction?: LibraryExtractionDetail;
   indexValidation?: LibraryIndexValidationDetail;

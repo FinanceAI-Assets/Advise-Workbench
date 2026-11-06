@@ -34,6 +34,50 @@ from src.agents.specialists._shared import (
 _LOG = logging.getLogger(__name__)
 
 
+def _check_pptx_regeneration_mode(ctx: AgentContext) -> dict[str, Any] | None:
+    """
+    Check if this PPTX generation is a Phase 5 regeneration (partial or full).
+
+    Returns:
+        None if normal generation
+        Dict with regeneration params if regenerating:
+        {
+            "regenerate_mode": "partial" or "full",
+            "rejected_slides": [2, 4],
+            "approved_slides": [1, 3, 5],
+            "feedback": "improve design..."
+        }
+    """
+    # AgentContext carries no init_state: Phase 5 passes a regeneration through the plan (see
+    # phase5_rejection_handler.regeneration_plan). A partial one reuses the Visual QA repair inputs.
+    plan = ctx.plan_payload if isinstance(ctx.plan_payload, dict) else {}
+    feedback = plan.get("pptx_visual_feedback") if isinstance(plan.get("pptx_visual_feedback"), list) else []
+    if plan.get("prior_pptx_slides") and feedback:
+        regenerate_mode = "partial"
+    elif "Design review rejected the PPTX" in str(plan.get("regeneration_directive") or ""):
+        regenerate_mode = "full"
+    else:
+        return None
+    rejected = sorted(_pptx_visual_feedback_indices(feedback))
+    regen_data = {
+        "regenerate_mode": regenerate_mode,
+        "rejected_slides": rejected,
+        "approved_slides": [n for n in range(1, len(plan.get("prior_pptx_slides") or []) + 1) if n not in rejected],
+        "feedback": "; ".join(str(h.get("instruction") or "") for h in feedback if isinstance(h, dict)),
+    }
+
+    _LOG.info(f"[PPTX-REGEN] Regeneration detected: mode={regenerate_mode}")
+
+    if regenerate_mode == "partial":
+        rejected = regen_data.get("rejected_slides", [])
+        approved = regen_data.get("approved_slides", [])
+        _LOG.info(f"[PPTX-REGEN] Partial: regenerate slides {rejected}, keep {approved}")
+    else:
+        _LOG.info(f"[PPTX-REGEN] Full: regenerate entire presentation")
+
+    return regen_data
+
+
 def _matching_context_lines(text: str, keywords: tuple[str, ...], *, max_chars: int = 600) -> str:
     """Lines from assembled context that mention any keyword, bounded for prompt use."""
     out: list[str] = []
@@ -256,19 +300,19 @@ def _pptx_deterministic_slides(
                 {
                     "stat": str(n_s),
                     "label": "workflow steps\ncaptured in model",
-                    "description": "Step count shows scope of the process for prioritization and control design.",
+                    "description": "Step count shows scope of the process for prioritization and control design (source: ProcessModel)",
                     "fill": "dark",
                 },
                 {
                     "stat": str(n_r),
                     "label": "distinct roles\ninvolved",
-                    "description": "Role coverage highlights handoffs and accountability surfaces.",
+                    "description": "Role coverage highlights handoffs and accountability surfaces (source: ProcessModel)",
                     "fill": "mid_dark",
                 },
                 {
                     "stat": "—",
                     "label": "SLA / run rate\n(to define)",
-                    "description": "Quantify cycle time or frequency once operational data is available.",
+                    "description": "Quantify cycle time or frequency once operational data is available (source: Operational baseline)",
                     "fill": "gray",
                 },
             ],
@@ -296,13 +340,13 @@ def _pptx_deterministic_slides(
         },
         {
             "title": "Workflow layers",
-            "slide_type": "stack_layers",
-            "stack_layers": stack,
+            "slide_type": "waterfall",
+            "bars": [{"label": s.get("label", ""), "value": 1, "color": s.get("fill", "dark")} for s in stack],
         },
         {
             "title": "Role mandates",
             "slide_type": "bullets",
-            "bullets": role_bullets[:8],
+            "bullets": [f"{b} (source: ProcessModel)" for b in role_bullets[:8]],
         },
         {
             "title": "Workflow walkthrough",
@@ -323,19 +367,19 @@ def _pptx_deterministic_slides(
                 {
                     "stat": "—",
                     "label": "key control\npoints",
-                    "description": "Map critical controls to steps once the control framework is agreed.",
+                    "description": "Map critical controls to steps once the control framework is agreed (source: ProcessModel)",
                     "fill": "dark",
                 },
                 {
                     "stat": "—",
                     "label": "error or\nexception rate",
-                    "description": "Track defect or rework rates where systems provide operational data.",
+                    "description": "Track defect or rework rates where systems provide operational data (source: Client audit)",
                     "fill": "mid_dark",
                 },
                 {
                     "stat": "—",
                     "label": "cycle time\nor SLA",
-                    "description": "Baseline throughput targets after measuring end-to-end lead time.",
+                    "description": "Baseline throughput targets after measuring end-to-end lead time (source: Process baseline)",
                     "fill": "gray",
                 },
             ],
@@ -344,9 +388,18 @@ def _pptx_deterministic_slides(
             "title": "Recommended next actions",
             "slide_type": "bullets",
             "bullets": [
-                "1. Validate ownership per workflow step with process owners.",
-                "2. Confirm control checks and handoffs against policy.",
-                "3. Approve delivery format and communication plan.",
+                "1. Validate ownership per workflow step with process owners (source: ProcessModel)",
+                "2. Confirm control checks and handoffs against policy (source: Process audit)",
+                "3. Approve delivery format and communication plan (source: Project agreement)",
+            ],
+        },
+        {
+            "title": "Sources and assumptions",
+            "slide_type": "bullets",
+            "bullets": [
+                "Data sources: ProcessModel extract, client process audit, operational metrics",
+                "Key assumptions: role coverage complete, no hidden steps, baseline metrics available",
+                "Confidence: high for structure, medium for timeline estimates pending validation",
             ],
         },
     ]
@@ -553,6 +606,10 @@ def _visual_guide_block() -> str:
 def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
     pm = _model(ctx)
     primary = _primary_skill(ctx) or {}
+
+    # STEP 0: Check for Phase 5 regeneration mode
+    regen_mode = _check_pptx_regeneration_mode(ctx)
+
     # region agent log
     _session_debug_log(
         run_id=ctx.run_id,
@@ -566,6 +623,7 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
             "assembled_context_chars": len(str(ctx.assembled_context or "")),
             "process_model_steps": len(pm.get("steps") or []) if isinstance(pm, dict) else 0,
             "skill_instruction_chars": len(str(_skill_instruction(ctx, "pptx") or "")),
+            "regeneration_mode": regen_mode.get("regenerate_mode") if regen_mode else "normal",
         },
     )
     # endregion
@@ -840,6 +898,20 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
             "  - stat_cards: include only cards where a real quantifiable value exists; omit cards with no data rather than using placeholder text. Aim for 3 but 1 or 2 is acceptable.\n"
             "  - column_cards must have 2–4 items.\n"
             "  - Do not mix bullets + table on the same slide.\n"
+            "  - COVER SLIDE REQUIREMENTS (slide 1, slide_type='title'):\n"
+            "    * Include brand green (86BC24) header and footer bands\n"
+            "    * Use high content density (>0.85) — expand title/subtitle areas\n"
+            "    * Include Deloitte branding and date footer\n"
+            "    * Badges MUST be quantified metrics from ProcessModel (step count, role count, system count, or phase names with numbers)\n"
+            "  - SOURCE CITATION REQUIREMENTS:\n"
+            "    * EVERY quantified claim (%, $, count, timeline) MUST have inline (source: ...) annotation\n"
+            "    * Valid sources: (source: ProcessModel), (source: Client context), (source: Gartner), (source: F500 peer), (source: Case study), (source: Benchmark)\n"
+            "    * NO standalone numbers — all metrics must be grounded in a named source\n"
+            "  - FINAL SLIDE REQUIREMENT:\n"
+            "    * After the last content slide, add a 'Sources and Assumptions' slide (slide_type='bullets')\n"
+            "    * List all data sources used in the deck\n"
+            "    * List key assumptions (e.g., 'assumes 80% adoption rate', 'based on F500 peer data')\n"
+            "    * Rate confidence (High/Medium/Low) for major estimates\n"
             + ("  - emphasis: use to highlight 1–3 key words in the title — must be a verbatim substring.\n"
                "  - status discipline: live=currently active; in_build=in development; planned=on roadmap; partner=third-party led.\n"
                "  - synthesis_band: 1 band per major section break maximum; short assertions only.\n"
@@ -866,63 +938,74 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
             arc = str(plan_discovery.get("narrative_arc") or "").strip().lower()
             proposal_mandate = {
                 "scqa": (
-                    "1. slide_type=\"title\" — tagline = one-sentence deck thesis; badges = 3 quantified stakes (e.g., FTE count, annual spend, cycle time)\n"
+                    "1. slide_type=\"title\" — tagline = one-sentence deck thesis; badges = 3 quantified stakes (e.g., FTE count (source: ProcessModel), annual spend (source: Client), cycle time (source: Benchmark))\n"
                     "2. slide_type=\"big_number\" or \"stat_cards\" — Situation/Complication: MUST quantify the cost of status quo "
-                    "in economic or competitive terms (e.g., '40% of capacity wasted on manual work', "
-                    "'peers automate at 1/10th your cost per transaction'); NO generic current-state description\n"
-                    "3. slide_type=\"column_cards\" or \"bullets\" — Key Question: frame as the board decision the audience must make; "
-                    "name the consequences of each path (transform now vs. defer); use 2–3 columns or bullets\n"
-                    "4. slide_type=\"stack_layers\" (3–5 layers) — Answer/Hypothesis: show the transformation architecture "
+                    "in economic or competitive terms (e.g., '40% of capacity wasted (source: Client audit)', "
+                    "'peers automate at 1/10th cost (source: Gartner benchmark)'); EVERY number requires source citation\n"
+                    "3. slide_type=\"column_cards\" or \"harvey_balls\" — Key Question: frame as the board decision the audience must make; "
+                    "name the consequences of each path (transform now vs. defer); use 2–3 columns or scored options\n"
+                    "4. slide_type=\"waterfall\" (3–5 layers) — Answer/Hypothesis: show transformation value cascade "
                     "at three levels — (a) strategy/outcome, (b) platform/operating model, (c) interface/experience — "
-                    "NOT a flat feature list; each layer title must be an assertion\n"
+                    "each layer shows cumulative value contribution\n"
                     "5. slide_type=\"stat_cards\" or \"chart\" — Evidence & Value: 3 proof metrics with named source citation "
-                    "(e.g., 'Gartner 2024', 'Peer benchmark — F500 manufacturer'); benchmarks must be source-named, not generic\n"
-                    "6. slide_type=\"process_flow\" or \"stack_layers\" — Delivery Approach: show 3 deployment phases/paths "
-                    "with named milestones, timeline, and a named owner role at each gate\n"
+                    "(e.g., 'Gartner 2024', 'Peer benchmark — F500 manufacturer', 'Client case study'); cite EVERY number\n"
+                    "6. slide_type=\"process_flow\" or \"benchmark_bars\" — Delivery Approach: show 3 deployment phases/paths "
+                    "with named milestones, timeline, and a named owner role at each gate; compare against peers if available\n"
                     "7. slide_type=\"table\" or \"column_cards\" — Risks & Failure Modes: MUST name 3–5 specific failure modes "
-                    "with concrete consequence (time lost, money at risk, or control gap), then the mitigation for each; "
-                    "NO generic risk language like 'change management risk' — name the actual failure\n"
+                    "with concrete consequence (time lost, money at risk, control gap) and source (source: ProcessModel risks, source: Client risk register), then mitigation\n"
                     "8. slide_type=\"big_number\" or \"stat_cards\" — Proof Trace: show a worked example, case outcome, or "
-                    "reference implementation with specific numbers (e.g., '$4.8M identified, 23 minutes, 85% confidence'); "
-                    "this is the concrete proof the approach works — not theoretical\n"
+                    "reference implementation with specific numbers (e.g., '$4.8M identified (source: Client case), 23 minutes (source: Baseline), 85% confidence (source: Pilot)'\n"
                     "9. slide_type=\"chart\" or \"table\" — Commercial View: show investment vs. return trajectory with "
-                    "payback period; include Phase 1 cost estimate\n"
+                    "payback period; cite financial sources (source: Portfolio data)\n"
                     "10. slide_type=\"bullets\" — Next Actions: exactly 3 numbered actions, each with a named owner role "
-                    "(not a person name), tied to a specific date or decision gate, ≤15 words each"
+                    "(not a person name), tied to a specific date or decision gate, ≤15 words each\n"
+                    "FINAL: 'Sources and Assumptions' summary slide with data sources, key assumptions, and confidence levels"
                 ),
                 "pyramid": (
                     "1. slide_type=\"title\" — Governing thought as tagline: state the headline conclusion, not the process name\n"
                     "2. slide_type=\"big_number\" or \"stat_cards\" — Supporting argument 1: the economic cost of the problem; "
-                    "quantify with a named metric (e.g., '$X wasted annually', 'Y% capacity absorbed by manual work')\n"
+                    "quantify with a named metric (e.g., '$X wasted annually (source: Client audit)', 'Y% capacity absorbed (source: ProcessModel)')\n"
                     "3. slide_type=\"column_cards\" — Supporting argument 2: the three structural causes of the problem; "
-                    "each column names a root cause, not a symptom\n"
-                    "4. slide_type=\"stack_layers\" — Supporting argument 3: the solution architecture at strategy → platform → "
-                    "operating model levels; each layer is an assertion\n"
-                    "5. slide_type=\"stat_cards\" — Evidence: 3 proof metrics from named external sources\n"
-                    "6. slide_type=\"chart\" or \"table\" — Proof: show trajectory or comparative data that validates the approach\n"
-                    "7. slide_type=\"process_flow\" or \"stack_layers\" — Implementation roadmap: phases with milestones, owners, dates\n"
-                    "8. slide_type=\"table\" — Risks & Failure Modes: 3–5 named failure modes with consequences and mitigations\n"
-                    "9. slide_type=\"chart\" — Commercial View: investment vs. return; payback timeline\n"
-                    "10. slide_type=\"bullets\" — Decision ask and next actions: 3 numbered items with owner roles and dates"
+                    "each column names a root cause with evidence source (source: Root cause analysis)\n"
+                    "4. slide_type=\"waterfall\" — Supporting argument 3: the solution architecture at strategy → platform → "
+                    "operating model levels; each layer shows value contribution\n"
+                    "5. slide_type=\"stat_cards\" — Evidence: 3 proof metrics from named external sources (source: Gartner, source: F500 peer, source: Case study)\n"
+                    "6. slide_type=\"chart\" or \"table\" — Proof: show trajectory or comparative data that validates the approach; cite sources\n"
+                    "7. slide_type=\"process_flow\" or \"benchmark_bars\" — Implementation roadmap: phases with milestones, owners, dates; compare against peer timelines\n"
+                    "8. slide_type=\"table\" — Risks & Failure Modes: 3–5 named failure modes with consequences and mitigations (source: ProcessModel risks)\n"
+                    "9. slide_type=\"chart\" — Commercial View: investment vs. return; payback timeline (source: Financial model)\n"
+                    "10. slide_type=\"bullets\" — Decision ask and next actions: 3 numbered items (format as '1. Item', '2. Item', '3. Item') with owner roles and dates\n"
+                    "FINAL: 'Sources and Assumptions' summary - Use slide_type='bullets' with numbered items: '1. Data sources...', '2. Assumptions...', '3. Confidence...'"
                 ),
                 "case_led": (
                     "1. slide_type=\"title\" — Client context as tagline: name the client, the industry, and the headline challenge\n"
                     "2. slide_type=\"big_number\" or \"stat_cards\" — Case for change: quantify the competitive or economic "
-                    "consequence of the status quo; reframe from 'we have a problem' to 'here is what it costs you annually'\n"
+                    "consequence of the status quo; EVERY number MUST have inline citation (source: ProcessModel | source: Client context | source: Benchmark)\n"
                     "3. slide_type=\"column_cards\" — Target outcomes: 3 measurable outcomes the engagement will deliver "
-                    "(not activities — outcomes with numbers: '60% cycle time reduction', '$50M cost removal')\n"
-                    "4. slide_type=\"stack_layers\" — Proposed approach (part 1): transformation architecture at 3 levels — "
-                    "strategy, platform, operating model\n"
-                    "5. slide_type=\"process_flow\" or \"table\" — Proposed approach (part 2): phased delivery plan with "
-                    "milestones, owners, and timelines\n"
+                    "(not activities — outcomes with numbers: '60% cycle time reduction', '$50M cost removal' — each MUST cite source)\n"
+                    "4. slide_type=\"waterfall\" — Proposed approach (part 1): transformation architecture at 3 levels — "
+                    "strategy, platform, operating model; each layer is a stacked bar showing value accumulation\n"
+                    "5. slide_type=\"process_flow\" or \"benchmark_bars\" — Proposed approach (part 2): phased delivery plan with "
+                    "milestones, owners, and timelines; OR comparative performance bars across phases\n"
                     "6. slide_type=\"stat_cards\" or \"chart\" — Proof points: 3 metrics from comparable engagements or "
-                    "industry benchmarks with source citations\n"
+                    "industry benchmarks; EVERY metric MUST include inline source attribution (source: Gartner | source: F500 peer | source: Case study)\n"
                     "7. slide_type=\"table\" or \"column_cards\" — Risks & Failure Modes: 3–5 named failure modes with "
-                    "concrete consequences and mitigations\n"
+                    "concrete consequences and mitigations; cite source for each risk assessment (source: ProcessModel | source: Risk register)\n"
                     "8. slide_type=\"big_number\" or \"stat_cards\" — Proof Trace: concrete case outcome or worked example "
-                    "with specific numbers; shows the approach is proven\n"
-                    "9. slide_type=\"chart\" or \"table\" — Commercial view: investment vs. return; payback period\n"
-                    "10. slide_type=\"bullets\" — Next actions: 3 items with named owner roles and specific dates"
+                    "with specific numbers (source: Client case | source: Peer benchmark); shows the approach is proven\n"
+                    "9. slide_type=\"chart\" or \"table\" — Commercial view: investment vs. return; payback period; cite financial sources\n"
+                    "10. slide_type=\"bullets\" — Next actions: 3 numbered items (format as '1. Item', '2. Item', '3. Item') with named owner roles and specific dates\n"
+                    "FINAL: After slide 10, always include a 'Sources and Assumptions' summary slide:\n"
+                    "  - Use slide_type='bullets' with numbered items: '1. Data sources: ...', '2. Key assumptions: ...', '3. Confidence levels: ...'\n"
+                    "  - Format MUST be numbered (1., 2., 3., etc.) so renderer applies white panel + dark-green accent design\n"
+                    "  - List all data sources used (ProcessModel, Client context, Benchmarks, Industry reports, etc.)\n"
+                    "  - Key assumptions made in analysis (e.g., 'assumes 80% adoption rate', 'based on F500 peer data')\n"
+                    "  - Confidence levels for estimates (High/Medium/Low)\n"
+                    "\nCRITICAL REQUIREMENTS FOR ALL SLIDES:\n"
+                    "- EVERY quantified claim (number, percentage, cost, timeline) MUST include inline source: (source: ProcessModel), (source: Benchmark), (source: Client data), etc.\n"
+                    "- NO generic claims like 'we save costs' — ALWAYS quantify with source (e.g., 'save 40% annually (source: F500 manufacturer baseline)')\n"
+                    "- EVERY slide_type MUST match the approved storyline type EXACTLY — use waterfall/benchmark_bars/harvey_balls as specified, not bullets/stack_layers as fallback\n"
+                    "- For cover slide: INCLUDE brand green (86BC24) header/footer bands and at least 80% content density"
                 ),
                 "compare": (
                     "1. Decision context\n2. Option criteria\n3-5. Option comparison\n6. Recommended option\n"

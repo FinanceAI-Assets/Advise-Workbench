@@ -119,7 +119,7 @@ function Fields({ fields }: { fields: LibraryField[] }) {
 
 const TWO_COLUMN = "grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]";
 
-export function ExtractChunkTab({ extraction, onContinue }: { extraction: LibraryExtractionDetail; onContinue: () => void }) {
+export function ExtractChunkTab({ extraction }: { extraction: LibraryExtractionDetail }) {
   const { chunks } = extraction;
   const [page, setPage] = useState(0);
   const [activeId, setActiveId] = useState(chunks[0]?.id ?? "");
@@ -183,15 +183,12 @@ export function ExtractChunkTab({ extraction, onContinue }: { extraction: Librar
           </>
         ) : null}
         <Callout tone="neutral" notice={extraction.provenance} />
-        <Button type="button" onClick={onContinue}>
-          Continue to index validation
-        </Button>
       </Panel>
     </div>
   );
 }
 
-export function IndexValidateTab({ validation, onContinue }: { validation: LibraryIndexValidationDetail; onContinue: () => void }) {
+export function IndexValidateTab({ validation }: { validation: LibraryIndexValidationDetail }) {
   return (
     <div className="space-y-4">
       <div className={TWO_COLUMN}>
@@ -202,9 +199,6 @@ export function IndexValidateTab({ validation, onContinue }: { validation: Libra
             rows={validation.checks}
             activeId={validation.checks[0]?.id}
           />
-          <Button type="button" onClick={onContinue}>
-            Continue to quality review
-          </Button>
         </Panel>
         <Panel title="Index inspection">
           <Fields fields={validation.inspection} />
@@ -228,14 +222,12 @@ export function QualityGatesTab({
   correctionSent,
   onRequestCorrection,
   onUploadCorrection,
-  publishAction,
 }: {
   quality: LibraryQualityGatesDetail;
   correctionSent: string | null;
   onRequestCorrection: () => void;
   /** Uploaded sources only: attach a corrected file to this practice. */
   onUploadCorrection?: () => void;
-  publishAction: ReactNode;
 }) {
   const open = quality.openCorrection;
   return (
@@ -267,7 +259,6 @@ export function QualityGatesTab({
       </Panel>
       <Panel title="Metadata & source review">
         <Fields fields={quality.metadata} />
-        {publishAction}
       </Panel>
     </div>
   );

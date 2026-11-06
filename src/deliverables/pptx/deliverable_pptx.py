@@ -307,6 +307,24 @@ class PPTXDeliverable(IDeliverable):
             tidy_presentation(prs)
             prs.save(out)
             logger.info("PPTX rendered successfully: %s", out)
+
+            # Validate saved PPTX can be read back without errors
+            try:
+                test_prs = Presentation(str(out))
+                bad_shapes = []
+                for slide_num, slide in enumerate(test_prs.slides, 1):
+                    for shape_idx, shape in enumerate(slide.shapes):
+                        if hasattr(shape, "table"):
+                            try:
+                                _ = shape.table
+                            except Exception as table_err:
+                                bad_shapes.append((slide_num, shape_idx, str(table_err)))
+                if bad_shapes:
+                    logger.error(f"[DEBUG-PPTX-VALIDATE] Found {len(bad_shapes)} corrupted table shapes: {bad_shapes}")
+                else:
+                    logger.info("[DEBUG-PPTX-VALIDATE] PPTX validation passed - all shapes readable")
+            except Exception as validate_err:
+                logger.error(f"[DEBUG-PPTX-VALIDATE] Failed to validate saved PPTX: {validate_err}")
             try:
                 from src.deliverables.artifact_integrity import write_pptx_integrity_manifest
 
@@ -743,6 +761,10 @@ class PPTXDeliverable(IDeliverable):
 
             heading = self._safe_text(card.get("heading"), "")
             body = self._safe_text(card.get("body"), "")
+
+            # Truncate body text to prevent dense paragraph text in cards
+            if len(body) > 200:
+                body = body[:200].rsplit(" ", 1)[0] + "…"
 
             _tc = self._text_color_for_fill(accent)
             self._add_text(slide, x + 0.20, y + 0.20, col_w - 0.40, 0.40, heading, 14, _tc, bold=True, font=self._header_font)

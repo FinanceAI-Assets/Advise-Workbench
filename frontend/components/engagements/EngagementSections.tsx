@@ -7,10 +7,12 @@ import { DocumentUploader } from "@/components/documents/DocumentUploader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { DataTable } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Textarea } from "@/components/ui/Textarea";
 import { ErrorNote, Field } from "@/components/workbench/PageFrame";
 import {
@@ -83,33 +85,28 @@ export function TeamSection({ id, detail }: SectionProps) {
     <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <Card className="space-y-3">
         <h2 className="text-base font-semibold text-[var(--text-default)]">Engagement members</h2>
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs text-[var(--text-muted)]">
-            <tr>
-              <th className="py-2 font-medium">Member</th>
-              <th className="py-2 font-medium">Role</th>
-              <th className="py-2 font-medium">Permission</th>
-              <th className="py-2 font-medium">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((member) => (
-              <tr
-                key={member.id}
-                onClick={() => setSelectedId(member.id)}
-                className={`cursor-pointer border-t border-[var(--surface-border)] ${
-                  member.id === selected?.id ? "bg-[#EFF6E6]" : ""
-                }`}
-              >
-                <td className="py-3 font-medium text-[var(--text-default)]">{member.name}</td>
-                <td className="py-3">
-                  {isLead ? (
+        <div className="overflow-hidden rounded-md border border-[var(--surface-border)]">
+          <DataTable
+            bare
+            paginate={false}
+            label="Engagement members"
+            rows={members}
+            rowKey={(member) => member.id}
+            onRowClick={(member) => setSelectedId(member.id)}
+            isRowActive={(member) => member.id === selected?.id}
+            columns={[
+              { key: "name", header: "Member", sortValue: (m) => m.name, cell: (m) => <span className="font-semibold text-[var(--text-default)]">{m.name}</span> },
+              {
+                key: "role",
+                header: "Role",
+                sortValue: (m) => m.role,
+                cell: (member) =>
+                  isLead ? (
                     <Select
                       aria-label={`Role for ${member.name}`}
                       value={member.role}
-                      onClick={(e) => e.stopPropagation()}
                       onChange={(e) => change.mutate({ action: "role", memberId: member.id, role: e.target.value })}
-                      className="w-auto"
+                      className="w-auto py-1 text-sm"
                     >
                       {MEMBER_ROLES.map((option) => (
                         <option key={option}>{option}</option>
@@ -117,14 +114,13 @@ export function TeamSection({ id, detail }: SectionProps) {
                     </Select>
                   ) : (
                     member.role
-                  )}
-                </td>
-                <td className="py-3 text-[var(--text-muted)]">{member.permission}</td>
-                <td className="py-3 text-[var(--text-muted)]">{member.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  ),
+              },
+              { key: "permission", header: "Permission", sortValue: (m) => m.permission, hideBelow: "md", cell: (m) => <span className="text-[var(--text-muted)]">{m.permission}</span> },
+              { key: "status", header: "Status", sortValue: (m) => m.status, cell: (m) => (m.status ? <StatusBadge>{m.status}</StatusBadge> : "—") },
+            ]}
+          />
+        </div>
         <ErrorNote error={change.error} />
         <p className="rounded-md bg-[var(--surface-muted)] px-3 py-2 text-xs text-[var(--text-muted)]">
           <span className="block font-semibold text-[var(--text-default)]">Least-privilege collaboration</span>
@@ -376,26 +372,22 @@ export function ExportSection({ id }: { id: string }) {
     <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <Card className="space-y-3">
         <h2 className="text-base font-semibold text-[var(--text-default)]">Artifacts &amp; approval gates</h2>
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs text-[var(--text-muted)]">
-            <tr>
-              <th className="py-2 font-medium">Artifact</th>
-              <th className="py-2 font-medium">Version</th>
-              <th className="py-2 font-medium">Review</th>
-              <th className="py-2 font-medium">Export</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.artifacts.map((artifact) => (
-              <tr key={artifact.id} className="border-t border-[var(--surface-border)]">
-                <td className="py-3 font-medium text-[var(--text-default)]">{artifact.name}</td>
-                <td className="py-3">{artifact.version}</td>
-                <td className="py-3">{artifact.review}</td>
-                <td className="py-3">{artifact.export}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-hidden rounded-md border border-[var(--surface-border)]">
+          <DataTable
+            bare
+            paginate={false}
+            label="Artifacts and approval gates"
+            rows={data.artifacts}
+            rowKey={(artifact) => artifact.id}
+            empty={<p className="text-center text-sm text-[var(--text-muted)]">No artifacts yet.</p>}
+            columns={[
+              { key: "name", header: "Artifact", sortValue: (a) => a.name, cell: (a) => <span className="font-semibold text-[var(--text-default)]">{a.name}</span> },
+              { key: "version", header: "Version", sortValue: (a) => a.version, cell: (a) => a.version },
+              { key: "review", header: "Review", sortValue: (a) => a.review, cell: (a) => <StatusBadge>{a.review}</StatusBadge> },
+              { key: "export", header: "Export", sortValue: (a) => a.export, cell: (a) => <StatusBadge>{a.export}</StatusBadge> },
+            ]}
+          />
+        </div>
         <p
           className={
             data.ready

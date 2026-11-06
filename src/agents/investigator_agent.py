@@ -68,7 +68,18 @@ def analyze_failures_node(state: InvestigatorState) -> InvestigatorState:
     # Extract key info from each attempt
     for i, attempt in enumerate(attempts):
         try:
-            error = attempt.get("error") or attempt.get("message", "Unknown")
+            # First check if error_details exists (from visual_qa.py with actual error type)
+            error_details = attempt.get("error_details", {})
+            if error_details and error_details.get("error_type"):
+                # Extract from error_details dict (includes RateLimitError, etc.)
+                error_type = error_details.get("error_type", "Unknown")
+                error_msg = error_details.get("error_message", "Unknown")
+                error = f"{error_type}: {error_msg}"
+                print(f"[INVESTIGATOR-NODE] Attempt {i+1}: Extracted error_details - {error_type}")
+            else:
+                # Fallback to legacy error/message fields
+                error = attempt.get("error") or attempt.get("message", "Unknown")
+
             stage = attempt.get("stage", "unknown")
             artifact = attempt.get("artifact", "unknown")
 
@@ -78,6 +89,7 @@ def analyze_failures_node(state: InvestigatorState) -> InvestigatorState:
                     "error": str(error)[:200],
                     "stage": stage,
                     "artifact": artifact,
+                    "error_details": error_details,  # Pass details forward for classification
                 }
             )
             error_messages.append(str(error).lower())
@@ -147,6 +159,7 @@ def classify_root_cause_node(state: InvestigatorState) -> InvestigatorState:
         "requirements_problem": "Requirements Problem",
         "technical_problem": "Technical Problem",
         "llm_problem": "LLM Problem",
+        "external_service_error": "External Service Error",
     }
 
     if not is_claude_enabled():
@@ -178,6 +191,9 @@ Classify into EXACTLY ONE category:
 - requirements_problem: Unclear/ambiguous specifications
 - technical_problem: Tool limitation, unsupported format
 - llm_problem: Model understanding failure, hallucination, logic error
+- external_service_error: API rate limit, circuit breaker, service unavailable
+
+IMPORTANT RULE: If you see "RateLimitError", "circuit breaker", "rate limit", "429", "Anthropic", "API", or "service" keywords in error messages, classify as "external_service_error" with 0.95+ confidence. These are infrastructure issues, not content/approach issues.
 
 Return JSON: {"root_cause": "category", "confidence": 0.0-1.0, "reasoning": "..."}"""
 

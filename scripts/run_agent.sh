@@ -481,6 +481,7 @@ OO_ENABLED="$(env_get OPENOBSERVE_ENABLED)"
 OO_URL="$(env_get OPENOBSERVE_URL)"; OO_URL="${OO_URL:-http://localhost:5080}"
 OO_PORT="$(echo "$OO_URL" | sed -E 's#.*:([0-9]+)/?$#\1#')"
 OO_UP=0
+OO_START_LOCAL=0  # set to 1 below when a local OpenObserve is installed and its port is free
 OO_HOSTPART="${OO_URL#*://}"; OO_HOSTPART="${OO_HOSTPART%%[:/]*}"
 case "$OO_HOSTPART" in localhost|127.0.0.1|"") OO_REMOTE=0 ;; *) OO_REMOTE=1 ;; esac
 if [ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 1 ]; then

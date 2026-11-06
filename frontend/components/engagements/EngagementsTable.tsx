@@ -1,64 +1,43 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-
 import { EngagementProgressBar } from "@/components/engagements/EngagementProgressBar";
 import { EngagementStageBadge } from "@/components/engagements/EngagementStageBadge";
-import { cn } from "@/lib/utils";
+import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import type { EngagementRow } from "@/types/api";
 
-export function EngagementsTable({ rows }: { rows: EngagementRow[] }) {
-  const router = useRouter();
+const COLUMNS: DataTableColumn<EngagementRow>[] = [
+  {
+    key: "engagement",
+    header: "Engagement",
+    sortValue: (row) => row.name,
+    cell: (row) => (
+      <>
+        <span className="block font-semibold text-[var(--text-default)] group-hover:text-[var(--accent-green-dark)]">{row.name}</span>
+        <span className="block text-xs text-[var(--text-muted)]">
+          {row.code} · {row.type}
+        </span>
+      </>
+    ),
+  },
+  { key: "stage", header: "Stage", sortValue: (row) => row.stage, cell: (row) => <EngagementStageBadge stage={row.stage} /> },
+  { key: "progress", header: "Progress", sortValue: (row) => row.progress, width: "w-40", cell: (row) => <EngagementProgressBar value={row.progress} /> },
+  { key: "owner", header: "Owner", sortValue: (row) => row.owner, hideBelow: "md", cell: (row) => row.owner },
+  { key: "next", header: "Next task", hideBelow: "lg", cell: (row) => <span className="text-[var(--text-muted)]">{row.nextTask}</span> },
+  { key: "due", header: "Due", sortValue: (row) => row.dueDate, cell: (row) => <span className="whitespace-nowrap text-[var(--text-muted)]">{row.dueDate}</span> },
+];
 
+/** One page of engagements (the page pages them on the server); the first, most recent, leads in green. */
+export function EngagementsTable({ rows }: { rows: EngagementRow[] }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-[var(--surface-border)] bg-white">
-      <table className="w-full min-w-[720px] text-left text-sm">
-        <thead>
-          <tr className="border-b border-[var(--surface-border)] text-xs text-[var(--text-muted)]">
-            <th className="px-4 py-3 font-medium">Engagement</th>
-            <th className="px-4 py-3 font-medium">Stage</th>
-            <th className="px-4 py-3 font-medium">Progress</th>
-            <th className="px-4 py-3 font-medium">Owner</th>
-            <th className="px-4 py-3 font-medium">Next task</th>
-            <th className="px-4 py-3 font-medium">Due</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={row.id}
-              onClick={() => router.push(`/engagements/${row.id}`)}
-              className={cn(
-                "cursor-pointer border-b border-[var(--surface-border)] last:border-b-0 hover:bg-[var(--surface-muted)]",
-                i === 0 && "border-l-2 border-l-[var(--accent-green)] bg-[#EFF6E6] hover:bg-[#EFF6E6]"
-              )}
-            >
-              <td className="px-4 py-3">
-                <Link
-                  href={`/engagements/${row.id}`}
-                  onClick={(e) => e.stopPropagation()}
-                  className="!text-inherit !no-underline"
-                >
-                  <p className="font-semibold text-[var(--text-default)]">{row.name}</p>
-                  <p className="text-xs text-[var(--text-muted)]">
-                    {row.code} · {row.type}
-                  </p>
-                </Link>
-              </td>
-              <td className="px-4 py-3">
-                <EngagementStageBadge stage={row.stage} />
-              </td>
-              <td className="px-4 py-3">
-                <EngagementProgressBar value={row.progress} />
-              </td>
-              <td className="px-4 py-3 text-[var(--text-default)]">{row.owner}</td>
-              <td className="px-4 py-3 text-[var(--text-default)]">{row.nextTask}</td>
-              <td className="px-4 py-3 text-[var(--text-muted)]">{row.dueDate}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      label="Engagements"
+      paginate={false}
+      columns={COLUMNS}
+      rows={rows}
+      rowKey={(row) => row.id}
+      rowHref={(row) => `/engagements/${row.id}`}
+      isRowActive={(row) => row.id === rows[0]?.id}
+      minWidth="min-w-[720px]"
+    />
   );
 }

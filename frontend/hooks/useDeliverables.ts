@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { extractApiErrorMessage } from "@/lib/api-error";
 import { useAuth } from "@/lib/auth-context";
@@ -81,6 +82,8 @@ export type RegisterClaim = {
 export type DeliverablesWithRaw = DeliverablesDetail & {
   runId: string;
   run: { id: string; status: string; createdAt: string | null; instruction: string };
+  // The engagement's latest run has no drafts, so these come from an earlier one.
+  fromEarlierRun: boolean;
   claims: RegisterClaim[];
   narrative: string;
   rawSlides: RawPptxSlide[];
@@ -89,6 +92,54 @@ export type DeliverablesWithRaw = DeliverablesDetail & {
   slideFooterMeta: string;
   claimsBySlideIndex: Record<number, SlideEvidenceLink[]>;
 };
+
+export type SlideDecision = "accepted" | "rejected";
+type SlideDecisions = Record<string, SlideDecision>;
+
+function readSlideDecisions(key: string): SlideDecisions {
+  try {
+    const saved: unknown = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+    return saved && typeof saved === "object" ? (saved as SlideDecisions) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Accept and reject decisions on a run's slides, by slide number from 1. Kept in this browser only. */
+export function useSlideDecisions(runId: string) {
+  const { user } = useAuth();
+  const key = `slide-decisions:${user?.id ?? ""}:${runId}`;
+  const [decisions, setDecisions] = useState<SlideDecisions>({});
+
+  useEffect(() => {
+    setDecisions(readSlideDecisions(key));
+  }, [key]);
+
+  function decideAll(slideNumbers: number[], decision: SlideDecision | null) {
+    const next = { ...readSlideDecisions(key) };
+    for (const slideNumber of slideNumbers) {
+      if (decision) next[slideNumber] = decision;
+      else delete next[slideNumber];
+    }
+    setDecisions(next);
+    try {
+      window.localStorage.setItem(key, JSON.stringify(next));
+    } catch {
+      // Storage unavailable: the decision still holds until the page is closed.
+    }
+  }
+
+  return {
+    decisionOf: (slideNumber: number): SlideDecision | undefined => decisions[slideNumber],
+    decide: (slideNumber: number, decision: SlideDecision | null) => decideAll([slideNumber], decision),
+    decideAll,
+  };
+}
+
+function hasDrafts(data: RunArtifactsResponse): boolean {
+  const bag = data.artifacts ?? {};
+  return (Array.isArray(bag.pptx_slides) && bag.pptx_slides.length > 0) || Boolean(bag.narrative_md || bag.sop_markdown || bag.docx_base64);
+}
 
 export function useDeliverablesQuery(pid: string, runId?: string, enabled = true) {
   const { api, token } = useAuth();
@@ -106,16 +157,34 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
       if (!runsRes.ok) throw new Error(extractApiErrorMessage(runsData, "Failed to load runs"));
 
       const runs = runsData.items ?? [];
-      const run = runId ? runs.find((r) => r.id === runId) : runs[0];
-      if (!run) return null; // no runs yet for this engagement — caller shows an empty state
+      const latest = runId ? runs.find((r) => r.id === runId) : runs[0];
+      if (!latest) return null; // no runs yet for this engagement — caller shows an empty state
 
-      const [artifactsRes, historyRes, evidenceRes] = await Promise.all([
-        api(`/api/runs/${encodeURIComponent(pid)}/${encodeURIComponent(run.id)}/artifacts`),
+      const loadArtifacts = async (id: string) => {
+        const res = await api(`/api/runs/${encodeURIComponent(pid)}/${encodeURIComponent(id)}/artifacts`);
+        const body = (await res.json().catch(() => ({}))) as RunArtifactsResponse;
+        if (!res.ok) throw new Error(extractApiErrorMessage(body, "Failed to load artifacts"));
+        return body;
+      };
+
+      // Newest first: a run that produced nothing must not hide the drafts of an earlier one.
+      let run = latest;
+      let artifactsData = await loadArtifacts(latest.id);
+      if (!runId && !hasDrafts(artifactsData)) {
+        for (const earlier of runs.slice(1)) {
+          const candidate = await loadArtifacts(earlier.id).catch(() => null);
+          if (candidate && hasDrafts(candidate)) {
+            run = earlier;
+            artifactsData = candidate;
+            break;
+          }
+        }
+      }
+
+      const [historyRes, evidenceRes] = await Promise.all([
         api(`/api/runs/${encodeURIComponent(pid)}/${encodeURIComponent(run.id)}/canvas-history`),
         api(`/api/runs/${encodeURIComponent(pid)}/${encodeURIComponent(run.id)}/evidence-claims`),
       ]);
-      const artifactsData = (await artifactsRes.json().catch(() => ({}))) as RunArtifactsResponse;
-      if (!artifactsRes.ok) throw new Error(extractApiErrorMessage(artifactsData, "Failed to load artifacts"));
       const historyData = (await historyRes.json().catch(() => ({}))) as CanvasHistoryResponse;
       const evidenceData = (await evidenceRes.json().catch(() => ({}))) as {
         claims?: Array<Record<string, unknown>>;
@@ -185,6 +254,7 @@ export function useDeliverablesQuery(pid: string, runId?: string, enabled = true
         engagementId: pid,
         runId: run.id,
         run: { id: run.id, status: run.status, createdAt: run.created_at, instruction: run.instruction ?? "" },
+        fromEarlierRun: run.id !== latest.id,
         claims: claims.map((claim, i) => ({
           id: claim.id ?? `claim-${i}`,
           slide: claim.slide_index ?? 1,

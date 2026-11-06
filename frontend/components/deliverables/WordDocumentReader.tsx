@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, Send } from "lucide-react";
+import { Download } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -59,14 +59,12 @@ export function DocumentOutline({
   );
 }
 
-/** Word tab, main column: one page of the document at a time, with review and download actions. */
+/** Word tab, main column: one page of the document at a time, with a download action. */
 export function WordDocumentReader({
   docx,
   page,
   onPageChange,
   assumption,
-  reviewLabel,
-  onReview,
   onDownload,
 }: {
   docx: DeliverablesDetail["docx"];
@@ -74,8 +72,6 @@ export function WordDocumentReader({
   onPageChange: (page: number) => void;
   // Shown under the page when claims in the run still lack a source.
   assumption?: { title: string; description: string } | null;
-  reviewLabel: string;
-  onReview: () => void;
   onDownload?: () => void;
 }) {
   const pages = toPages(docx.preview.sections);
@@ -124,16 +120,12 @@ export function WordDocumentReader({
             Next page →
           </Button>
         ) : null}
-        <Button type="button" className="flex items-center gap-2" onClick={onReview}>
-          <Send size={16} aria-hidden />
-          {reviewLabel}
-        </Button>
         <Button
           variant="secondary"
           type="button"
           disabled={!onDownload}
           onClick={onDownload}
-          title={onDownload ? undefined : "Available after independent approval"}
+          title={onDownload ? undefined : "Available after the deck is accepted"}
           className="flex items-center gap-2"
         >
           <Download size={16} aria-hidden />

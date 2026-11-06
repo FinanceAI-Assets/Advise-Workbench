@@ -8,11 +8,11 @@ import {
   Library,
   LogOut,
   MessagesSquare,
-  ShieldCheck,
   Settings,
   Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
+  UserCog,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -20,7 +20,6 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 
 import { BrandMark } from "@/components/shell/BrandMark";
-import { WorkspaceSwitcher } from "@/components/shell/WorkspaceSwitcher";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
@@ -118,8 +117,8 @@ function SidebarUserFooter({ onNavigate }: { onNavigate?: () => void }) {
           onClick={onNavigate}
           className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm !text-[#C0C8BC] !no-underline hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
         >
-          <ShieldCheck size={16} />
-          Switch to admin console
+          <UserCog size={16} />
+          Switch to admin workspace
         </Link>
       ) : null}
       <Link
@@ -269,10 +268,6 @@ export function ShellSidebar({
             {desktopCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
         </div>
-        {/* Always show WorkspacePicker */}
-        <div className="mb-6 shrink-0 px-0">
-          <WorkspaceSwitcher admin={false} />
-        </div>
         {/* Always show navigation items */}
         <nav className="shell-sidebar-nav flex-1 space-y-1">
           <NavLinkList />
@@ -336,9 +331,6 @@ export function ShellSidebar({
             >
               <X size={20} className="text-[#FFFFFF]" />
             </Button>
-          </div>
-          <div className="mb-4 shrink-0">
-            <WorkspaceSwitcher admin={false} />
           </div>
           <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             <NavLinkList onNavigate={onMobileClose} />

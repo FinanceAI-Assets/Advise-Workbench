@@ -164,7 +164,7 @@ export function RunProgressCard({ pid, showArtifactsLink = true }: { pid: string
               {approve.isPending ? "Starting…" : "Approve plan and generate"}
             </Button>
           ) : null}
-          {showArtifactsLink && (run.finished || run.active || stoppedWithFiles) ? (
+          {showArtifactsLink && ((run.active || stoppedWithFiles) || (run.finished && run.evaluationPassed)) ? (
             <Link href={`/engagements/${pid}/deliverables`} className="!no-underline">
               <Button variant={run.finished ? "primary" : "secondary"}>
                 {run.finished ? "Open drafts and submit for review" : "View artifacts"}

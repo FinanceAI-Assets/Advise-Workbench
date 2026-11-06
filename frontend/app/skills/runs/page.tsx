@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 
-import { Badge } from "@/components/ui/Badge";
-import { Card } from "@/components/ui/Card";
+import { DataTable, DataTableToolbar } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { StatusBadge, type StatusTone } from "@/components/ui/StatusBadge";
 import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useSkillRunsQuery } from "@/hooks/useWorkbench";
 
-const TONE: Record<string, "success" | "warning" | "error" | "secondary"> = {
+const STATUS_TONE: Record<string, StatusTone> = {
   done: "success",
   review_ready: "success",
   approved: "warning",
@@ -19,8 +20,13 @@ const TONE: Record<string, "success" | "warning" | "error" | "secondary"> = {
 
 export default function SkillRunHistoryPage() {
   const runs = useSkillRunsQuery();
+  const [query, setQuery] = useState("");
   if (runs.isPending) return <PageSkeleton />;
   const items = runs.data?.items ?? [];
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? items.filter((run) => [run.id, run.instruction, run.engagement, run.skill, run.status].some((v) => String(v ?? "").toLowerCase().includes(needle)))
+    : items;
 
   return (
     <PageFrame
@@ -37,39 +43,43 @@ export default function SkillRunHistoryPage() {
       {items.length === 0 ? (
         <EmptyState title="No runs yet" description="Run a skill in an engagement to see it here." />
       ) : (
-        <Card className="overflow-x-auto p-0">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-[var(--surface-muted)] text-xs text-[var(--text-muted)]">
-              <tr>
-                <th className="px-4 py-2 font-medium">Run</th>
-                <th className="px-4 py-2 font-medium">Engagement</th>
-                <th className="px-4 py-2 font-medium">Skill</th>
-                <th className="px-4 py-2 font-medium">Outputs</th>
-                <th className="px-4 py-2 font-medium">Date</th>
-                <th className="px-4 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((run) => (
-                <tr key={run.id} className="border-t border-[var(--surface-border)] align-top">
-                  <td className="px-4 py-3">
-                    <Link href={`/engagements/${run.projectId}/deliverables`} className="font-medium">
-                      {run.id}
-                    </Link>
-                    <p className="text-xs text-[var(--text-muted)]">{run.instruction}</p>
-                  </td>
-                  <td className="px-4 py-3">{run.engagement}</td>
-                  <td className="px-4 py-3">{run.skill}</td>
-                  <td className="px-4 py-3">{run.outputs}</td>
-                  <td className="px-4 py-3">{run.when}</td>
-                  <td className="px-4 py-3">
-                    <Badge variant={TONE[run.status] ?? "secondary"}>{run.status.replaceAll("_", " ")}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+        <>
+          <DataTableToolbar search={query} onSearch={setQuery} searchLabel="Search runs" placeholder="Search by run, engagement or skill" />
+          <DataTable
+            label="Skill runs"
+            itemName="runs"
+            rows={visible}
+            rowKey={(run) => run.id}
+            rowHref={(run) => `/engagements/${run.projectId}/deliverables`}
+            minWidth="min-w-[820px]"
+            empty={<p className="text-center text-sm text-[var(--text-muted)]">No runs match your search.</p>}
+            columns={[
+              {
+                key: "run",
+                header: "Run",
+                sortValue: (run) => run.id,
+                cell: (run) => (
+                  <>
+                    <span className="block font-semibold text-[var(--text-default)] group-hover:text-[var(--accent-green-dark)]">{run.id}</span>
+                    <span className="block max-w-[320px] truncate text-xs text-[var(--text-muted)]" title={run.instruction}>
+                      {run.instruction}
+                    </span>
+                  </>
+                ),
+              },
+              { key: "engagement", header: "Engagement", sortValue: (run) => run.engagement, cell: (run) => run.engagement },
+              { key: "skill", header: "Skill", sortValue: (run) => run.skill, cell: (run) => run.skill },
+              { key: "outputs", header: "Outputs", hideBelow: "lg", cell: (run) => <span className="text-[var(--text-muted)]">{run.outputs}</span> },
+              { key: "when", header: "Date", sortValue: (run) => run.when, cell: (run) => <span className="whitespace-nowrap text-[var(--text-muted)]">{run.when}</span> },
+              {
+                key: "status",
+                header: "Status",
+                sortValue: (run) => run.status,
+                cell: (run) => <StatusBadge tone={STATUS_TONE[run.status]}>{run.status.replaceAll("_", " ")}</StatusBadge>,
+              },
+            ]}
+          />
+        </>
       )}
     </PageFrame>
   );

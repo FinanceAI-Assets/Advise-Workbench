@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
+import { EngagementTabs } from "@/components/engagements/EngagementTabs";
 import { RerunTestsButton } from "@/components/skill-management/SkillActions";
 import {
   BUTTON_COMPACT,
@@ -21,7 +22,6 @@ import { BackButton } from "@/components/workbench/BackButton";
 import { PageFrame } from "@/components/workbench/PageFrame";
 import { useSkillManagement } from "@/hooks/useSkillManagement";
 import { candidateGate, passedCount, type Skill, totalCount } from "@/lib/skillManagement";
-import { cn } from "@/lib/utils";
 
 function RegistryFrame({ active, crumb, title, subtitle, children }: { active: "published" | "candidates"; crumb: string; title: string; subtitle: string; children: React.ReactNode }) {
   const { skills } = useSkillManagement();
@@ -45,8 +45,8 @@ function RegistryFrame({ active, crumb, title, subtitle, children }: { active: "
       <TabLinks
         active={active}
         tabs={[
-          { key: "published", label: `Published (${published})`, href: SKILLS_HOME },
-          { key: "candidates", label: `Candidates (${candidates})`, href: `${SKILLS_HOME}/candidates` },
+          { key: "published", label: "Published", count: published, href: SKILLS_HOME },
+          { key: "candidates", label: "Candidates", count: candidates, href: `${SKILLS_HOME}/candidates` },
         ]}
       />
       {children}
@@ -68,26 +68,7 @@ function PublishedPeek({ skill }: { skill: Skill }) {
   const p = skill.published!;
   return (
     <Panel title={`Selected: ${skill.name}`} className="h-fit">
-      <div className="flex flex-wrap gap-x-5 border-b border-[var(--surface-border)]" role="tablist" aria-label={`${skill.name} details`}>
-        {PEEK_TABS.map((item) => (
-          <Button
-            key={item.key}
-            type="button"
-            variant="ghost"
-            role="tab"
-            aria-selected={tab === item.key}
-            onClick={() => setTab(item.key)}
-            className={cn(
-              "-mb-px rounded-none border-b-2 px-0 pb-2 pt-0 text-xs font-normal hover:bg-transparent",
-              tab === item.key
-                ? "border-[var(--accent-green)] font-medium text-[var(--accent-green-dark)]"
-                : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-default)]"
-            )}
-          >
-            {item.label}
-          </Button>
-        ))}
-      </div>
+      <EngagementTabs tabs={PEEK_TABS} active={tab} onChange={setTab} />
 
       {tab === "definition" ? (
         <>

@@ -81,6 +81,7 @@ def run_drawio_agent(ctx: AgentContext) -> AgentOutput:
         )
         user = (
             "Generate a diagrams.net mxGraphModel XML diagram from the ProcessModel below.\n\n"
+            "**CRITICAL REQUIREMENT:** Include diagram metadata with ProcessModel source citation (source: ProcessModel) in cell labels.\n\n"
             "Required XML structure:\n"
             "<mxGraphModel><root>\n"
             "  <mxCell id='0'/>\n"
@@ -89,7 +90,7 @@ def run_drawio_agent(ctx: AgentContext) -> AgentOutput:
             "</root></mxGraphModel>\n\n"
             "Step cells (one per ProcessModel.steps entry):\n"
             "  id='sN' where N is the step index (s1, s2, ...)\n"
-            "  value='<step.name>'\n"
+            "  value='<step.name>' or '<step.name>\\n(source: ProcessModel)' if step includes metrics\n"
             "  vertex='1' parent='1'\n"
             "  style='rounded=1;whiteSpace=wrap;html=1;'\n"
             "  <mxGeometry x='{40 + (N-1)*160}' y='100' width='140' height='60' as='geometry'/>\n\n"

@@ -30,6 +30,7 @@ if not dotenv_ignored():
 from src.app.api.routes import router
 from src.app.api.wiki import router as wiki_router
 from src.app.api.failure_tracking import router as failure_tracking_router
+from src.app.api.phase5_hitl import router as phase5_router
 from src.app.api.quality_evaluation import router as quality_evaluation_router
 from src.core.config import (
     log_document_pipeline_config,
@@ -228,6 +229,8 @@ app.include_router(router, prefix="/api")
 app.include_router(wiki_router)
 
 app.include_router(failure_tracking_router)
+
+app.include_router(phase5_router)
 
 app.include_router(quality_evaluation_router)
 
