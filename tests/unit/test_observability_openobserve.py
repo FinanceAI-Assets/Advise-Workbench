@@ -74,7 +74,7 @@ def test_each_run_phase_gets_a_span(graph_env, monkeypatch: pytest.MonkeyPatch) 
     behaviour["evaluate"] = (False, "Evaluator checks failed")
     seen = _record_spans(monkeypatch, agent_graph)
     agent_graph.execute_run_with_graph("p_1", "run_spans")
-    assert [name for name, _ in seen] == ["run.phase.prepare", "run.phase.context", "run.phase.generate", "run.phase.evaluate"]
+    assert [name for name, _ in seen] == ["run.phase.prepare", "run.phase.context", "run.phase.path_router", "run.phase.generate", "run.phase.evaluate"]
     last = seen[-1][1]
     assert (last["run_id"], last["project_id"], last["graph.thread_id"]) == ("run_spans", "p_1", "run_spans:attempt-0")
     assert (last["run.outcome_ok"], last["run.outcome_error"]) == (False, "Evaluator checks failed")

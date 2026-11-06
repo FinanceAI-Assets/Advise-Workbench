@@ -2639,8 +2639,16 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
 
                 attempts_data = []
                 for i, event in enumerate(reversed(retry_events)):
-                    payload = event.payload or {}
-                    error_summary = payload.get("evaluator_pipeline", {}).get("summary", "Unknown error")
+                    # RunEvent.payload is a JSON string; the canonical envelope nests the
+                    # event body under "payload".
+                    payload = event.payload_json
+                    body = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+                    pipeline = body.get("evaluator_pipeline") or payload.get("evaluator_pipeline")
+                    error_summary = (
+                        str(pipeline.get("summary") or "Unknown error")
+                        if isinstance(pipeline, dict)
+                        else "Unknown error"
+                    )
                     attempts_data.append({
                         "attempt": i + 1,
                         "error": error_summary,

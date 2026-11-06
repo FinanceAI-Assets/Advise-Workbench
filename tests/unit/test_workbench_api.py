@@ -242,7 +242,9 @@ def _make_admin(email: str) -> None:
         db.scalar(select(User).where(User.email == email)).is_admin = True
 
 
-def test_admin_console_requires_an_administrator() -> None:
+def test_admin_console_requires_an_administrator(monkeypatch: pytest.MonkeyPatch) -> None:
+    # In development every signed-in user may open the admin console; outside it only administrators may.
+    monkeypatch.setattr(settings, "advise_workbench_env", "production")
     client = TestClient(fastapi_app)
     headers = _login(client, _email("member"))
     for path in ("/api/admin/overview", "/api/admin/engagements", "/api/admin/reviews", "/api/admin/export/audit.csv"):

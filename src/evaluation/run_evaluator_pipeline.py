@@ -107,7 +107,13 @@ def build_evaluator_pipeline(
     has_gateable_outputs = bool(requested_set & gateable_outputs)
     qa_passed = True if not has_gateable_outputs else bool((qa_report or {}).get("passed"))
     visual_status = str((visual_qa_report or {}).get("status") or "").lower()
-    visual_passed = visual_status in set(proposal_policy.get("visual_pass_statuses") or {"pass", "warn", "skip"})
+    # A skipped visual check is not a pass for a deck: skip means nothing was inspected. It is accepted
+    # only for runs that have no deck to inspect (for example text-only outputs).
+    visual_ok = set(proposal_policy.get("visual_pass_statuses") or {"pass", "warn"})
+    visual_ok.discard("skip")
+    if "pptx" not in requested_set:
+        visual_ok.add("skip")
+    visual_passed = visual_status in visual_ok
     guardrail_passed = (
         True
         if not has_gateable_outputs

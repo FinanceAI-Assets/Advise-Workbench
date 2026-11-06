@@ -73,10 +73,35 @@ def load_pptx_render_signal_hints(run_dir: Any) -> tuple[list[dict[str, Any]], l
     return hints, findings
 
 
+def _count_pending_placeholders(run_dir: Any) -> int:
+    """Number of slides rendered with a content-pending placeholder."""
+    path = run_dir / "pptx_render_signals.json"
+    if not path.exists():
+        return 0
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    pending = raw.get("content_pending") if isinstance(raw, dict) else None
+    if not isinstance(pending, list):
+        return 0
+    count = 0
+    for item in pending:
+        try:
+            if isinstance(item, dict) and int(item.get("slide_index") or 0) > 0:
+                count += 1
+        except Exception:  # noqa: S112 - ignore malformed entries
+            continue
+    return count
+
+
 def augment_visual_qa_with_render_hints(visual_qa_report: dict[str, Any], run_dir: Any) -> dict[str, Any]:
     hints, findings = load_pptx_render_signal_hints(run_dir)
     if not hints:
         return visual_qa_report
+    # Only unresolved placeholders are a hard failure. Storytelling signals (clutter, weak titles,
+    # transitions) are advisory: they feed the retry hints and downgrade the status to warn at most.
+    placeholders = _count_pending_placeholders(run_dir)
     report = dict(visual_qa_report or {})
     per_artifact = report.get("per_artifact")
     if not isinstance(per_artifact, dict):
@@ -89,9 +114,15 @@ def augment_visual_qa_with_render_hints(visual_qa_report: dict[str, Any], run_di
     merged_hints = existing_hints if isinstance(existing_hints, list) else []
     merged_hints.extend(hints)
     pptx_assessment["remediation_hints"] = merged_hints
-    pptx_assessment["status"] = "fail"
+    if placeholders:
+        pptx_assessment["status"] = "fail"
+    elif pptx_assessment.get("status") not in ("fail", "warn"):
+        pptx_assessment["status"] = "warn"
     prior_summary = str(pptx_assessment.get("summary") or "").strip()
-    suffix = f"{len(hints)} slide(s) contain render placeholders."
+    if placeholders:
+        suffix = f"{placeholders} slide(s) contain render placeholders."
+    else:
+        suffix = f"{len(hints)} slide(s) have storytelling or readability signals to review."
     pptx_assessment["summary"] = f"{prior_summary} {suffix}".strip()
     per_artifact["pptx"] = pptx_assessment
     report["pptx_assessment"] = pptx_assessment
@@ -99,9 +130,14 @@ def augment_visual_qa_with_render_hints(visual_qa_report: dict[str, Any], run_di
     merged_findings = report_findings if isinstance(report_findings, list) else []
     merged_findings.extend(findings)
     report["findings"] = merged_findings
-    report["status"] = "fail"
     base_summary = str(report.get("summary") or "").strip()
-    report["summary"] = f"{base_summary} PPTX render checks found unresolved placeholders.".strip()
+    if placeholders:
+        report["status"] = "fail"
+        report["summary"] = f"{base_summary} PPTX render checks found unresolved placeholders.".strip()
+    else:
+        if report.get("status") not in ("fail", "warn"):
+            report["status"] = "warn"
+        report["summary"] = f"{base_summary} PPTX render checks flagged storytelling signals.".strip()
     return report
 
 

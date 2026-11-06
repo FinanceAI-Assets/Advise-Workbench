@@ -543,3 +543,45 @@ class InvestigatorAgent:
     def investigate_and_decide(self, attempts: list[dict], context: dict[str, Any]) -> dict[str, Any]:
         """Legacy method - delegates to LangGraph implementation."""
         return investigate_and_decide(attempts, context)
+
+    # The step-level methods below delegate to the graph nodes so the legacy
+    # class keeps exposing each investigation step on its own.
+
+    @staticmethod
+    def _state(**values: Any) -> InvestigatorState:
+        state: InvestigatorState = {
+            "attempts": [],
+            "context": {},
+            "analysis": {},
+            "classification": {},
+            "chat_message": "",
+            "routing_decision": {},
+            "investigator_confidence": 0.0,
+            "ready_to_route": False,
+        }
+        state.update(values)  # type: ignore[typeddict-item]
+        return state
+
+    def analyze_failures(self, attempts: list[dict]) -> dict[str, Any]:
+        """Find patterns across the failed attempts."""
+        return analyze_failures_node(self._state(attempts=attempts))["analysis"]
+
+    def classify_root_cause(self, analysis: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        """Classify the root cause of the failures."""
+        state = self._state(analysis=analysis, context=context)
+        return classify_root_cause_node(state)["classification"]
+
+    def generate_chat_explanation(self, analysis: dict[str, Any], classification: dict[str, Any]) -> str:
+        """Write the chat message that explains the investigation."""
+        state = self._state(analysis=analysis, classification=classification)
+        return generate_chat_explanation_node(state)["chat_message"]
+
+    def make_routing_decision(
+        self, classification: dict[str, Any], context_validation: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Decide which phase the run goes back to."""
+        state = self._state(
+            classification=classification,
+            context={"context_validation": context_validation or {}},
+        )
+        return make_routing_decision_node(state)["routing_decision"]
