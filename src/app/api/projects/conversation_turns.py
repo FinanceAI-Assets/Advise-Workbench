@@ -93,12 +93,17 @@ def start_background(pid: str, user: User, db: Session, work: Work) -> dict:
 
 def start_turn(pid: str, body: ConversationMessageRequest, user: User, db: Session) -> dict:
     """Answer a chat message in the background."""
-    from src.app.api.projects.conversation import _post_project_conversation_message_impl
+    from src.app.api.projects.conversation import _post_project_conversation_message_impl, _record_activity_sync, _start_session_sync
 
     content = (body.content or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="content must not be empty")
     request = ConversationMessageRequest(content=content)
+
+    # Record activity for idle detection (since we're not using FastAPI BackgroundTasks here)
+    _start_session_sync(pid)
+    _record_activity_sync(pid)
+
     return start_background(
         pid, user, db, lambda session, who, on_phase: _post_project_conversation_message_impl(pid, request, who, session, on_phase=on_phase)
     )
