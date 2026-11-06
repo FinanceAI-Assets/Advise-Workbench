@@ -120,6 +120,9 @@ def tidy_slide_placeholders(slide: Any) -> None:
     for shape in list(slide.placeholders):
         if title is not None and shape.shape_id == title.shape_id:
             continue
+        # Skip table shapes - they should not be removed
+        if hasattr(shape, "table"):
+            continue
         if not (shape.has_text_frame and shape.text_frame.text.strip()):
             shape._element.getparent().remove(shape._element)
 

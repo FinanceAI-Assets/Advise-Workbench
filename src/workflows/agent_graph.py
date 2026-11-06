@@ -36,6 +36,7 @@ PHASE_ORDER = (
     "path_rag_search",  # NEW: Phase 2 Path 1.b Node
     "generate",
     "evaluate",
+    "hitl_review",  # NEW: Phase 5 HITL Design Review
     "remember",
     "finalize"
 )

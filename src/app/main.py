@@ -25,6 +25,7 @@ load_dotenv(_repo_root / ".env", override=True)
 from src.app.api.routes import router
 from src.app.api.wiki import router as wiki_router
 from src.app.api.quality_evaluation import router as quality_evaluation_router
+from src.app.api.phase5_hitl import router as phase5_router
 from src.core.config import log_memory_config_warnings, log_run_queue_startup_config, log_wiki_config_warnings, settings
 from src.deliverables.deliverable import DeliverableRegistry
 from src.deliverables.docx.deliverable_docx import DOCXDeliverable
@@ -169,6 +170,8 @@ app.include_router(router, prefix="/api")
 app.include_router(wiki_router)
 
 app.include_router(quality_evaluation_router)
+
+app.include_router(phase5_router)
 
 
 @app.get("/health")

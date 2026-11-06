@@ -71,26 +71,36 @@ class ContextValidator:
                 "description": "Wiki and best practice suggest different strategic directions"
             })
 
-        # Pattern 3: Timeline/planning mismatch
-        wiki_has_timeline = any(word in wiki_text for word in ["month", "quarter", "year", "timeline"])
-        lp_quarterly = "quarterly" in lp_text or "q1" in lp_text
+        # Pattern 3: Timeline/planning mismatch - ONLY flag if there's a REAL conflict
+        # (e.g., wiki says "annual" but LP says "monthly", not just presence of timeline words)
+        wiki_annual = "annual" in wiki_text or "yearly" in wiki_text
+        wiki_monthly = "monthly" in wiki_text
+        wiki_quarterly = "quarterly" in wiki_text or "q1" in wiki_text or "q2" in wiki_text
 
-        if wiki_has_timeline and lp_quarterly:
+        lp_annual = "annual" in lp_text or "yearly" in lp_text
+        lp_monthly = "monthly" in lp_text
+        lp_quarterly = "quarterly" in lp_text or "q1" in lp_text or "q2" in lp_text
+
+        # Only flag if there's actual contradiction (e.g., wiki says annual but LP says monthly)
+        if (wiki_annual and (lp_monthly or lp_quarterly)) or (wiki_monthly and lp_annual) or (wiki_quarterly and lp_monthly and not wiki_monthly):
             conflicts.append({
                 "field": "planning_cadence",
                 "wiki_indicator": "Custom timeline found",
-                "lp_indicator": "Quarterly planning recommended",
+                "lp_indicator": "Different planning recommended",
                 "severity": "medium",
                 "description": "Wiki and best practice use different planning cycles"
             })
+
+        # Only ask for clarification on HIGH severity conflicts, not all conflicts
+        has_high_severity = any(c.get("severity") == "high" for c in conflicts)
 
         return {
             "has_conflicts": len(conflicts) > 0,
             "conflict_count": len(conflicts),
             "conflicts": conflicts,
             "severity": self._calculate_severity(conflicts),
-            "needs_clarification": len(conflicts) > 0,
-            "recommendation": "ask_user" if conflicts else "continue"
+            "needs_clarification": has_high_severity,
+            "recommendation": "ask_user" if has_high_severity else "continue"
         }
 
     def check_freshness(self) -> dict[str, Any]:
@@ -133,7 +143,8 @@ class ContextValidator:
                     severity = "low"
                     confidence -= 0.05
 
-                if age_days > 30:
+                # Only flag as an issue if truly stale (>90 days)
+                if age_days > 90:
                     issues.append({
                         "source": ref.get("title", "Unknown wiki page"),
                         "last_updated": last_updated.isoformat(),
@@ -150,7 +161,7 @@ class ContextValidator:
             "needs_clarification": len(issues) > 0 and any(
                 i["severity"] == "high" for i in issues
             ),
-            "recommendation": "ask_user" if issues and confidence < 0.7 else "continue"
+            "recommendation": "ask_user" if issues and any(i["severity"] == "high" for i in issues) else "continue"
         }
 
     def validate_all(self) -> dict[str, Any]:
@@ -164,13 +175,15 @@ class ContextValidator:
         # Combine reports
         has_issues = conflicts_report["has_conflicts"] or freshness_report["needs_clarification"]
         overall_confidence = freshness_report["overall_confidence"]
+        # Only ask for clarification on HIGH severity conflicts or freshness issues, not all conflicts
+        needs_clarification = conflicts_report["needs_clarification"] or freshness_report["needs_clarification"]
 
         return {
             "has_issues": has_issues,
             "conflicts": conflicts_report,
             "freshness": freshness_report,
             "overall_confidence": overall_confidence,
-            "needs_clarification": has_issues,
+            "needs_clarification": needs_clarification,
             "clarification_items": [
                 {
                     "type": "conflict",

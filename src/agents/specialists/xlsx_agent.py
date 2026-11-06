@@ -144,11 +144,12 @@ def run_xlsx_agent(ctx: AgentContext) -> AgentOutput:
                 "  Inputs    — step.inputs joined by ', '; '—' if empty\n"
                 "  Outputs   — step.outputs joined by ', '; '—' if empty\n"
                 "  Tools     — step.tools joined by ', '; '—' if empty\n"
-                "  Duration  — step.duration_estimate; '—' if absent\n"
-                "  Notes     — step.notes; '—' if absent\n\n"
+                "  Duration  — step.duration_estimate; if present, cite source (source: ProcessModel) after the value; '—' if absent\n"
+                "  Notes     — step.notes; add source citations for any metrics or estimates included\n\n"
+                "**CRITICAL REQUIREMENT:** Every quantified claim (duration, resource estimates) MUST include (source: ProcessModel) citation.\n\n"
                 "Header row format: | Activity | Owner | Inputs | Outputs | Tools | Duration | Notes |\n"
                 "Separator row format: |---|---|---|---|---|---|---|\n"
-                "One data row per step. No title, no summary row.\n\n"
+                "One data row per step. No title, no summary row. Include a final Sources & Assumptions row after all steps.\n\n"
                 f"{process_model_json_block(pm)}"
             )
         _xlsx_feedback = ctx.plan_payload.get("xlsx_visual_feedback") or []
