@@ -176,7 +176,8 @@ link_state() { case "$1" in 000|502|504|52[0-9]) echo down ;; *) echo up ;; esac
 # Team settings that travel with `git pull`: when .env.example carries an active "team-shared-services" block,
 # its managed keys are brought into .env (with --fix) or reported (without). The personal settings (collection prefix,
 # telemetry stream and tag) are never touched. Opt out with TEAM_SYNC=false in .env.
-example_get() { [ -f "$ENV_EXAMPLE" ] || return 0; grep -E "^$1=" "$ENV_EXAMPLE" | tr -d '\r' | tail -n 1 | cut -d= -f2-; }
+# A placeholder such as <set-from-team-file> is not a team value: it never replaces what .env holds.
+example_get() { [ -f "$ENV_EXAMPLE" ] || return 0; grep -E "^$1=" "$ENV_EXAMPLE" | tr -d '\r' | grep -vE "^$1=<[^>]*>$" | tail -n 1 | cut -d= -f2-; }
 TEAM_KEYS="QDRANT_URL QDRANT_API_KEY S3_ENDPOINT_URL S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_BUCKET EMBEDDING_BASE_URL EMBEDDING_API_KEY EMBEDDING_MODEL OPENOBSERVE_ENABLED OPENOBSERVE_URL OPENOBSERVE_ORG OPENOBSERVE_USER OPENOBSERVE_PASSWORD OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_HEADERS SSL_CA_FILE OTEL_EXPORTER_OTLP_CERTIFICATE"
 if [ "$(env_get TEAM_SYNC)" != false ] && [ -f "$ENV_FILE" ] && grep -q '^# >>> team-shared-services' "$ENV_EXAMPLE" 2>/dev/null; then
   TEAM_DIFF=""

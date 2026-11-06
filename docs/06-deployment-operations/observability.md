@@ -63,6 +63,21 @@ Every counter, gauge and latency recorded through `src/core/observability/metric
 
 Existing ones include `run_done_total`, `run_failed_total`, `run_execution_ms`, `conversation_digest_built_total` and the `memory_*` counters. `GET /metrics/prometheus` still works.
 
+### RAG answer metrics
+
+Every answered question in the query pipeline (Sheldon in an engagement, Talk to data, `POST /api/query`) is judged once by the model after the answer has been returned (`src/evaluation/rag_metrics.py`, prompt `config/prompts/rag_eval.yaml`). `QUERY_RAG_EVAL=off` turns the judge off; it costs one model call per answer and adds no latency. Each judged answer is logged once as a `[RAG_EVAL]` line in the backend terminal. The totals are under `advanced_metrics.rag` in `GET /metrics` and are sent to OpenObserve as gauges `rag_<name>`, with the counters `rag_evaluated_answers_total`, `rag_retrieval_calls_total` and the histogram `rag_retrieval_latency_ms`:
+
+| Metric | Formula | Source |
+|---|---|---|
+| `retrieval_relevance_percent` | relevant chunks / retrieved chunks x 100 | the judge marks each chunk given to the model |
+| `groundedness_percent` | supported facts / total facts x 100 | the judge lists the answer's facts and checks each against the chunks |
+| `hallucination_rate_percent` | unsupported facts / total facts x 100 (= 100 - groundedness) | as above |
+| `context_utilization_percent` | chunks the answer cites / retrieved chunks x 100 | the `[S#]` citations; no model call |
+| `answer_relevance_percent` | mean of the judge's 0-1 score x 100 | how directly the answer addresses the question |
+| `avg_retrieval_latency_ms`, `total_retrievals` | sum of retrieval time / retrieval calls | every query pipeline retrieval and every Leading Practice search |
+
+Percentages are computed from the summed counts across answers, not averaged per answer. When the judge fails, only context utilization is counted for that answer. Each evaluation is also logged as one `[RAG_EVAL]` line. The totals are kept in memory per API process and start again at zero when it restarts.
+
 ### Logs (stream `advise_workbench`, type logs)
 
 Every Python log record at INFO or above, with the trace id when it was written inside a span, so a log line links to its trace.

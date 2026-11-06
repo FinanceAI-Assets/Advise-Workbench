@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     query_llm_retry_backoff_sec: float = 1.0  # wait before retry n is n x this (doubled when rate limited)
     query_max_concurrent_answers: int = 8  # answer calls running at once per process; others wait (counted in the timeout)
     query_rate_limit: str = "30/minute"  # POST /api/query per user
+    query_rag_eval: str = "background"  # off | background: LLM-judge each answer for the RAG metrics (src/evaluation/rag_metrics.py)
 
     anthropic_api_key: str = ""
 

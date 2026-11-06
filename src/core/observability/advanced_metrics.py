@@ -33,12 +33,17 @@ _AGENT_TOTAL_TASKS: dict[str, int] = defaultdict(int)
 # Per-Project Agent Metrics
 _PROJECT_AGENT_RUNS: dict[tuple[str, str], int] = defaultdict(int)  # (project_id, agent_name) -> run_count
 
-# RAG metrics
+# RAG metrics. Each ratio keeps its own denominator: chunks judged by the LLM for relevance, chunks given to
+# the model for utilization, facts judged for support. An evaluation whose LLM judge failed adds nothing to them.
 _RAG_RELEVANT_CHUNKS: int = 0
+_RAG_JUDGED_CHUNKS: int = 0
 _RAG_TOTAL_CHUNKS_RETRIEVED: int = 0
 _RAG_SUPPORTED_FACTS: int = 0
 _RAG_TOTAL_FACTS: int = 0
 _RAG_UTILIZED_CHUNKS: int = 0
+_RAG_ANSWER_RELEVANCE_TOTAL: float = 0.0
+_RAG_ANSWER_RELEVANCE_COUNT: int = 0
+_RAG_EVALUATED_ANSWERS: int = 0
 _RAG_TOTAL_RETRIEVAL_TIME_MS: float = 0.0
 _RAG_RETRIEVAL_CALL_COUNT: int = 0
 
@@ -130,36 +135,81 @@ def record_agent_call(agent_name: str, duration_ms: float, success: bool, is_ret
 # RAG METRICS
 # ============================================================================
 
-def record_rag_retrieval(relevant_chunks: int, total_chunks: int, supported_facts: int, total_facts: int, utilized_chunks: int, retrieval_latency_ms: float) -> None:
-    print(f"[METRICS] record_rag_retrieval called: relevant={relevant_chunks}/{total_chunks}, facts={supported_facts}/{total_facts}, utilized={utilized_chunks}, latency={retrieval_latency_ms}ms")
+def record_rag_retrieval_call(retrieval_latency_ms: float) -> None:
+    """One retrieval call and how long it took (average = sum of retrieval time / retrieval calls)."""
     with _LOCK:
-        global _RAG_RELEVANT_CHUNKS, _RAG_TOTAL_CHUNKS_RETRIEVED, _RAG_SUPPORTED_FACTS, _RAG_TOTAL_FACTS, _RAG_UTILIZED_CHUNKS, _RAG_TOTAL_RETRIEVAL_TIME_MS, _RAG_RETRIEVAL_CALL_COUNT
+        global _RAG_TOTAL_RETRIEVAL_TIME_MS, _RAG_RETRIEVAL_CALL_COUNT
 
-        _RAG_RELEVANT_CHUNKS += relevant_chunks
-        _RAG_TOTAL_CHUNKS_RETRIEVED += total_chunks
-        _RAG_SUPPORTED_FACTS += supported_facts
-        _RAG_TOTAL_FACTS += total_facts
-        _RAG_UTILIZED_CHUNKS += utilized_chunks
         _RAG_TOTAL_RETRIEVAL_TIME_MS += retrieval_latency_ms
         _RAG_RETRIEVAL_CALL_COUNT += 1
-        print(f"[METRICS] rag metrics updated: retrievals={_RAG_RETRIEVAL_CALL_COUNT}, total_chunks={_RAG_TOTAL_CHUNKS_RETRIEVED}")
+        increment("rag_retrieval_calls_total")
+        observe_latency("rag_retrieval_latency", retrieval_latency_ms)  # sent as rag_retrieval_latency_ms
+        set_gauge("rag_avg_retrieval_latency_ms", _RAG_TOTAL_RETRIEVAL_TIME_MS / _RAG_RETRIEVAL_CALL_COUNT)
 
-        increment("rag_relevant_chunks_total", relevant_chunks)
-        increment("rag_retrieved_chunks_total", total_chunks)
-        increment("rag_supported_facts_total", supported_facts)
-        increment("rag_total_facts_total", total_facts)
+
+def record_rag_evaluation(
+    *,
+    retrieved_chunks: int,
+    utilized_chunks: int,
+    relevant_chunks: int | None = None,
+    supported_facts: int | None = None,
+    total_facts: int | None = None,
+    answer_relevance: float | None = None,
+) -> None:
+    """One evaluated answer (``src.evaluation.rag_metrics``).
+
+    ``relevant_chunks``, ``supported_facts`` / ``total_facts`` and ``answer_relevance`` (0.0-1.0) come from the LLM
+    judge and are None when it failed; ``utilized_chunks`` (chunks the answer cites) is always known.
+    """
+    with _LOCK:
+        global _RAG_RELEVANT_CHUNKS, _RAG_JUDGED_CHUNKS, _RAG_TOTAL_CHUNKS_RETRIEVED, _RAG_SUPPORTED_FACTS
+        global _RAG_TOTAL_FACTS, _RAG_UTILIZED_CHUNKS, _RAG_ANSWER_RELEVANCE_TOTAL, _RAG_ANSWER_RELEVANCE_COUNT
+        global _RAG_EVALUATED_ANSWERS
+
+        _RAG_EVALUATED_ANSWERS += 1
+        _RAG_TOTAL_CHUNKS_RETRIEVED += retrieved_chunks
+        _RAG_UTILIZED_CHUNKS += utilized_chunks
+        increment("rag_evaluated_answers_total")
+        increment("rag_retrieved_chunks_total", retrieved_chunks)
         increment("rag_utilized_chunks_total", utilized_chunks)
-        observe_latency("rag_retrieval_latency_ms", retrieval_latency_ms)
+        if relevant_chunks is not None:
+            _RAG_RELEVANT_CHUNKS += relevant_chunks
+            _RAG_JUDGED_CHUNKS += retrieved_chunks
+            increment("rag_relevant_chunks_total", relevant_chunks)
+        if supported_facts is not None and total_facts is not None:
+            _RAG_SUPPORTED_FACTS += supported_facts
+            _RAG_TOTAL_FACTS += total_facts
+            increment("rag_supported_facts_total", supported_facts)
+            increment("rag_total_facts_total", total_facts)
+        if answer_relevance is not None:
+            _RAG_ANSWER_RELEVANCE_TOTAL += answer_relevance
+            _RAG_ANSWER_RELEVANCE_COUNT += 1
 
-        if total_chunks > 0:
-            relevance = (relevant_chunks / total_chunks) * 100
-            set_gauge("rag_retrieval_relevance_percent", relevance)
-        if total_facts > 0:
-            groundedness = (supported_facts / total_facts) * 100
-            set_gauge("rag_groundedness_percent", groundedness)
-        if total_chunks > 0:
-            utilization = (utilized_chunks / total_chunks) * 100
-            set_gauge("rag_context_utilization_percent", utilization)
+        for name, value in _rag_ratios_locked().items():
+            if value is not None:
+                set_gauge(f"rag_{name}", value)
+
+
+def record_rag_retrieval(relevant_chunks: int, total_chunks: int, supported_facts: int, total_facts: int, utilized_chunks: int, retrieval_latency_ms: float) -> None:
+    """Older single call: one retrieval call plus its evaluation."""
+    record_rag_retrieval_call(retrieval_latency_ms)
+    record_rag_evaluation(retrieved_chunks=total_chunks, utilized_chunks=utilized_chunks, relevant_chunks=relevant_chunks,
+                          supported_facts=supported_facts, total_facts=total_facts)
+
+
+def _rag_ratios_locked() -> dict[str, float | None]:
+    """The RAG percentages; None while nothing has been measured for one."""
+    def pct(part: float, whole: float) -> float | None:
+        return round(part / whole * 100, 2) if whole > 0 else None
+
+    groundedness = pct(_RAG_SUPPORTED_FACTS, _RAG_TOTAL_FACTS)
+    return {
+        "retrieval_relevance_percent": pct(_RAG_RELEVANT_CHUNKS, _RAG_JUDGED_CHUNKS),
+        "groundedness_percent": groundedness,
+        "hallucination_rate_percent": pct(_RAG_TOTAL_FACTS - _RAG_SUPPORTED_FACTS, _RAG_TOTAL_FACTS),
+        "context_utilization_percent": pct(_RAG_UTILIZED_CHUNKS, _RAG_TOTAL_CHUNKS_RETRIEVED),
+        "answer_relevance_percent": pct(_RAG_ANSWER_RELEVANCE_TOTAL, _RAG_ANSWER_RELEVANCE_COUNT),
+    }
 
 
 # ============================================================================
@@ -369,11 +419,16 @@ def get_agent_metrics(project_id: str | None = None) -> dict[str, Any]:
 def get_rag_metrics() -> dict[str, Any]:
     with _LOCK:
         return {
-            "retrieval_relevance_percent": (_RAG_RELEVANT_CHUNKS / _RAG_TOTAL_CHUNKS_RETRIEVED * 100) if _RAG_TOTAL_CHUNKS_RETRIEVED > 0 else 0,
-            "groundedness_percent": (_RAG_SUPPORTED_FACTS / _RAG_TOTAL_FACTS * 100) if _RAG_TOTAL_FACTS > 0 else 0,
-            "context_utilization_percent": (_RAG_UTILIZED_CHUNKS / _RAG_TOTAL_CHUNKS_RETRIEVED * 100) if _RAG_TOTAL_CHUNKS_RETRIEVED > 0 else 0,
+            **{name: value or 0 for name, value in _rag_ratios_locked().items()},
             "avg_retrieval_latency_ms": round(_RAG_TOTAL_RETRIEVAL_TIME_MS / _RAG_RETRIEVAL_CALL_COUNT, 2) if _RAG_RETRIEVAL_CALL_COUNT > 0 else 0,
             "total_retrievals": _RAG_RETRIEVAL_CALL_COUNT,
+            "evaluated_answers": _RAG_EVALUATED_ANSWERS,
+            "relevant_chunks": _RAG_RELEVANT_CHUNKS,
+            "judged_chunks": _RAG_JUDGED_CHUNKS,
+            "retrieved_chunks": _RAG_TOTAL_CHUNKS_RETRIEVED,
+            "utilized_chunks": _RAG_UTILIZED_CHUNKS,
+            "supported_facts": _RAG_SUPPORTED_FACTS,
+            "total_facts": _RAG_TOTAL_FACTS,
         }
 
 

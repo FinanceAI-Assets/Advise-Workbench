@@ -263,6 +263,21 @@ def test_practice_added_to_engagement_counts_as_a_source_and_is_searchable() -> 
     assert client.get("/api/search?q=n", headers=headers).json()["engagements"] == []
 
 
+def test_practice_can_be_removed_from_an_engagement_by_its_editors_only() -> None:
+    client = TestClient(fastapi_app)
+    lead = _login(client, _email("lead"))
+    pid = _engagement(client, lead)
+    approved = _practice()
+    client.post(f"/api/library/{approved}/add-to-engagement", json={"projectId": pid}, headers=lead)
+
+    outsider = _login(client, _email("outsider"))
+    assert client.delete(f"/api/library/{approved}/engagements/{pid}", headers=outsider).status_code == 403
+    removed = client.delete(f"/api/library/{approved}/engagements/{pid}", headers=lead)
+    assert removed.status_code == 200 and removed.json()["removed"] is True
+    assert client.get(f"/api/engagements/{pid}", headers=lead).json()["tabCounts"]["sources"] == 0
+    assert client.delete(f"/api/library/{approved}/engagements/{pid}", headers=lead).json()["removed"] is False
+
+
 def test_conversations_can_be_started_and_switched() -> None:
     client = TestClient(fastapi_app)
     headers = _login(client, _email("lead"))

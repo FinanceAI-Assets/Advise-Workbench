@@ -322,6 +322,45 @@ def test_answers_citing_too_little_are_rejected(project, monkeypatch):
     assert r.status == "insufficient_evidence" and r.reason == "uncited_answer" and r.coverage["ratio"] == 0.25
 
 
+def test_a_table_answer_is_cited_by_its_rows_and_its_header_is_not_a_claim(project, monkeypatch):
+    monkeypatch.setattr(qp, "claude_generate", lambda **_: (
+        "Escalation depends on the request type:\n\n"
+        "| Request type | Target turnaround | Escalation path |\n"
+        "|---|---|---|\n"
+        "| Standard vendor update | five business days | AP manager [S1] |\n"
+        "| Bank detail change | two business days | Controller [S1] |"))
+    r = ask(project, "What is the duplicate payment risk?")
+    assert r.status == "answered" and r.coverage["claims"] == 2 and r.coverage["fully_cited"]
+
+
+def test_a_citation_line_after_a_list_cites_the_list(project, monkeypatch):
+    monkeypatch.setattr(qp, "claude_generate", lambda **_: (
+        "When a request passes seven business days:\n"
+        "- The request is escalated to the AP manager\n"
+        "- The requester is told the new expected date\n"
+        "- The delay is recorded in the weekly report\n"
+        "Source: [S1]"))
+    r = ask(project, "What is the duplicate payment risk?")
+    assert r.status == "answered" and r.coverage["claims"] == 3 and r.coverage["cited"] == 3
+
+
+def test_selected_sources_keep_only_wiki_pages_written_from_them():
+    def wiki(key, *practices):
+        return qp.Source(kind="wiki", key=key, score=0.9, practice_id=practices[0],
+                         evidence=[{"id": f"c-{p}", "practice_id": p} for p in practices])
+
+    pool = [
+        qp.Source(kind="chunk", key="mine", score=0.9, practice_id="lp-1"),
+        qp.Source(kind="chunk", key="other", score=0.9, practice_id="lp-2"),
+        wiki("only-mine", "lp-1", "lp-1"),
+        wiki("mixed", "lp-1", "lp-2"),  # first passage is mine, the second is not
+        qp.Source(kind="wiki", key="no-evidence", score=0.9),
+        qp.Source(kind="chunk", key="upload", score=0.9, engagement_id="e-1"),
+    ]
+    kept = [s.key for s in qp._only_selected(pool, ("lp-1",))]
+    assert kept == ["mine", "only-mine", "upload"]
+
+
 def test_model_declining_and_empty_search_give_their_reason(project, monkeypatch):
     assert ask(project, "quarterly marketing budget forecast").reason == "no_results"
     monkeypatch.setattr(qp, "claude_generate", lambda **_: "INSUFFICIENT_EVIDENCE")

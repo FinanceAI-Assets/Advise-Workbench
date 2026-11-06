@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Plus } from "lucide-react";
+import { ArrowUpRight, Plus, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -25,6 +25,7 @@ import { useEngagementDetailQuery } from "@/hooks/useEngagements";
 import {
   useActivateConversationMutation,
   useConversationContextQuery,
+  useRemovePracticeFromEngagementMutation,
   useSelectSkillMutation,
   useStartConversationMutation,
 } from "@/hooks/useWorkbench";
@@ -44,6 +45,7 @@ export default function EngagementConversationPage() {
   const startConversation = useStartConversationMutation(id);
   const activate = useActivateConversationMutation(id);
   const selectSkill = useSelectSkillMutation();
+  const removePractice = useRemovePracticeFromEngagementMutation(id);
   const [newTitle, setNewTitle] = useState<string | null>(null);
   const [draft, setDraft] = useState({ id: 0, text: "" });
 
@@ -196,11 +198,31 @@ export default function EngagementConversationPage() {
             ) : (
               <ul className="space-y-2">
                 {sources.practices.map((practice) => (
-                  <li key={practice.id} className="border-b border-[var(--surface-border)] pb-2 last:border-b-0">
-                    <Link href={`/library?practice=${practice.id}`} className="text-sm font-medium">
-                      {practice.title}
-                    </Link>
-                    <p className="text-xs text-[var(--text-muted)]">Approved library practice</p>
+                  <li
+                    key={practice.id}
+                    className="flex items-start justify-between gap-2 border-b border-[var(--surface-border)] pb-2 last:border-b-0"
+                  >
+                    <div className="min-w-0">
+                      <Link href={`/library?practice=${practice.id}`} className="text-sm font-medium">
+                        {practice.title}
+                      </Link>
+                      <p className="text-xs text-[var(--text-muted)]">Approved library practice</p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="shrink-0 px-1.5 py-1"
+                      aria-label={`Remove ${practice.title} from sources`}
+                      title="Remove from sources"
+                      disabled={removePractice.isPending}
+                      onClick={() => {
+                        if (window.confirm(`Remove "${practice.title}" from this engagement's sources?`)) {
+                          removePractice.mutate(practice.id);
+                        }
+                      }}
+                    >
+                      <X size={14} aria-hidden />
+                    </Button>
                   </li>
                 ))}
                 {sources.documents.map((name) => (
@@ -211,6 +233,7 @@ export default function EngagementConversationPage() {
                 ))}
               </ul>
             )}
+            <ErrorNote error={removePractice.error} />
             <Link href={`/engagements/${id}?tab=sources`} className="block !no-underline">
               <Button variant="secondary" className="w-full justify-center">
                 Manage sources

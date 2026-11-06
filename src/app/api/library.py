@@ -387,6 +387,32 @@ def add_practice_to_engagement(
     return {"id": practice.id, "projectId": body.project_id, "added": not already}
 
 
+@router.delete("/library/{practice_id}/engagements/{pid}")
+def remove_practice_from_engagement(
+    practice_id: str, pid: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> dict:
+    """Take a practice out of an engagement's source scope; conversations stop citing it.
+
+    Works for practices that were since deleted from the library too, so a stale source can always be removed."""
+    require_project_role(pid, {"Owner", "Editor"}, user, db)
+    rows = [
+        r for r in db.scalars(
+            select(WorkbenchRecord).where(
+                WorkbenchRecord.collection == "engagement_practices", WorkbenchRecord.project_id == pid
+            )
+        ).all()
+        if json.loads(r.payload_json or "{}").get("practiceId") == practice_id
+    ]
+    if rows:
+        title = json.loads(rows[0].payload_json or "{}").get("title") or practice_id.upper()
+        for row in rows:
+            db.delete(row)
+        record_activity(db, project_id=pid, actor=display_name(user), kind="library",
+                        title=f"{title} removed from sources", detail=practice_id.upper())
+        db.commit()
+    return {"id": practice_id, "projectId": pid, "removed": bool(rows)}
+
+
 def _skill_cards(db: Session) -> list[dict]:
     return records(db, "skills")
 

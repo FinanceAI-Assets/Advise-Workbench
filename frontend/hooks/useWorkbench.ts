@@ -377,6 +377,15 @@ export function useAddPracticesToEngagementMutation() {
   });
 }
 
+/** Takes a practice out of an engagement's sources; its conversations stop citing it. */
+export function useRemovePracticeFromEngagementMutation(pid: string) {
+  return useWorkbenchMutation<string, { removed: boolean }>(
+    (practiceId) => ({ path: `/api/library/${enc(practiceId)}/engagements/${enc(pid)}`, method: "DELETE" }),
+    "Could not remove the practice",
+    [["conversation-context", pid], ["engagement"], ["library"], ["practice"]]
+  );
+}
+
 export function useSkillsQuery(q: string) {
   return useWorkbenchQuery<SkillsDetail>(["skills", q], `/api/skills?q=${enc(q)}`, "Failed to load skills");
 }

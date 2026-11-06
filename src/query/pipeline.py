@@ -61,7 +61,9 @@ from src.core.config import settings
 from src.core.db.models import ChunkArchive, DocumentChunkLink, DocumentFile, DocumentJob, LpPractice, WikiPageFinal
 from src.core.embeddings.embedding_service import get_embedding_service
 from src.core.observability import metrics
+from src.core.observability.advanced_metrics import record_rag_retrieval_call
 from src.core.vector_db.qdrant_client import get_qdrant_client
+from src.evaluation.rag_metrics import schedule_evaluation
 from src.llm import gateway
 from src.llm.claude import claude_generate
 from src.memory.knowledge.library_release import LIBRARY_SCOPE, released_document_ids
@@ -91,6 +93,10 @@ _ENTITY = re.compile(r"\b[A-Z][\w&\-]*(?:\s+(?:of|and|for|&)?\s*[A-Z][\w&\-]*)*"
 _QUOTED = re.compile(r"\"([^\"]{2,80})\"|“([^”]{2,80})”|'([^']{2,80})'")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
 _CITATIONS_ONLY = re.compile(r"^(\[S\d+\]\s*)+[.;,]?$")
+_CITATION_LINE = re.compile(r"^\(?(?:(?:sources?|references?)\s*:\s*)?(\[S\d+\][\s,;]*)+\)?\.?$", re.I)
+_TABLE_ROW = re.compile(r"^\|.*\|$")
+_TABLE_SEPARATOR = re.compile(r"^\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?\s*$")
+_LIST_ITEM = re.compile(r"^([-*+]|\d+[.)])\s+")
 # Intent, first match wins: what the user wants back, which shapes how an answer should read.
 _INTENTS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("comparison", re.compile(r"\b(compare|comparison|difference|differ|versus|vs\.?|better than|pros and cons)\b", re.I)),
@@ -560,6 +566,19 @@ def _near_duplicate(words: set[str], seen: list[set[str]]) -> bool:
     return any(words and len(words & w) / max(len(words | w), 1) > 0.8 for w in seen)
 
 
+def _only_selected(pool: list[Source], practice_ids: tuple[str, ...]) -> list[Source]:
+    """Engagement sources, and library content of these practices only. A wiki page counts only when every passage
+    behind it is from a selected practice: a page written from other practices too would bring them into the answer."""
+    def selected(s: Source) -> bool:
+        if s.engagement_id:
+            return True
+        if s.kind == "wiki":
+            return bool(s.evidence) and all(e["practice_id"] in practice_ids for e in s.evidence)
+        return s.practice_id in practice_ids
+
+    return [s for s in pool if selected(s)]
+
+
 def retrieve(db: Session, scope: QueryScope, question: str, vectors: list[list[float]], top_k: int) -> tuple[list[Source], dict[str, Any]]:
     """Search the scope, validate, score wiki pages against their sources, rerank. Returns the sources and counts."""
     hits = search(scope.index, vectors) if scope.index else []
@@ -567,8 +586,8 @@ def retrieve(db: Session, scope: QueryScope, question: str, vectors: list[list[f
     documents = search_engagement(db, scope.engagement_id, vectors) if scope.engagement_id else []
     pool = sorted(existing + documents, key=lambda s: s.score, reverse=True)[: settings.query_rerank_pool]
     verify_wiki_pages(db, pool)
-    if scope.practice_ids:  # "ask selected sources only": library content of those practices (wiki pages via evidence)
-        pool = [s for s in pool if s.engagement_id or s.practice_id in scope.practice_ids]
+    if scope.practice_ids:  # "ask selected sources only"
+        pool = _only_selected(pool, scope.practice_ids)
     faithful = [s for s in pool if s.verification >= settings.query_min_verification]
     ranked = rerank(question, faithful, top_k)
     stats = {
@@ -619,7 +638,7 @@ _ANSWER_SYSTEM = (
     "You answer questions using only the numbered sources provided: passages from the engagement's uploaded "
     "documents and from the Leading Practice Library. "
     "Do not use outside knowledge. Cite every claim with its source number in square brackets, e.g. [S1] or "
-    "[S2][S3]. Be concise. If the sources do not contain the answer, reply exactly: INSUFFICIENT_EVIDENCE"
+    "[S2][S3], at the end of every sentence, bullet and table row. Be concise. If the sources do not contain the answer, reply exactly: INSUFFICIENT_EVIDENCE"
 )
 
 
@@ -750,16 +769,42 @@ def link_citations(answer: str, used: list[Source]) -> str:
     return _CITATION.sub(sub, answer)
 
 
+def _is_claim(part: str) -> bool:
+    return len(terms(part)) >= 3 and not part.endswith(":") and not part.startswith("#")
+
+
 def claim_coverage(answer: str, used_count: int) -> dict[str, Any]:
-    """Which sentences of the answer cite a source. Headings, lead-ins and very short fragments are not claims."""
+    """Which sentences of the answer cite a source. Headings, lead-ins and very short fragments are not claims.
+
+    A table row or list item is one claim; a table's header row is not. A line holding only citations
+    ("[S2]", "Source: [S2]") cites the table or list just above it, or else the sentence before it."""
     claims: list[str] = []
-    for part in (p.strip() for p in _SENTENCE.split(answer)):
-        if not part:
+    block: list[int] = []  # claims of the table or list being read
+    for line in (raw.strip() for raw in answer.split("\n")):
+        if not line:
             continue
-        if _CITATIONS_ONLY.match(part) and claims:
-            claims[-1] += f" {part}"  # "... is a risk. [S1]" cites the sentence before it
-        elif len(terms(part)) >= 3 and not part.endswith(":") and not part.startswith("#"):
-            claims.append(part)
+        if _CITATION_LINE.match(line):
+            for i in block or ([len(claims) - 1] if claims else []):
+                if not _CITATION.search(claims[i]):
+                    claims[i] += f" {line}"
+            block = []
+        elif _TABLE_SEPARATOR.match(line):
+            if block and block[-1] == len(claims) - 1 and _TABLE_ROW.match(claims[-1]):
+                claims.pop()  # the header row: column names, not a claim
+                block.pop()
+        elif _TABLE_ROW.match(line) or _LIST_ITEM.match(line):
+            if _is_claim(line):
+                block.append(len(claims))
+                claims.append(line)
+        else:
+            block = []
+            for part in (p.strip() for p in _SENTENCE.split(line)):
+                if not part:
+                    continue
+                if _CITATIONS_ONLY.match(part) and claims:
+                    claims[-1] += f" {part}"  # "... is a risk. [S1]" cites the sentence before it
+                elif _is_claim(part):
+                    claims.append(part)
     cited = [c for c in claims if _CITATION.search(c)]
     uncited = [c[:200] for c in claims if not _CITATION.search(c)]
     invalid = sorted({f"S{n}" for n in map(int, _CITATION.findall(answer)) if not 1 <= n <= used_count}, key=lambda r: int(r[1:]))
@@ -884,6 +929,7 @@ def answer_question(
     t = time.monotonic()
     ranked, stats = retrieve(db, scope, standalone, vectors, top_k or settings.query_top_k)
     timings["retrieval"] = int((time.monotonic() - t) * 1000)
+    record_rag_retrieval_call(timings["retrieval"])
     logger.info("[QUERY] 2/3 retrieval: Qdrant hits library=%d engagement=%d -> verified in Postgres=%d, dropped "
                 "(low verification)=%d, reranker=%s, top_score=%.3f, kept=%d (%d ms)",
                 stats["candidates"] - stats["engagement_candidates"], stats["engagement_candidates"], stats["verified"],
@@ -938,8 +984,11 @@ def answer_question(
     if not cites or coverage["ratio"] < settings.query_min_citation_coverage:
         result.reason = "uncited_answer"  # not grounded in the sources: evidence-only answers are enforced
         result.coverage = coverage
+        logger.info("[QUERY] rejected as uncited: %d/%d claims cited; uncited=%s",
+                    coverage["cited"], coverage["claims"], coverage["uncited"])
         return _finish(result, started)
     result.status, result.answer, result.citations, result.coverage = "answered", answer, cites, coverage
     result.answer_markdown = link_citations(answer, used)
     result.sources = [_source_view(s) for s in used]
+    schedule_evaluation(standalone, context, answer, len(used))  # RAG metrics, after the answer is returned
     return _finish(result, started)
