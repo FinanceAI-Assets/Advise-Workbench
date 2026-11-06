@@ -243,7 +243,7 @@ def test_word_powerpoint_and_excel_sources_upload_together() -> None:
     ]
     data = {"owner": "Maya Patel", "rights": "Advisory Methods · Internal reuse permitted"}
     resp = client.post("/api/admin/library/uploads", headers=admin, data=data, files=files)
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 202, resp.text
     jobs = resp.json()["jobs"]
     assert len(jobs) == 3 and all(job["readable"] for job in jobs)
     assert len({job["practiceId"] for job in jobs}) == 3  # each file is its own candidate practice
