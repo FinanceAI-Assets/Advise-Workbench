@@ -44,6 +44,21 @@ _VERB_STEMS: frozenset[str] = frozenset(
         "shave", "compress", "expand", "widen", "narrow", "tighten", "mask",
         "signal", "point", "mean", "stem", "trap", "fuel", "spark", "stall",
         "hold", "carry", "cap", "limit", "constrain", "outweigh", "offset",
+        # common causation / consequence verbs in real action titles
+        "hinder", "delay", "stretch", "undermine", "impede", "inflate", "prolong", "weaken",
+        "strengthen", "increase", "decrease", "lower", "higher", "extend", "shorten",
+        "lengthen", "amplify", "magnify", "multiply", "obscure", "hide", "undercut", "sap",
+        "stifle", "restrict", "overload", "overwhelm", "disrupt", "inflict", "incur",
+        "generate", "protect", "secure", "ensure", "simplify", "standardize", "standardise",
+        "centralize", "centralise", "digitize", "digitise", "modernize", "modernise",
+        "optimize", "optimise", "harmonize", "harmonise", "integrate", "align", "unify",
+        "prevent", "avoid", "halt", "hasten", "relieve", "release", "recover", "reclaim",
+        "retain", "preserve", "sustain", "maintain", "keep", "cripple", "plague", "swamp",
+        "consume", "absorb", "squander", "divert", "redirect", "concentrate", "spread",
+        "dilute", "diminish", "dwarf", "precede", "determine", "decide", "govern", "exceed",
+        "achieve", "attain", "realize", "realise", "deliver", "pay", "comprise", "compose",
+        "rely", "appear", "seem", "remain", "become", "grow", "rise", "fall", "plunge",
+        "plummet", "soar", "stagnate", "stall", "converge", "diverge", "compete", "collide",
     }
 )
 
@@ -55,18 +70,25 @@ def _tokens(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text or "")]
 
 
+def _stem_candidates(tok: str) -> set[str]:
+    """Possible base forms of an inflected token (-s, -es, -ies, -d, -ed, -ing, doubled consonants)."""
+    out = {tok}
+    for suf in ("s", "es", "ed", "d", "ing"):
+        if tok.endswith(suf) and len(tok) > len(suf) + 1:
+            base = tok[: -len(suf)]
+            out.add(base)
+            out.add(base + "e")  # improved -> improve, reducing -> reduc + e
+            if len(base) > 2 and base[-1] == base[-2]:
+                out.add(base[:-1])  # cutting -> cut, stopped -> stop
+    if tok.endswith("ies") and len(tok) > 4:
+        out.add(tok[:-3] + "y")  # carries -> carry
+    if tok.endswith("ied") and len(tok) > 4:
+        out.add(tok[:-3] + "y")  # carried -> carry
+    return out
+
+
 def _looks_like_verb(tok: str) -> bool:
-    if tok in _VERB_STEMS:
-        return True
-    for suf in ("s", "es", "ed", "ing"):
-        if tok.endswith(suf) and tok[: -len(suf)] in _VERB_STEMS:
-            return True
-    # irregular -> stem (e.g. "doubling" handled above; "cutting"/"cuts")
-    if tok.endswith("ting") and tok[:-4] in _VERB_STEMS:
-        return True
-    if tok.endswith("tting") and tok[:-5] in _VERB_STEMS:
-        return True
-    return False
+    return any(c in _VERB_STEMS for c in _stem_candidates(tok))
 
 
 @dataclass(frozen=True)
