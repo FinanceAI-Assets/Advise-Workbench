@@ -399,7 +399,7 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
         # The new source needs its own approval: the earlier decision covered different content.
         review.state = "Draft"
         review.version_label = candidate_version
-        _timeline(review, f"New source uploaded ({job_id}); resubmission required", display_name(admin), "edit")
+        _timeline(review, f"New source uploaded ({job_id}); new approval required", display_name(admin), "edit")
 
     payload = {
         "source": f"{practice_title} {candidate_version}",
@@ -661,7 +661,7 @@ def admin_approval_blocker(db: Session, review: Review | None) -> str:
     if review is None or review.state == "Approved":
         return ""
     if review.state == "Changes requested":
-        return "Changes were requested; resubmit for approval"
+        return "Changes were requested; upload a corrected source"
     if db.scalar(select(ReviewComment.id).where(ReviewComment.review_id == review.id, ReviewComment.status == "Open").limit(1)):
         return "Resolve the open review comments before approving"
     return ""
@@ -817,7 +817,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
     citations = job.get("citations") or {"missing": [], "references": [], "attributed": []}
     gates = gates_for(job)
     failing = [g for g in gates if not g["passed"]]
-    review_state = review.state if review else "Not submitted"
+    review_state = review.state if review else "Not approved"
     approved = review is not None and review.state == "Approved"
     chunks = _chunks(db, job["id"]).get("chunks", [])
     flagged = next((c for c in chunks if c.get("tone") == "warn" and "Reference" in c.get("quality", "")), None)
@@ -847,8 +847,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
     steps_status = {
         "extract": ("complete", "Complete") if readable else ("in-progress", "Needs readable source"),
         "index": ("complete", "Complete") if readable else ("upcoming", "Pending"),
-        "quality": ("complete", "Approved") if approved or published else
-                   ("in-progress", "Awaiting approval" if review_state == "In review" else "Current"),
+        "quality": ("complete", "Complete") if published or not blockers else ("in-progress", "Needs attention"),
         "publish": ("complete", "Published") if published else
                    ("in-progress", "Ready") if can_publish else ("upcoming", "Pending"),
     }
@@ -977,9 +976,9 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
                          "tone": "ok" if not citations["missing"] and readable else "warn"},
                         {"id": "rg-2", "label": "Index & metadata", "result": f"{validation['indexed']} / {validation['total']} validated",
                          "detail": f"{job['id']} · Source hash retained", "tone": "ok" if readable else "warn"},
-                        {"id": "rg-3", "label": "Independent review", "result": review_state,
+                        {"id": "rg-3", "label": "Approval", "result": review_state,
                          "detail": (f"{reviewer}" + (" · Self-review" if review and review.owner_id == review.reviewer_id else "")) if reviewer
-                         else "Submit for approval in Quality review", "tone": "ok" if approved or published else "warn"},
+                         else "Recorded when an administrator approves and publishes", "tone": "ok" if approved or published else "warn"},
                      ],
             "notice": _notice(
                 f"{version} published",

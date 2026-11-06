@@ -3,14 +3,17 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Select";
-import { ReasonAction } from "@/components/workbench/AdminControls";
 import { ErrorNote } from "@/components/workbench/PageFrame";
 import { useAdminAction } from "@/hooks/useAdminConsole";
-import type { LibraryQualityGatesDetail } from "@/types/api";
 
-/** Approve and publish the candidate; disabled, with the reasons, while the server reports anything blocking it. */
+// The API records a reason for every administrative change; publishing asks the admin only to confirm.
+const PUBLISH_REASON = "Approved and published from Library management";
+
+/** Approve and publish the candidate after a confirmation; disabled, with the reasons, while the server reports anything blocking it. */
 export function PublishControl({ practiceId, canPublish, blockers }: { practiceId: string; canPublish: boolean; blockers: string[] }) {
+  const publish = useAdminAction();
+  const [confirming, setConfirming] = useState(false);
+
   if (!canPublish) {
     return (
       <div className="space-y-2">
@@ -21,58 +24,33 @@ export function PublishControl({ practiceId, canPublish, blockers }: { practiceI
       </div>
     );
   }
-  return (
-    <ReasonAction primary label="Approve & publish" build={(reason) => ({ path: `/library/${practiceId}/publish`, body: { reason } })} />
-  );
-}
 
-/**
- * Approval for an uploaded candidate: once the quality gates pass, submit it to an approver, or approve and publish it directly.
- */
-export function LibraryApprovalControls({ practiceId, quality }: { practiceId: string; quality: LibraryQualityGatesDetail }) {
-  const submit = useAdminAction();
-  const approvers = quality.approvers ?? [];
-  const [approverId, setApproverId] = useState("");
-  const review = quality.review;
-  const chosen = approverId || approvers[0]?.id || "";
+  if (!confirming) {
+    return (
+      <Button type="button" className="whitespace-nowrap text-sm" onClick={() => setConfirming(true)}>
+        Approve &amp; publish
+      </Button>
+    );
+  }
+
+  async function confirm() {
+    await publish.mutateAsync({ path: `/library/${practiceId}/publish`, body: { reason: PUBLISH_REASON } });
+    setConfirming(false);
+  }
 
   return (
-    <div className="space-y-3 border-t border-[var(--surface-border)] pt-4">
-      <div>
-        <p className="text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Independent approval</p>
-        <p className="mt-1 text-sm text-[var(--text-default)]">
-          {review
-            ? `${review.state} · ${review.reviewer || "Unassigned"}${review.selfReview ? " (self-review)" : ""}`
-            : "Not submitted"}
-        </p>
+    <div className="w-full space-y-2 rounded-md bg-[var(--surface-muted)] p-3">
+      <p className="text-sm font-semibold text-[var(--text-default)]">Approve &amp; publish this version?</p>
+      <p className="text-xs text-[var(--text-muted)]">It becomes available to users in the Leading Practice Library. You are recorded as its approver.</p>
+      <ErrorNote error={publish.error} />
+      <div className="flex gap-2">
+        <Button type="button" disabled={publish.isPending} className="text-sm" onClick={() => void confirm().catch(() => undefined)}>
+          {publish.isPending ? "Publishing…" : "Confirm"}
+        </Button>
+        <Button type="button" variant="secondary" disabled={publish.isPending} className="text-sm" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
       </div>
-
-      {quality.canSubmit ? (
-        <form
-          className="space-y-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submit.mutate({ path: `/library/${practiceId}/submit`, body: { approverId: chosen } });
-          }}
-        >
-          <label className="grid gap-1.5 text-sm text-[var(--text-default)]">
-            <span className="text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Approver</span>
-            <Select value={chosen} onChange={(event) => setApproverId(event.target.value)}>
-              {approvers.map((person) => (
-                <option key={person.id} value={person.id}>
-                  {person.name}
-                </option>
-              ))}
-            </Select>
-          </label>
-          <ErrorNote error={submit.error} />
-          <Button type="submit" variant="secondary" disabled={submit.isPending || !chosen}>
-            {submit.isPending ? "Submitting…" : review?.state === "Changes requested" ? "Resubmit for approval" : "Submit for approval"}
-          </Button>
-        </form>
-      ) : null}
-
-      <PublishControl practiceId={practiceId} canPublish={Boolean(quality.canPublish)} blockers={quality.blockers ?? []} />
     </div>
   );
 }

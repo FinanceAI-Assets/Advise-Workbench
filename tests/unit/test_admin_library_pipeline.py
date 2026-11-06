@@ -91,6 +91,8 @@ def test_uploaded_practice_reaches_the_library_only_after_approval_and_publicati
     assert screen["indexValidation"]["retrievalChecks"][0]["detail"].startswith("Relevant")
     gates = screen["qualityGates"]
     assert not gates["canSubmit"] and gates["blocker"]["title"] == "Unattributed source in reference 2"
+    quality_step = next(s for s in screen["pipelineSteps"] if s["id"] == "quality-review")
+    assert (quality_step["status"], quality_step["helper"]) == ("in-progress", "Needs attention")
 
     # Not in the library yet, and it cannot be submitted while a gate is open.
     library = client.get("/api/library", headers=approver).json()
@@ -108,6 +110,9 @@ def test_uploaded_practice_reaches_the_library_only_after_approval_and_publicati
     screen = client.get(f"/api/admin/library?practice={practice_id}", headers=admin).json()
     assert all(g["passed"] for g in screen["qualityGates"]["gates"])
     assert screen["qualityGates"]["canSubmit"]
+    steps = {s["id"]: s for s in screen["pipelineSteps"]}
+    assert (steps["quality-review"]["status"], steps["quality-review"]["helper"]) == ("complete", "Complete")
+    assert (steps["approve-publish"]["status"], steps["approve-publish"]["helper"]) == ("in-progress", "Ready")
     assert screen["release"]["gates"][0]["label"].startswith("Correction CR-")
 
     # 3. Approval: submit to an approver, who decides on the review page.

@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { SlideCanvas } from "@/components/deliverables/SlideCanvas";
-import { SlideDecisionButtons, type SlideReview } from "@/components/deliverables/SlideDecision";
+import { DeckDecisionButtons, SlideDecisionButtons, type SlideReview } from "@/components/deliverables/SlideDecision";
 import { SlideThumbnailNav } from "@/components/deliverables/SlideThumbnailNav";
 import type { DeliverablesDetail } from "@/types/api";
 
@@ -102,6 +102,8 @@ export function ArtifactViewer({
       />
 
       <SlideThumbnailNav slides={pptx.slides} activeIndex={activeIndex} onSelect={selectSlide} decisionOf={slideReview?.decisionOf} />
+
+      {slideReview ? <DeckDecisionButtons slides={pptx.slides} review={slideReview} /> : null}
     </Card>
   );
 }

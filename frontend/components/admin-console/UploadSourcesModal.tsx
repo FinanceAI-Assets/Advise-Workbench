@@ -48,7 +48,7 @@ export function UploadSourcesModal({
   onClose,
   onUploaded,
 }: {
-  practice?: { id: string; title: string; owner?: string };
+  practice?: { id: string; title: string; owner?: string; heading?: string };
   onClose: () => void;
   onUploaded: (jobs: LibraryUploadJob[]) => void;
 }) {
@@ -161,7 +161,7 @@ export function UploadSourcesModal({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 id="upload-sources-title" className="text-lg font-semibold text-[var(--text-default)]">
-              {practice ? `Upload corrected source · ${practice.title}` : "Upload sources"}
+              {practice ? `${practice.heading ?? "Upload corrected source"} · ${practice.title}` : "Upload sources"}
             </h2>
             <p id="upload-sources-description" className="mt-1 text-sm text-[var(--text-muted)]">
               PDF, Word, PowerPoint, Excel, Markdown or text · {practice ? "One file" : `Up to ${MAX_FILES} files`}, 25 MB
@@ -300,8 +300,8 @@ export function UploadSourcesModal({
           </fieldset>
 
           <div className="rounded-md bg-[var(--primary-50)] p-3 text-xs leading-5 text-[var(--text-muted)]">
-            Uploaded sources remain outside user retrieval until extraction, index validation, quality review, and independent
-            approval are complete.
+            Uploaded sources remain outside user retrieval until extraction, index validation and quality review are complete and
+            an administrator approves and publishes them.
           </div>
 
           {error ? <p role="alert" className="text-sm text-[var(--error)]">{error}</p> : null}

@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import {
   ArtifactViewer,
+  DeckDecisionButtons,
   DocumentOutline,
   EngagementFilesPanel,
   EvidenceRegisterView,
@@ -227,6 +228,7 @@ export default function EngagementDeliverablesPage() {
   const slideReview: SlideReview = {
     decisionOf: slideDecisions.decisionOf,
     onDecide: slideDecisions.decide,
+    onDecideAll: slideDecisions.decideAll,
     locked: pptxReview?.review === "Approved",
   };
 
@@ -421,6 +423,7 @@ export default function EngagementDeliverablesPage() {
                     Download PPTX
                   </Button>
                 </div>
+                <DeckDecisionButtons slides={pptx.slides} review={slideReview} />
                 <ul className="space-y-2 border-t border-[var(--surface-border)] pt-3">
                   {slideLinks.map((link) => (
                     <li key={link.id}>

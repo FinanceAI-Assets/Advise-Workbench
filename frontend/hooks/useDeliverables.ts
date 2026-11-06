@@ -115,10 +115,12 @@ export function useSlideDecisions(runId: string) {
     setDecisions(readSlideDecisions(key));
   }, [key]);
 
-  function decide(slideNumber: number, decision: SlideDecision | null) {
+  function decideAll(slideNumbers: number[], decision: SlideDecision | null) {
     const next = { ...readSlideDecisions(key) };
-    if (decision) next[slideNumber] = decision;
-    else delete next[slideNumber];
+    for (const slideNumber of slideNumbers) {
+      if (decision) next[slideNumber] = decision;
+      else delete next[slideNumber];
+    }
     setDecisions(next);
     try {
       window.localStorage.setItem(key, JSON.stringify(next));
@@ -127,7 +129,11 @@ export function useSlideDecisions(runId: string) {
     }
   }
 
-  return { decisionOf: (slideNumber: number): SlideDecision | undefined => decisions[slideNumber], decide };
+  return {
+    decisionOf: (slideNumber: number): SlideDecision | undefined => decisions[slideNumber],
+    decide: (slideNumber: number, decision: SlideDecision | null) => decideAll([slideNumber], decision),
+    decideAll,
+  };
 }
 
 function hasDrafts(data: RunArtifactsResponse): boolean {

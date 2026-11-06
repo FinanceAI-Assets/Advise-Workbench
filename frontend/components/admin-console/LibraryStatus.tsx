@@ -18,6 +18,8 @@ const STATE_TONE: Record<string, LibraryBadgeTone> = {
   Passed: "success",
   "Quality review": "warning",
   "In review": "warning",
+  "Candidate in review": "warning",
+  Processing: "warning",
   "Approval blocked": "warning",
   Pending: "neutral",
   "Not eligible": "neutral",

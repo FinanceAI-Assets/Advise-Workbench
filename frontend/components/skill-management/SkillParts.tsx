@@ -1,8 +1,9 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { EngagementTabs } from "@/components/engagements/EngagementTabs";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/utils";
@@ -126,26 +127,18 @@ export const SKILL_TABS: Array<{ key: SkillTabKey; label: string; path: string }
   { key: "history", label: "History", path: "/history" },
 ];
 
-/** Underlined tab links shared by a skill's pages. */
-export function TabLinks({ tabs, active }: { tabs: Array<{ key: string; label: string; href: string }>; active?: string }) {
+/** The workbench's button tab group, where each tab opens a page. Shared by the registry and a skill's pages. */
+export function TabLinks({ tabs, active }: { tabs: Array<{ key: string; label: string; count?: number; href: string }>; active?: string }) {
+  const router = useRouter();
   return (
-    <nav className="flex gap-6 border-b border-[var(--surface-border)]" aria-label="Sections">
-      {tabs.map((tab) => (
-        <Link
-          key={tab.key}
-          href={tab.href}
-          aria-current={tab.key === active ? "page" : undefined}
-          className={cn(
-            "-mb-px border-b-2 pb-2 text-xs !no-underline transition",
-            tab.key === active
-              ? "border-[var(--accent-green)] font-medium !text-[var(--accent-green-dark)]"
-              : "border-transparent !text-[var(--text-muted)] hover:!text-[var(--text-default)]"
-          )}
-        >
-          {tab.label}
-        </Link>
-      ))}
-    </nav>
+    <EngagementTabs
+      tabs={tabs}
+      active={active ?? ""}
+      onChange={(key) => {
+        const tab = tabs.find((item) => item.key === key);
+        if (tab) router.push(tab.href);
+      }}
+    />
   );
 }
 

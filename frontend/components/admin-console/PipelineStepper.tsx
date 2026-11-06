@@ -1,53 +1,105 @@
-import { Circle, CircleCheck, Scan } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/utils";
 import type { EngagementStep } from "@/types/api";
 
-function StepIcon({ status }: { status: EngagementStep["status"] }) {
-  if (status === "complete") return <CircleCheck size={16} className="text-[var(--accent-green-dark)]" aria-hidden />;
-  if (status === "in-progress") return <Scan size={16} className="text-[var(--accent-green-dark)]" aria-hidden />;
-  return <Circle size={16} className="text-[var(--text-muted)]" aria-hidden />;
-}
+const MARKER_CLASS: Record<EngagementStep["status"], string> = {
+  complete: "border-[var(--accent-green)] bg-[var(--accent-green)] text-white",
+  "in-progress": "border-[var(--accent-green)] bg-[#EFF6E6] text-[var(--accent-green-dark)]",
+  upcoming: "border-[var(--surface-border-strong)] bg-white text-[var(--text-muted)]",
+};
 
-/** The five library ingestion steps in one row; each step opens its view. */
+/** The five library ingestion steps, numbered and joined in one row; each step opens its view. */
 export function PipelineStepper({
   steps,
   activeId,
   onSelect,
 }: {
   steps: EngagementStep[];
+  /** The highlighted step: the one on screen, or on the practice page the one the practice has reached. */
   activeId: string;
   onSelect: (stepId: string) => void;
 }) {
   return (
-    <Card className="p-0">
-      <ol className="grid grid-cols-2 gap-1 p-2 sm:grid-cols-3 lg:grid-cols-5">
-        {steps.map((step) => (
-          <li key={step.id}>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onSelect(step.id)}
-              aria-current={step.id === activeId ? "step" : undefined}
-              className={cn(
-                "flex w-full items-start justify-start gap-2.5 px-2 py-2 text-left font-normal hover:bg-[var(--surface-muted)]",
-                // The first step's view is the library overview, which the design shows without a highlight.
-                step.id === activeId && activeId !== steps[0]?.id && "bg-[var(--surface-muted)]"
-              )}
-            >
-              <span className="mt-px">
-                <StepIcon status={step.status} />
-              </span>
-              <span>
-                <span className="block text-xs font-semibold text-[var(--text-default)]">{step.label}</span>
-                <span className="block text-2xs text-[var(--text-muted)]">{step.helper}</span>
-              </span>
-            </Button>
-          </li>
-        ))}
+    <Card className="overflow-x-auto p-3">
+      <ol className="flex min-w-[760px] items-start" aria-label="Library pipeline">
+        {steps.map((step, index) => {
+          const active = step.id === activeId;
+          return (
+            <li key={step.id} className="flex flex-1 items-start last:flex-none">
+              <button
+                type="button"
+                onClick={() => onSelect(step.id)}
+                aria-current={active ? "step" : undefined}
+                className={cn(
+                  "flex items-start gap-2.5 rounded-md border px-2 py-1.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-green)]",
+                  active ? "border-[var(--accent-green)] bg-[#EFF6E6]" : "border-transparent hover:bg-[var(--surface-muted)]"
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold",
+                    MARKER_CLASS[step.status],
+                    active && "ring-2 ring-[var(--accent-green)] ring-offset-2"
+                  )}
+                >
+                  {step.status === "complete" ? <Check size={14} aria-label="Complete" /> : index + 1}
+                </span>
+                <span>
+                  <span className={cn("block whitespace-nowrap text-xs font-semibold", active ? "text-[var(--accent-green-dark)]" : "text-[var(--text-default)]")}>
+                    {step.label}
+                  </span>
+                  <span className="block whitespace-nowrap text-2xs text-[var(--text-muted)]">{step.helper}</span>
+                </span>
+              </button>
+              {index < steps.length - 1 ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    "mx-1 mt-5 h-0.5 min-w-3 flex-1 rounded-full",
+                    step.status === "complete" ? "bg-[var(--accent-green)]" : "bg-[var(--surface-border-strong)]"
+                  )}
+                />
+              ) : null}
+            </li>
+          );
+        })}
       </ol>
+    </Card>
+  );
+}
+
+/** Moves between the pipeline steps; the first and last steps lead back to the practice. */
+export function StepperFooter({
+  position,
+  total,
+  onBack,
+  backLabel,
+  onNext,
+  nextLabel,
+}: {
+  position: number;
+  total: number;
+  onBack: () => void;
+  backLabel: string;
+  onNext: () => void;
+  nextLabel: string;
+}) {
+  return (
+    <Card className="flex flex-wrap items-center justify-between gap-3 p-3">
+      <Button type="button" variant="secondary" className="flex items-center gap-2 whitespace-nowrap text-sm" onClick={onBack}>
+        <ArrowLeft size={16} aria-hidden />
+        {backLabel}
+      </Button>
+      <span className="text-xs text-[var(--text-muted)]">
+        Step {position} of {total}
+      </span>
+      <Button type="button" className="flex items-center gap-2 whitespace-nowrap text-sm" onClick={onNext}>
+        {nextLabel}
+        <ArrowRight size={16} aria-hidden />
+      </Button>
     </Card>
   );
 }

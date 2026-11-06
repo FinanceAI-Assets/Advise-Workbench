@@ -6,8 +6,8 @@ export { ControlsAuditPanel } from "@/components/admin-console/ControlsAuditPane
 export { AdminEngagementsTable } from "@/components/admin-console/AdminEngagementsTable";
 export { SelectedEngagementPanel } from "@/components/admin-console/SelectedEngagementPanel";
 export { DeliverableLifecyclePanel } from "@/components/admin-console/DeliverableLifecyclePanel";
-export { PracticeInventoryPanel } from "@/components/admin-console/PracticeInventoryPanel";
-export { PipelineStepper } from "@/components/admin-console/PipelineStepper";
+export { INITIAL_PRACTICE_LIST, PracticeInventoryPanel, type PracticeListState } from "@/components/admin-console/PracticeInventoryPanel";
+export { PipelineStepper, StepperFooter } from "@/components/admin-console/PipelineStepper";
 export { LibraryBadge, LibraryWarning } from "@/components/admin-console/LibraryStatus";
 export { IngestionJobPanel } from "@/components/admin-console/IngestionJobPanel";
 export { QualityReviewPanel } from "@/components/admin-console/QualityReviewPanel";
@@ -20,6 +20,7 @@ export { UploadSourcesModal } from "@/components/admin-console/UploadSourcesModa
 export {
   DeletePracticeButton,
   LibraryUploadsPanel,
+  SourceFilePanel,
   StoredDataPanel,
   UploadProgressPanel,
 } from "@/components/admin-console/LibraryIngestion";
@@ -30,4 +31,4 @@ export {
   QualityGatesTab,
 } from "@/components/admin-console/LibraryPipelineTabs";
 export { RequestCorrectionModal } from "@/components/admin-console/RequestCorrectionModal";
-export { LibraryApprovalControls, PublishControl } from "@/components/admin-console/LibraryApprovalControls";
+export { PublishControl } from "@/components/admin-console/LibraryApprovalControls";

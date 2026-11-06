@@ -633,11 +633,7 @@ export type LibraryQualityGatesDetail = {
   blocker: LibraryNotice | null;
   metadata: LibraryField[];
   correction: LibraryCorrectionDraft;
-  // Present for uploaded sources; the sample walkthrough has no live review.
-  review?: { id: string; state: string; reviewer: string; selfReview: boolean } | null;
   openCorrection?: LibraryCorrectionRecord | null;
-  approvers?: Array<{ id: string; name: string }>;
-  canSubmit?: boolean;
   canPublish?: boolean;
   blockers?: string[];
 };
