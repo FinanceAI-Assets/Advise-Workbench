@@ -16,11 +16,13 @@ export { SelectedReviewPanel } from "@/components/admin-console/SelectedReviewPa
 export { PolicyControlsPanel } from "@/components/admin-console/PolicyControlsPanel";
 export { RoleAccessTable } from "@/components/admin-console/RoleAccessTable";
 export { AuditTrailPanel } from "@/components/admin-console/AuditTrailPanel";
-export { UploadSourcesModal } from "@/components/admin-console/UploadSourcesModal";
+export { SourceUploadForm, type UploadTarget } from "@/components/admin-console/SourceUploadForm";
+export { PracticeDetailsCard, PracticeDetailsForm, PracticeSourcesPanel } from "@/components/admin-console/PracticeOverview";
 export {
   DeletePracticeButton,
   LibraryUploadsPanel,
   SourceFilePanel,
+  stageLabel,
   StoredDataPanel,
   UploadProgressPanel,
 } from "@/components/admin-console/LibraryIngestion";

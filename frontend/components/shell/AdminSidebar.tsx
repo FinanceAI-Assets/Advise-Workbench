@@ -18,7 +18,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 
 import { BrandMark } from "@/components/shell/BrandMark";
-import { WorkspaceSwitcher } from "@/components/shell/WorkspaceSwitcher";
+import { WorkspaceLabel } from "@/components/shell/WorkspaceSwitcher";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
@@ -49,7 +49,8 @@ function AdminNavLinkList({ onNavigate }: { onNavigate?: () => void }) {
             href={item.href}
             onClick={onNavigate}
             className={cn(
-              "flex min-h-10 items-center gap-2 rounded-md border-l-2 px-2 py-2 text-xs transition !no-underline",
+              // Same size as the user workspace nav (ShellSidebar).
+              "flex min-h-11 items-center gap-2 rounded-md border-l-2 px-2 py-2 text-sm transition !no-underline",
               active
                 ? "border-l-[var(--accent-green)] bg-[var(--primary-800)] !text-white shadow-sm"
                 : "border-l-transparent !text-[var(--primary-200)] hover:bg-[color:color-mix(in_srgb,var(--primary-800)_82%,black)] hover:!text-white"
@@ -216,7 +217,7 @@ export function AdminSidebar({
         </div>
         {!desktopCollapsed ? (
           <div className="mb-6 shrink-0 px-0">
-            <WorkspaceSwitcher admin />
+            <WorkspaceLabel />
           </div>
         ) : null}
         {desktopCollapsed ? (
@@ -285,7 +286,7 @@ export function AdminSidebar({
             </Button>
           </div>
           <div className="mb-4 shrink-0">
-            <WorkspaceSwitcher admin />
+            <WorkspaceLabel />
           </div>
           <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             <AdminNavLinkList onNavigate={onMobileClose} />

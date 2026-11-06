@@ -6,6 +6,7 @@ import { type ReactNode, useState } from "react";
 import { LibraryBadge, type LibraryBadgeTone } from "@/components/admin-console/LibraryStatus";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { DataTable } from "@/components/ui/DataTable";
 import { ErrorNote } from "@/components/workbench/PageFrame";
 import {
   type IngestionJobStatus,
@@ -34,7 +35,7 @@ const STAGE_LABEL: Record<string, string> = {
   deleted: "Deleted",
 };
 
-const stageLabel = (stage: string) => STAGE_LABEL[stage] ?? stage.replace(/_/g, " ");
+export const stageLabel = (stage: string) => STAGE_LABEL[stage] ?? stage.replace(/_/g, " ");
 
 function statusTone(job: IngestionJobStatus): LibraryBadgeTone {
   if (job.status === "completed") return "success";
@@ -141,71 +142,78 @@ export function LibraryUploadsPanel({ activeId, onSelect }: { activeId: string; 
   const jobs = useLibraryIngestionJobs();
   const rows = jobs.data ?? [];
   return (
-    <Card className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
+    <Card className="overflow-hidden p-0">
+      <div className="flex items-center justify-between gap-3 p-4">
         <h2 className="text-sm font-semibold text-[var(--text-default)]">Uploads</h2>
         <span className="text-2xs text-[var(--text-muted)]">{jobs.data ? `${rows.length} documents` : null}</span>
       </div>
-      <ErrorNote error={jobs.error} />
-      {jobs.isPending ? (
-        <p className="text-xs text-[var(--text-muted)]">Loading uploads…</p>
-      ) : rows.length === 0 && !jobs.error ? (
-        <p className="text-xs text-[var(--text-muted)]">No sources have been uploaded yet.</p>
-      ) : (
-        <div className="overflow-x-auto rounded-md border border-[var(--surface-border)]">
-          <table className="w-full min-w-[560px] text-left text-xs">
-            <thead>
-              <tr className="border-b border-[var(--surface-border)] bg-[var(--surface-muted)] text-[var(--text-muted)]">
-                <th className="px-3 py-2 font-medium">File</th>
-                <th className="px-3 py-2 font-medium">Practice</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Counts</th>
-                <th className="px-3 py-2 font-medium">Uploaded</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((job) => {
-                const practice = job.practice_id;
-                const active = Boolean(practice) && practice === activeId;
-                return (
-                  <tr
-                    key={job.job_id}
-                    onClick={practice ? () => onSelect(practice) : undefined}
-                    aria-selected={active}
-                    className={cn(
-                      "border-b border-[var(--surface-border)] align-top last:border-b-0",
-                      practice && "cursor-pointer",
-                      active ? "bg-[#EFF6E6]" : practice && "hover:bg-[var(--surface-muted)]",
-                    )}
-                  >
-                    <td className="max-w-[220px] px-3 py-2">
-                      <span className="block truncate font-medium text-[var(--text-default)]" title={job.filename}>
-                        {job.filename}
-                      </span>
-                      {job.error_message ? (
-                        <span className="block truncate text-2xs text-[var(--error)]" title={job.error_message}>
-                          {job.error_message}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-2 text-[var(--text-default)]">{practice ? practice.toUpperCase() : "—"}</td>
-                    <td className="space-y-1 px-3 py-2">
-                      <LibraryBadge tone={statusTone(job)}>{stageLabel(job.status)}</LibraryBadge>
-                      {!job.is_terminal ? <ProgressBar job={job} /> : null}
-                    </td>
-                    <td className="px-3 py-2 text-[var(--text-muted)]">
-                      {job.counts.chunks} chunks · {job.counts.embeddings} vectors
-                      <br />
-                      {job.counts.facts} facts · {job.counts.wiki_pages} wiki
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-[var(--text-muted)]">{formatTime(job.created_at)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {jobs.error ? (
+        <div className="px-4 pb-4">
+          <ErrorNote error={jobs.error} />
         </div>
-      )}
+      ) : null}
+      <DataTable
+        bare
+        label="Uploads"
+        itemName="documents"
+        loading={jobs.isPending}
+        rows={rows}
+        rowKey={(job) => job.job_id}
+        onRowClick={(job) => job.practice_id && onSelect(job.practice_id)}
+        isRowActive={(job) => Boolean(job.practice_id) && job.practice_id === activeId}
+        minWidth="min-w-[640px]"
+        empty={<p className="text-center text-sm text-[var(--text-muted)]">No sources have been uploaded yet.</p>}
+        columns={[
+          {
+            key: "file",
+            header: "File",
+            sortValue: (job) => job.filename,
+            cell: (job) => (
+              <span className="block max-w-[260px]">
+                <span className="block truncate font-semibold text-[var(--text-default)]" title={job.filename}>
+                  {job.filename}
+                </span>
+                {job.error_message ? (
+                  <span className="block truncate text-2xs text-[var(--error)]" title={job.error_message}>
+                    {job.error_message}
+                  </span>
+                ) : null}
+              </span>
+            ),
+          },
+          { key: "practice", header: "Practice", sortValue: (job) => job.practice_id ?? "", cell: (job) => (job.practice_id ? job.practice_id.toUpperCase() : "—") },
+          {
+            key: "status",
+            header: "Status",
+            sortValue: (job) => job.status,
+            cell: (job) => (
+              <span className="block space-y-1">
+                <LibraryBadge dot tone={statusTone(job)}>{stageLabel(job.status)}</LibraryBadge>
+                {!job.is_terminal ? <ProgressBar job={job} /> : null}
+              </span>
+            ),
+          },
+          {
+            key: "counts",
+            header: "Counts",
+            hideBelow: "lg",
+            sortValue: (job) => job.counts.chunks,
+            cell: (job) => (
+              <span className="text-xs text-[var(--text-muted)]">
+                {job.counts.chunks} chunks · {job.counts.embeddings} vectors
+                <br />
+                {job.counts.facts} facts · {job.counts.wiki_pages} wiki
+              </span>
+            ),
+          },
+          {
+            key: "uploaded",
+            header: "Uploaded",
+            sortValue: (job) => job.created_at,
+            cell: (job) => <span className="whitespace-nowrap text-[var(--text-muted)]">{formatTime(job.created_at)}</span>,
+          },
+        ]}
+      />
     </Card>
   );
 }

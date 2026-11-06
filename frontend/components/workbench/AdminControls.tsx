@@ -1,11 +1,13 @@
 "use client";
 
-import { Download } from "lucide-react";
+import { Download, Search } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { Input } from "@/components/ui/Input";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ErrorNote } from "@/components/workbench/PageFrame";
 import { type AdminAction, type AdminRecord, useAdminAction } from "@/hooks/useAdminConsole";
 import { useAuth } from "@/lib/auth-context";
@@ -103,7 +105,15 @@ export function ExportButton({ report, label }: { report: "engagements" | "audit
   );
 }
 
-/** Plain table for the console's list tabs. `columns` maps a record field to its heading. */
+// Fields shown as a status pill rather than text.
+const STATUS_FIELDS = new Set(["state", "status", "severity", "controlState", "lifecycle", "outcome", "result"]);
+// Severity sorts by rank, most severe first, not alphabetically.
+const SEVERITY_RANK: Record<string, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+
+/**
+ * The console's list tabs: a titled card with a search box over a sortable, paged table. `columns` maps a record
+ * field to its heading; status-like fields are shown as pills.
+ */
 export function RecordsTable({
   title,
   columns,
@@ -117,37 +127,48 @@ export function RecordsTable({
   empty: string;
   action?: (row: AdminRecord) => ReactNode;
 }) {
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? rows.filter((row) => columns.some(([field]) => String(row[field] ?? "").toLowerCase().includes(needle)))
+    : rows;
+  const tableColumns: DataTableColumn<AdminRecord>[] = [
+    ...columns.map(([field, heading], i): DataTableColumn<AdminRecord> => ({
+      key: field,
+      header: heading,
+      sortValue: (row) => (field === "severity" ? (SEVERITY_RANK[row[field]] ?? 9) : (row[field] ?? "")),
+      cell: (row) =>
+        STATUS_FIELDS.has(field) && row[field] ? (
+          <StatusBadge>{row[field]}</StatusBadge>
+        ) : (
+          <span className={i === 0 ? "font-semibold text-[var(--text-default)]" : "text-[var(--text-default)]"}>{row[field] || "—"}</span>
+        ),
+    })),
+    ...(action ? [{ key: "__action", header: "Action", align: "right" as const, cell: (row: AdminRecord) => action(row) }] : []),
+  ];
+
   return (
-    <Card className="space-y-3 overflow-x-auto">
-      <h2 className="text-base font-semibold text-[var(--text-default)]">{title}</h2>
-      {rows.length === 0 ? (
-        <p className="text-sm text-[var(--text-muted)]">{empty}</p>
-      ) : (
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs text-[var(--text-muted)]">
-            <tr>
-              {columns.map(([field, heading]) => (
-                <th key={field} className="py-2 pr-3 font-medium">
-                  {heading}
-                </th>
-              ))}
-              {action ? <th className="py-2 font-medium">Action</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} className="border-t border-[var(--surface-border)] align-top">
-                {columns.map(([field], i) => (
-                  <td key={field} className={`py-3 pr-3 ${i === 0 ? "font-medium text-[var(--text-default)]" : ""}`}>
-                    {row[field] ?? "—"}
-                  </td>
-                ))}
-                {action ? <td className="py-3">{action(row)}</td> : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+    <Card className="overflow-hidden p-0">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <h2 className="text-base font-semibold text-[var(--text-default)]">
+          {title} <span className="text-sm font-normal text-[var(--text-muted)]">· {rows.length}</span>
+        </h2>
+        {rows.length > 0 ? (
+          <div className="relative w-full max-w-xs">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" aria-hidden />
+            <Input type="search" aria-label={`Search ${title.toLowerCase()}`} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" className="py-1.5 pl-8 text-sm" />
+          </div>
+        ) : null}
+      </div>
+      <DataTable
+        bare
+        label={title}
+        itemName="records"
+        columns={tableColumns}
+        rows={visible}
+        rowKey={(row) => row.id}
+        empty={<p className="text-center text-sm text-[var(--text-muted)]">{rows.length === 0 ? empty : "No records match your search."}</p>}
+      />
     </Card>
   );
 }

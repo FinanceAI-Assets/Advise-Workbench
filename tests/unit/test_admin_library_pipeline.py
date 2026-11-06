@@ -213,6 +213,74 @@ def test_a_new_version_keeps_the_live_practice_served_until_it_is_released() -> 
     assert row["version"] == "v1.1 candidate" and row["lifecycle"] == "Candidate in review"
 
 
+def test_a_created_practice_holds_several_sources_each_with_its_own_versions() -> None:
+    client = TestClient(fastapi_app)
+    admin, _ = _login(client, "admin", admin=True)
+    member, _ = _login(client, "member")
+    topic = f"Sourcing {uuid.uuid4().hex[:6]}"
+
+    # 1. Create the practice first: a draft with no sources, outside the library and not publishable.
+    created = client.post("/api/admin/library/practices", headers=admin, json={
+        "title": topic, "category": "Procurement", "maturity": "Managed", "owner": "Maya Patel",
+        "classification": "Confidential", "rights": "Advisory Methods · Internal reuse permitted",
+        "description": "Screen and onboard vendors in one pass."})
+    assert created.status_code == 201, created.text
+    practice_id = created.json()["id"]
+    screen = client.get(f"/api/admin/library?practice={practice_id}", headers=admin).json()
+    overview = screen["practice"]
+    assert (overview["title"], overview["taxonomy"], overview["classification"], overview["status"]) == (
+        topic, "Procurement", "Confidential", "Draft")
+    assert overview["sources"] == []
+    row = next(r for r in screen["practiceInventory"] if r["id"] == practice_id)
+    assert (row["sources"], row["indexing"], row["lifecycle"]) == (0, "No sources", "Draft")
+    assert client.post(f"/api/admin/library/{practice_id}/publish", headers=admin, json={"reason": "Too early"}).status_code == 409
+
+    # 2. Two sources at once; owner and rights come from the practice.
+    files = [("files", ("playbook.docx", _source(topic, attributed=True), DOCX)),
+             ("files", ("checklist.docx", _source(f"{topic} checklist", attributed=False), DOCX))]
+    added = client.post("/api/admin/library/uploads", headers=admin, files=files,
+                        data={"practice_id": practice_id, "source_id": "new"})
+    assert added.status_code == 202, added.text
+    assert sorted(j["sourceId"] for j in added.json()["jobs"]) == ["SRC-1", "SRC-2"]
+    assert {j["practiceId"] for j in added.json()["jobs"]} == {practice_id}
+
+    # 3. A second version of the checklist, with its reference attributed.
+    version = client.post("/api/admin/library/uploads", headers=admin,
+                          files={"files": ("checklist-v2.docx", _source(f"{topic} checklist", attributed=True), DOCX)},
+                          data={"practice_id": practice_id, "source_id": "SRC-2"})
+    assert version.status_code == 202, version.text
+    assert version.json()["jobs"][0]["sourceId"] == "SRC-2"
+    unknown = client.post("/api/admin/library/uploads", headers=admin,
+                          files={"files": ("other.docx", _source(f"{topic} other", attributed=True), DOCX)},
+                          data={"practice_id": practice_id, "source_id": "SRC-9"})
+    assert unknown.status_code == 404
+
+    screen = client.get(f"/api/admin/library?practice={practice_id}", headers=admin).json()
+    sources = {s["id"]: s for s in screen["practice"]["sources"]}
+    assert (sources["SRC-1"]["versionCount"], sources["SRC-2"]["versionCount"]) == (1, 2)
+    assert [v["number"] for v in sources["SRC-2"]["versions"]] == [2, 1]
+    assert sources["SRC-2"]["filename"] == "checklist-v2.docx" and sources["SRC-2"]["name"] == "checklist.docx"
+    # The description entered on Create practice is kept; the sources do not replace it.
+    assert screen["practice"]["description"] == "Screen and onboard vendors in one pass."
+    assert next(r for r in screen["practiceInventory"] if r["id"] == practice_id)["sources"] == 2
+    first = client.get(f"/api/admin/library?practice={practice_id}&source=SRC-1", headers=admin).json()
+    assert first["selectedSourceId"] == "SRC-1" and first["ingestion"]["filename"] == "playbook.docx"
+
+    # 4. Publish each source; the practice serves both, and only superseded versions of a source leave search.
+    for source in ("SRC-1", "SRC-2"):
+        published = client.post(f"/api/admin/library/{practice_id}/publish", headers=admin,
+                                json={"reason": "Ready for release", "sourceId": source})
+        assert published.status_code == 200, published.text
+    detail = client.get(f"/api/library/{practice_id}", headers=member).json()
+    assert detail["status"] == "Approved" and detail["versionLabel"] == "v1.1"
+    assert detail["description"] == "Screen and onboard vendors in one pass."
+    sources = {s["id"]: s for s in client.get(f"/api/admin/library?practice={practice_id}", headers=admin).json()["practice"]["sources"]}
+    assert (sources["SRC-1"]["liveVersion"], sources["SRC-2"]["liveVersion"]) == (1, 2)
+    served = (Path(settings.workspace_root) / "leading_practices" / "published" / f"{practice_id}.md").read_text(encoding="utf-8")
+    # The practice body carries both sources (each document's section headings).
+    assert f"{topic} risk screening" in served and f"{topic} checklist risk screening" in served
+
+
 def test_unreadable_and_unsupported_sources_are_rejected_or_excluded() -> None:
     client = TestClient(fastapi_app)
     admin, _ = _login(client, "admin", admin=True)

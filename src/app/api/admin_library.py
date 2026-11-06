@@ -1,8 +1,10 @@
 """Admin console: the Leading Practice library, from source upload to published practice.
 
 Upload sources is asynchronous: the endpoint stores each file in SeaweedFS (S3) and queues the ingestion pipeline
-(``src/workers``), which is the single path for extraction, chunking and embedding. Its ``intake`` stage creates
-(or adds a version to) a practice and its ingestion job; ``library_validation`` runs the library's quality checks
+(``src/workers``), which is the single path for extraction, chunking and embedding. A practice holds several
+sources, each with its own versions: a job records one version of one source (``sourceId``). The ``intake`` stage
+creates the practice (unless it was created first, empty), the source or its next version, and the ingestion job;
+``library_validation`` runs the library's quality checks
 (``src.memory.knowledge.practice_ingest``) on the pipeline's own passages. The job record, in the
 ``ingestion_jobs`` collection, holds the stage results; the passages live in ``library_chunks``.
 
@@ -55,6 +57,19 @@ _LOG = logging.getLogger(__name__)
 JOBS = "ingestion_jobs"
 CHUNKS = "library_chunks"
 MAX_FILES_PER_UPLOAD = 10
+# A practice created on its own, before any source is uploaded to it.
+DRAFT = "Draft"
+# ``source_id`` of an upload that adds a source to a practice (rather than a version of an existing one).
+NEW_SOURCE = "new"
+# Jobs from before practices had several sources belong to the first one.
+FIRST_SOURCE = "SRC-1"
+# Payload key of the description an admin entered on Create practice; it is kept over one taken from a source.
+ENTERED_DESCRIPTION = "enteredDescription"
+
+
+def entered_description(practice: LpPractice) -> str:
+    """The description an admin entered for the practice, or "" when its description comes from its sources."""
+    return str(json.loads(practice.payload_json or "{}").get(ENTERED_DESCRIPTION) or "")
 
 # Fields the ingestion jobs table shows; the rest of a job record is pipeline detail.
 _JOB_TABLE_FIELDS = ("source", "stage", "submittedBy", "when", "outcome", "detail")
@@ -91,6 +106,16 @@ def pipeline_jobs(db: Session, practice_id: str | None = None) -> list[dict[str,
     return sorted(jobs, key=lambda j: _number(j["id"]), reverse=True)
 
 
+def source_of(job: dict[str, Any]) -> str:
+    """The source of a practice that a job is a version of ("SRC-2")."""
+    return job.get("sourceId") or FIRST_SOURCE
+
+
+def source_jobs(db: Session, practice_id: str, source_id: str) -> list[dict[str, Any]]:
+    """Versions of one source of a practice, newest first."""
+    return [j for j in pipeline_jobs(db, practice_id) if source_of(j) == source_id]
+
+
 def job_table_rows(db: Session) -> list[dict[str, Any]]:
     rows = db.scalars(select(WorkbenchRecord).where(WorkbenchRecord.collection == JOBS)).all()
     ordered = sorted(rows, key=lambda r: (r.position, -_number(r.record_id)))
@@ -120,13 +145,13 @@ def _next_practice_id(db: Session) -> str:
 
 
 def _published_hashes(db: Session, *, exclude: str) -> dict[str, str]:
-    """Passage hashes of the current release of every other published practice."""
+    """Passage hashes of the current release of every source of every other published practice."""
     hashes: dict[str, str] = {}
-    latest: dict[str, str] = {}
+    latest: dict[tuple[str, str], str] = {}
     for job in pipeline_jobs(db):
         if job.get("release") and job["practiceId"] != exclude:
-            latest.setdefault(job["practiceId"], job["id"])
-    for practice_id, job_id in latest.items():
+            latest.setdefault((job["practiceId"], source_of(job)), job["id"])
+    for (practice_id, _), job_id in latest.items():
         for chunk in _chunks(db, job_id).get("chunks", []):
             hashes[chunk["sha256"]] = practice_id
     return hashes
@@ -154,39 +179,50 @@ class Unchanged(Exception):
         self.job = job
 
 
-def resolve_upload(db: Session, filename: str, digest: str, practice_id: str = "") -> str:
-    """The practice an upload belongs to: the one named in the form, else the practice whose latest version has the
-    same file name (a new version of it), else "" (a new practice).
+def resolve_upload(db: Session, filename: str, digest: str, practice_id: str = "", source_id: str = "") -> tuple[str, str]:
+    """The (practice, source) an upload belongs to; a source of "" is a new source, a practice of "" a new practice.
 
-    Raises ``Unchanged`` when the content equals that practice's latest version and ``ValueError`` when the same
-    content is already in the library under another practice."""
-    target = practice_id
-    if not target:
+    With a practice, ``source_id`` "new" adds a source, "SRC-n" adds a version of that source, and "" a version of
+    the practice's most recently uploaded source. Without a practice, the source whose latest version has the same
+    file name gets a new version; any other file starts a new practice.
+
+    Raises ``Unchanged`` when the content equals the latest version of that source and ``ValueError`` when the same
+    content is already in the library as another source."""
+    target, source = practice_id, ""
+    if target:
+        if source_id and source_id != NEW_SOURCE:
+            source = source_id
+        elif not source_id:
+            versions = pipeline_jobs(db, target)
+            source = source_of(versions[0]) if versions else ""
+    else:
         name = filename.casefold()
-        latest: dict[str, dict[str, Any]] = {}
+        latest: dict[tuple[str, str], dict[str, Any]] = {}
         for job in pipeline_jobs(db):  # newest first
-            latest.setdefault(job["practiceId"], job)
-        target = next((pid for pid, job in latest.items()
-                       if str(job.get("filename", "")).casefold() == name
-                       and db.scalar(select(LpPractice.id).where(LpPractice.id == pid)) is not None), "")
-    versions = pipeline_jobs(db, target) if target else []
+            latest.setdefault((job["practiceId"], source_of(job)), job)
+        target, source = next((key for key, job in latest.items()
+                               if str(job.get("filename", "")).casefold() == name
+                               and db.scalar(select(LpPractice.id).where(LpPractice.id == key[0])) is not None), ("", ""))
+    versions = source_jobs(db, target, source) if target and source else []
     if versions and versions[0].get("sha256") == digest:
         raise Unchanged(versions[0])
-    duplicate = next((j for j in pipeline_jobs(db) if j.get("sha256") == digest and j["practiceId"] != target), None)
+    duplicate = next((j for j in pipeline_jobs(db) if j.get("sha256") == digest
+                      and not (source and j["practiceId"] == target and source_of(j) == source)), None)
     if duplicate is not None:
-        raise ValueError(f"{filename} was already uploaded as {duplicate['id']} ({duplicate['practiceId'].upper()})")
-    return target
+        raise ValueError(f"{filename} was already uploaded as {duplicate['id']} "
+                         f"({duplicate['practiceId'].upper()} · {source_of(duplicate)})")
+    return target, source
 
 
-def _quick_reject(db: Session, filename: str, content: bytes, practice_id: str) -> str:
+def _quick_reject(db: Session, filename: str, content: bytes, practice_id: str, source_id: str) -> tuple[str, str]:
     """Instant feedback that writes nothing (so it cannot conflict): the source checks and a read-only version and
-    duplicate lookup. The intake stage repeats both under a lock and is authoritative. Returns the target practice."""
+    duplicate lookup. The intake stage repeats both under a lock and is authoritative. Returns (practice, source)."""
     try:
         ingest.check_source(filename, content)
     except ingest.SourceRejected as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        return resolve_upload(db, filename, hashlib.sha256(content).hexdigest(), practice_id)
+        return resolve_upload(db, filename, hashlib.sha256(content).hexdigest(), practice_id, source_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -230,13 +266,14 @@ async def _upload_entry(db: Session, job: Any, filename: str, content: bytes, ta
         _, library_job_id, _ = job.filename.split("/", 2)
         library_job = {"id": library_job_id, **_payload(_row(db, JOBS, library_job_id))}
     if library_job is not None:
-        return {"id": library_job["id"], "practiceId": library_job["practiceId"], "stage": library_job["stage"],
-                "outcome": library_job["outcome"], "readable": library_job.get("readable"),
+        return {"id": library_job["id"], "practiceId": library_job["practiceId"], "sourceId": source_of(library_job),
+                "stage": library_job["stage"], "outcome": library_job["outcome"], "readable": library_job.get("readable"),
                 "ingestion": _queued_view(job, filename, content)}
     failed = job.status == "failed"
     return {
         "id": "",
         "practiceId": target,
+        "sourceId": "",
         "stage": "Failed" if failed else "Queued",
         "outcome": (job.error_message or "Failed") if failed else "Queued for extraction",
         "readable": None,
@@ -261,14 +298,15 @@ def _queued_view(job: Any, filename: str, content: bytes) -> dict[str, Any]:
 @router.post("/library/uploads", status_code=202)
 async def upload_library_sources(
     files: list[UploadFile] = File(...),
-    owner: str = Form(..., min_length=2, max_length=120),
-    classification: str = Form("Internal methods content", max_length=80),
-    rights: str = Form(..., min_length=3, max_length=300),
+    owner: str = Form("", max_length=120),
+    classification: str = Form("", max_length=80),
+    rights: str = Form("", max_length=300),
     title: str = Form("", max_length=200),
     category: str = Form("", max_length=64),
     maturity: str = Form("", max_length=32),
     version: str = Form("", max_length=24),
     practice_id: str = Form("", max_length=64),
+    source_id: str = Form("", max_length=16),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -277,43 +315,96 @@ async def upload_library_sources(
     The worker then runs, per file: intake (source checks, duplicate check, practice + job), uploading (S3),
     parsing (Docling), chunking, embedding (Qdrant), library_validation (citations, duplicates, quality gates),
     then facts and wiki. Poll ``jobs[i].ingestion.job_id`` at /api/admin/library/documents/status/{job_id}.
-    ``practice_id`` attaches a corrected or new version to an existing practice (one file only); without it, a file
-    named like the latest version of an existing practice becomes that practice's next version. A file identical to
-    that latest version is reported ``unchanged`` and not processed again. Passages already in the library are linked,
-    not stored or embedded again.
+
+    ``practice_id`` attaches the files to an existing practice, whose owner, classification and rights are used when
+    the form leaves them empty. With it, ``source_id`` "new" makes each file a new source of the practice, "SRC-n"
+    makes the one file the next version of that source, and "" the next version of its latest-uploaded source.
+    Without ``practice_id``, a file named like the latest version of an existing source becomes its next version and
+    any other file a new practice. A file identical to that latest version is reported ``unchanged`` and not
+    processed again. Passages already in the library are linked, not stored or embedded again.
     """
     if not files or len(files) > MAX_FILES_PER_UPLOAD:
         raise HTTPException(status_code=422, detail=f"Upload between 1 and {MAX_FILES_PER_UPLOAD} sources at a time")
+    source_id = source_id.strip()
+    source_id = NEW_SOURCE if source_id.lower() == NEW_SOURCE else source_id.upper()
     target = ""
     if practice_id:
-        if len(files) != 1:
-            raise HTTPException(status_code=422, detail="Attach one corrected source at a time")
+        if len(files) != 1 and source_id != NEW_SOURCE:
+            raise HTTPException(status_code=422, detail="Attach one version of a source at a time")
         target = practice_id.lower()
-        if db.scalar(select(LpPractice.id).where(LpPractice.id == target)) is None:
+        practice = db.scalar(select(LpPractice).where(LpPractice.id == target))
+        if practice is None:
             raise HTTPException(status_code=404, detail="Practice not found")
+        versions = pipeline_jobs(db, target)
+        if source_id not in ("", NEW_SOURCE) and not any(source_of(j) == source_id for j in versions):
+            raise HTTPException(status_code=404, detail=f"{target.upper()} has no source {source_id}")
+        details = json.loads(practice.payload_json or "{}")
+        last = versions[0] if versions else {}
+        owner = owner.strip() or practice.owner or last.get("owner", "")
+        classification = classification.strip() or details.get("classification") or last.get("classification", "")
+        rights = rights.strip() or details.get("sourceAttribution") or last.get("rights", "")
+    elif source_id:
+        raise HTTPException(status_code=422, detail="Name the practice the source belongs to")
+    if len(owner.strip()) < 2 or len(rights.strip()) < 3:
+        raise HTTPException(status_code=422, detail="Give the practice owner and the source attribution and rights")
 
-    accepted: list[tuple[str, bytes, str]] = []
+    accepted: list[tuple[str, bytes, tuple[str, str]]] = []
     jobs: list[dict[str, Any]] = []
     for upload in files:
         name = Path(upload.filename or "source").name
         content = await upload.read(ingest.MAX_SOURCE_BYTES + 1)
         try:
-            accepted.append((name, content, _quick_reject(db, name, content, target)))
+            accepted.append((name, content, _quick_reject(db, name, content, target, source_id)))
         except Unchanged as unchanged:
             jobs.append(_unchanged_entry(unchanged, name, content))
 
     form = {
-        "owner": owner.strip(), "classification": classification.strip(), "rights": rights.strip(),
-        "title": title.strip(), "category": category.strip(), "maturity": maturity.strip(),
+        "owner": owner.strip(), "classification": classification.strip() or "Internal methods content",
+        "rights": rights.strip(), "title": title.strip(), "category": category.strip(), "maturity": maturity.strip(),
         "version": version.strip(),
     }
-    for name, content, practice in accepted:
+    for name, content, (practice_target, source) in accepted:
+        # Intake resolves again under a lock; "new" keeps a resolved new source from becoming a version there.
+        library = {**form, "practice_id": practice_target, "source_id": source or (NEW_SOURCE if practice_target else "")}
         job = await asyncio.to_thread(
             queue_document, db, project_id=LIBRARY_SCOPE, user_id=admin.id, filename=name, content=content,
-            sha256=hashlib.sha256(content).hexdigest(), size_bytes=len(content), library={**form, "practice_id": practice},
+            sha256=hashlib.sha256(content).hexdigest(), size_bytes=len(content), library=library,
         )
-        jobs.append(await _upload_entry(db, job, name, content, practice))
+        jobs.append(await _upload_entry(db, job, name, content, practice_target))
     return {"jobs": jobs}
+
+
+class NewPractice(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    category: str = Field(default="", max_length=64)
+    maturity: str = Field(default="", max_length=32)
+    version: str = Field(default="", max_length=24)
+    owner: str = Field(min_length=2, max_length=120)
+    classification: str = Field(default="", max_length=80)
+    rights: str = Field(min_length=3, max_length=300)
+    description: str = Field(default="", max_length=2000)
+
+
+@router.post("/library/practices", status_code=201)
+def create_practice(body: NewPractice, admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+    """Create a practice with no sources; upload them afterwards with ``practice_id`` and ``source_id`` "new".
+
+    It stays a draft, outside the Leading Practice Library, until a source is uploaded, reviewed and published."""
+    _lock_library_ids(db)
+    practice_id = _next_practice_id(db)
+    title, owner, rights = body.title.strip(), body.owner.strip(), body.rights.strip()
+    practice = LpPractice(
+        id=practice_id, title=title, description=body.description.strip(),
+        category=body.category.strip() or "Operating model", maturity=body.maturity.strip() or "Defined",
+        version_label=body.version.strip() or "v1.0", status=DRAFT, owner=owner,
+        payload_json=json.dumps({"classification": body.classification.strip() or "Internal methods content",
+                                 "sourceAttribution": rights, "practiceOwner": owner,
+                                 ENTERED_DESCRIPTION: body.description.strip()}, ensure_ascii=False),
+    )
+    db.add(practice)
+    _admin_event(db, admin, f"{practice_id.upper()} created: {title}", "No sources yet")
+    db.commit()
+    return {"id": practice_id, "status": DRAFT}
 
 
 # --- pipeline stages: intake and library validation (run in the worker) -------------------------------------------
@@ -343,7 +434,7 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
     _lock_library_ids(db)
     digest = ctx["sha256"]
     try:
-        target = resolve_upload(db, filename, digest, form.get("practice_id", ""))
+        target, source = resolve_upload(db, filename, digest, form.get("practice_id", ""), form.get("source_id", ""))
     except (Unchanged, ValueError) as exc:
         raise PermanentIngestionError(str(exc)) from exc
     admin = db.get(User, ctx["user_id"])
@@ -358,6 +449,8 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
 
     stem = re.sub(r"[-_]+", " ", filename.rsplit(".", 1)[0]).strip()
     previous = pipeline_jobs(db, practice_id)
+    source_versions = [j for j in previous if source_of(j) == source] if source else []
+    source_id = source or f"SRC-{max([_number(source_of(j)) for j in previous] + [0]) + 1}"
     if practice is None:
         practice_title = (title or stem[:1].upper() + stem[1:])[:200]
         candidate_version = version or "v1.0"
@@ -385,9 +478,10 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
 
     job_id = _next_job_id(db)
     now = datetime.now()
-    open_correction = next((j["correction"] for j in previous if (j.get("correction") or {}).get("status") == "Open"), None)
+    # A correction is requested on one source; its next version resolves it.
+    open_correction = next((j["correction"] for j in source_versions if (j.get("correction") or {}).get("status") == "Open"), None)
     if open_correction is not None:
-        for job in previous:
+        for job in source_versions:
             if (job.get("correction") or {}).get("id") == open_correction["id"]:
                 row = _row(db, JOBS, job["id"])
                 payload = _payload(row)
@@ -409,6 +503,7 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
         "outcome": "Processing",
         "detail": f"{filename} · extracting, chunking and indexing",
         "practiceId": practice_id,
+        "sourceId": source_id,
         "title": practice_title,
         "version": candidate_version,
         "category": category,
@@ -433,7 +528,8 @@ def intake_source(db: Session, ctx: dict[str, Any]) -> dict[str, Any]:
     db.add(WorkbenchRecord(collection=JOBS, record_id=job_id, position=-_number(job_id),
                            payload_json=json.dumps(payload, ensure_ascii=False)))
     db.add(WorkbenchRecord(collection=CHUNKS, record_id=job_id, payload_json=json.dumps({"blocks": [], "chunks": []})))
-    _admin_event(db, admin, f"{job_id} uploaded: {filename}", f"{practice_id.upper()} {candidate_version} · processing")
+    _admin_event(db, admin, f"{job_id} uploaded: {filename}",
+                 f"{practice_id.upper()} · {source_id} version {len(source_versions) + 1} · {candidate_version} · processing")
     db.commit()
     return {
         "library_job_id": job_id,
@@ -477,7 +573,7 @@ def complete_validation(
     _save(row, payload)
     if practice is not None and practice.status != "Approved":
         practice.status = "Quality review" if readable else "Not eligible"
-        practice.description = detail["description"] or practice.description
+        practice.description = entered_description(practice) or detail["description"] or practice.description
     chunk_row = _row(db, CHUNKS, ctx["library_job_id"])
     _save(chunk_row, {"blocks": blocks, "chunks": chunks})
     admin = db.get(User, ctx["user_id"])
@@ -508,9 +604,10 @@ def fail_source(db: Session, ctx: dict[str, Any], stage: str, error: str) -> Non
     db.commit()
 
 
-def ingestion_for_practice(db: Session, practice_id: str | None) -> dict[str, Any] | None:
-    """Full pipeline status (same shape as /api/admin/library/documents/status) of a practice's latest upload."""
-    job = latest_job(db, practice_id) if practice_id else None
+def ingestion_for_practice(db: Session, practice_id: str | None, source_id: str = "") -> dict[str, Any] | None:
+    """Full pipeline status (same shape as /api/admin/library/documents/status) of the latest upload of a practice,
+    or of one of its sources."""
+    job = latest_job(db, practice_id, source_id) if practice_id else None
     return ingestion_status(db, (job or {}).get("ingestionJobId"))
 
 
@@ -565,8 +662,9 @@ def delete_practice(practice_id: str, admin: User = Depends(require_admin), db: 
 # --- submit & release -----------------------------------------------------------------------------------------------
 
 
-def latest_job(db: Session, practice_id: str) -> dict[str, Any] | None:
-    jobs = pipeline_jobs(db, practice_id)
+def latest_job(db: Session, practice_id: str, source_id: str = "") -> dict[str, Any] | None:
+    """The latest upload of one source of a practice, or with no source, of the practice."""
+    jobs = source_jobs(db, practice_id, source_id) if source_id else pipeline_jobs(db, practice_id)
     return jobs[0] if jobs else None
 
 
@@ -643,9 +741,10 @@ def submit_for_approval(
     return {"reviewId": review_id, "state": review.state, "approver": display_name(approver)}
 
 
-def record_correction(db: Session, practice_id: str, correction: dict[str, Any]) -> bool:
-    """Attach a correction request to the practice's latest uploaded source. False when it has none."""
-    job = latest_job(db, practice_id)
+def record_correction(db: Session, practice_id: str, correction: dict[str, Any], source_id: str = "") -> bool:
+    """Attach a correction request to the latest version of a source (by default the latest upload of the
+    practice). False when there is none."""
+    job = latest_job(db, practice_id, source_id)
     if job is None:
         return False
     row = _row(db, JOBS, job["id"])
@@ -688,9 +787,19 @@ def approve_as_admin(db: Session, practice: LpPractice, review: Review | None, a
     return review
 
 
-def release(db: Session, practice: LpPractice, review: Review, admin: User) -> dict[str, Any] | None:
-    """Publish the latest uploaded version. Returns None for practices that never came through the pipeline."""
-    job = latest_job(db, practice.id)
+def _current_releases(db: Session, practice_id: str) -> dict[str, dict[str, Any]]:
+    """source id -> its latest published version, for every source of the practice that has one."""
+    released: dict[str, dict[str, Any]] = {}
+    for job in pipeline_jobs(db, practice_id):  # newest first
+        if job.get("release"):
+            released.setdefault(source_of(job), job)
+    return released
+
+
+def release(db: Session, practice: LpPractice, review: Review, admin: User, source_id: str = "") -> dict[str, Any] | None:
+    """Publish the latest version of one source (by default the practice's latest upload); the practice then serves
+    the current release of each of its sources. Returns None for practices that never came through the pipeline."""
+    job = latest_job(db, practice.id, source_id)
     if job is None:
         return None
     if job.get("release"):
@@ -699,43 +808,52 @@ def release(db: Session, practice: LpPractice, review: Review, admin: User) -> d
     if failing:
         raise HTTPException(status_code=409, detail=f"Quality gates still open: {', '.join(failing)}")
 
-    stored_chunks = _chunks(db, job["id"])
-    detail = ingest.practice_detail(stored_chunks.get("blocks", []))
+    source = source_of(job)
+    serving = sorted({**_current_releases(db, practice.id), source: job}.items(), key=lambda item: _number(item[0]))
+    blocks = [block for _, served in serving for block in _chunks(db, served["id"]).get("blocks", [])]
+    detail = ingest.practice_detail(blocks)
     users = {u.id: u for u in db.scalars(select(User)).all()}
     approver = display_name(users.get(review.reviewer_id or ""))
-    previous = practice.version_label if practice.status == "Approved" else ""
+    live = practice.status == "Approved"
+    previous = practice.version_label if live else ""
+    # Another source of the same candidate was published first: this one is the practice's next release.
+    version = _bump_minor(job["version"]) if live and job["version"] == practice.version_label else job["version"]
     now = datetime.now()
     citations = job.get("citations") or {}
     references = len(citations.get("references", []))
     verified = len(citations.get("attributed", []))
 
     practice.title = job["title"]
-    practice.description = detail["description"] or practice.description
+    entered = entered_description(practice)
+    practice.description = entered or detail["description"] or practice.description
     practice.category = job.get("category") or practice.category
     practice.maturity = job.get("maturity") or practice.maturity
-    practice.version_label = job["version"]
+    practice.version_label = version
     practice.owner = job["owner"]
     practice.payload_json = json.dumps({
+        **({ENTERED_DESCRIPTION: entered} if entered else {}),
         "maturity": f"{practice.maturity} maturity",
         "recommendedWhen": detail["recommendedWhen"],
         "coreGuidance": detail["coreGuidance"],
         "sourceAttribution": job["rights"],
+        "classification": job.get("classification", ""),
         "practiceOwner": job["owner"],
         "approvedMeta": f"Approved by {approver} · {format_date(now.date().isoformat())}",
         "sourceQuality": (f"{verified} / {references} citations verified · " if references else "")
-                         + f"{job['chunkCount']} passages · {job['pages']} pages · {job['id']}",
+                         + f"{job['chunkCount']} passages · {job['pages']} pages · {job['id']}"
+                         + (f" · {len(serving)} sources" if len(serving) > 1 else ""),
         "updatedMeta": f"Updated {format_date(now.date().isoformat(), year=False)}",
     }, ensure_ascii=False)
 
     markdown = ingest.render_markdown(job["title"], {
-        "Practice": f"{practice.id.upper()} {job['version']}",
+        "Practice": f"{practice.id.upper()} {version}",
         "Taxonomy": f"{practice.category} · {practice.maturity} maturity",
         "Owner": job["owner"],
         "Approved by": approver,
         "Source attribution": job["rights"],
         "Classification": job["classification"],
-    }, stored_chunks.get("blocks", []))
-    ingest.write_release(practice.id, job["version"], markdown)
+    }, blocks)
+    ingest.write_release(practice.id, version, markdown)
 
     releases = sum(1 for j in pipeline_jobs(db, practice.id) if j.get("release"))
     record = {
@@ -748,19 +866,21 @@ def release(db: Session, practice: LpPractice, review: Review, admin: User) -> d
     }
     row = _row(db, JOBS, job["id"])
     payload = _payload(row)
-    payload.update({"stage": "Completed", "outcome": f"Published {job['version']}", "release": record})
+    payload.update({"stage": "Completed", "outcome": f"Published {version}", "version": version, "release": record})
     if payload.get("resolvesCorrection"):
         payload["resolvesCorrection"]["status"] = "Resolved"
     _save(row, payload)
 
-    # The released version is now the one users retrieve; earlier versions of this practice leave the index.
+    # The released version is now the one users retrieve; earlier versions of this source leave the index, and the
+    # practice's other sources stay as they are. Document keys are "<practice>/<JOB-n>/<file>".
     released_doc = db.query(DocumentFile.filename).filter(DocumentFile.job_id == job.get("ingestionJobId")).scalar()
+    source_job_ids = {j["id"] for j in source_jobs(db, practice.id, source)}
     superseded = [
         name
         for (name,) in db.query(DocumentFile.filename)
         .filter(DocumentFile.project_id == LIBRARY_SCOPE, DocumentFile.filename.like(practice_document_key(practice.id, "%")))
         .distinct()
-        if name != released_doc
+        if name != released_doc and name.count("/") >= 2 and name.split("/")[1] in source_job_ids
     ]
     for name in superseded:
         queue_removal(LIBRARY_SCOPE, name)
@@ -794,14 +914,15 @@ def _plain_section(section: str) -> str:
     return re.sub(r"^§[\d.]+\s*", "", section or "")
 
 
-def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | None:
-    """The pipeline tabs for one practice's latest upload, or None when it has none (the demo fixture is shown)."""
+def library_sections(db: Session, practice_id: str | None, source_id: str = "") -> dict[str, Any] | None:
+    """The pipeline tabs for the latest version of one source of a practice (by default its latest upload), or None
+    when there is none (the demo fixture is shown)."""
     jobs = pipeline_jobs(db)
     if practice_id is None:
         if not jobs:
             return None
         practice_id = jobs[0]["practiceId"]
-    job = latest_job(db, practice_id)
+    job = latest_job(db, practice_id, source_id)
     practice = db.scalar(select(LpPractice).where(LpPractice.id == practice_id))
     if job is None or practice is None:
         return None
@@ -865,6 +986,7 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
     latest = jobs[0]
     return {
         "selectedPracticeId": practice.id,
+        "selectedSourceId": source_of(job),
         "pipelineSource": "upload",
         "pipelineSteps": pipeline_steps,
         "latestIngestionJob": {
@@ -1004,29 +1126,96 @@ def library_sections(db: Session, practice_id: str | None) -> dict[str, Any] | N
     }
 
 
+def _source_status(job: dict[str, Any]) -> str:
+    if job.get("release"):
+        return "Published"
+    if job.get("processing"):
+        return "Processing"
+    if not job.get("readable"):
+        return "Not readable"
+    if (job.get("correction") or {}).get("status") == "Open":
+        return "Correction requested"
+    return job.get("stage") or "Quality review"
+
+
+def practice_overview(db: Session, practice_id: str) -> dict[str, Any] | None:
+    """One practice as created, with every source uploaded to it and every version of each source."""
+    practice = db.scalar(select(LpPractice).where(LpPractice.id == practice_id))
+    if practice is None:
+        return None
+    jobs = pipeline_jobs(db, practice.id)
+    details = json.loads(practice.payload_json or "{}")
+    newest = jobs[0] if jobs else {}
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for job in jobs:  # newest first
+        by_source.setdefault(source_of(job), []).append(job)
+
+    sources = []
+    for source_id, versions in sorted(by_source.items(), key=lambda item: _number(item[0])):
+        head, count = versions[0], len(versions)
+        live = next((count - i for i, j in enumerate(versions) if j.get("release")), None)
+        sources.append({
+            "id": source_id,
+            "name": versions[-1]["filename"],
+            "filename": head["filename"],
+            "versionCount": count,
+            "latestVersion": count,
+            "liveVersion": live,
+            "status": _source_status(head),
+            "outcome": head.get("outcome", ""),
+            "uploadedAt": head.get("uploadedAt", ""),  # ISO; the screen formats it
+            "uploadedBy": head.get("submittedBy", ""),
+            "versions": [
+                {"jobId": j["id"], "number": count - i, "filename": j["filename"], "label": j.get("version", ""),
+                 "uploadedAt": j.get("uploadedAt", ""), "uploadedBy": j.get("submittedBy", ""),
+                 "sizeBytes": j.get("sizeBytes", 0), "status": _source_status(j), "outcome": j.get("outcome", ""),
+                 "chunks": j.get("chunkCount", 0), "pages": j.get("pages", 0)}
+                for i, j in enumerate(versions)
+            ],
+        })
+    return {
+        "id": practice.id,
+        "code": practice.id.upper(),
+        "title": newest.get("title") or practice.title,
+        "description": practice.description,
+        "taxonomy": newest.get("category") or practice.category,
+        "maturity": newest.get("maturity") or practice.maturity,
+        "versionLabel": practice.version_label,
+        "owner": practice.owner or newest.get("owner", ""),
+        "classification": details.get("classification") or newest.get("classification", ""),
+        "rights": details.get("sourceAttribution") or newest.get("rights", ""),
+        "status": practice.status,
+        "updatedAt": _when(practice.updated_at.isoformat()) if practice.updated_at else "",
+        "sources": sources,
+    }
+
+
 def inventory_rows(db: Session) -> list[dict[str, Any]]:
-    """Practice inventory, with each practice's latest candidate when one is in flight."""
-    latest: dict[str, dict[str, Any]] = {}
-    for job in pipeline_jobs(db):
-        latest.setdefault(job["practiceId"], job)
+    """Practice inventory, with the number of sources and the latest candidate when one is in flight."""
+    heads: dict[str, dict[str, dict[str, Any]]] = {}
+    for job in pipeline_jobs(db):  # newest first: the first job of each source is its latest version
+        heads.setdefault(job["practiceId"], {}).setdefault(source_of(job), job)
     rows = []
     for practice in db.scalars(select(LpPractice).order_by(LpPractice.id)).all():
-        job = latest.get(practice.id)
-        candidate = job is not None and not job.get("release")
-        if job is None:
-            indexing = "Indexed"
-        elif job.get("processing"):
+        latest = list(heads.get(practice.id, {}).values())
+        newest = max(latest, key=lambda j: _number(j["id"])) if latest else None
+        candidates = [j for j in latest if not j.get("release")]
+        if not latest:
+            indexing = "No sources" if practice.status == DRAFT else "Indexed"
+        elif any(j.get("processing") for j in latest):
             indexing = "Processing"
         else:
-            indexing = "Indexed" if job.get("readable") else "Not readable"
+            indexing = "Indexed" if all(j.get("readable") for j in latest) else "Not readable"
+        candidate = max(candidates, key=lambda j: _number(j["id"])) if candidates else None
         rows.append({
             "id": practice.id,
-            "practiceSource": f"{(job or {}).get('title') or practice.title} · {practice.id.upper()}",
-            "version": f"{job['version']} candidate" if candidate else practice.version_label,
+            "practiceSource": f"{(newest or {}).get('title') or practice.title} · {practice.id.upper()}",
+            "version": f"{candidate['version']} candidate" if candidate else practice.version_label,
+            "sources": len(latest),
             "indexing": indexing,
             "lifecycle": ("Candidate in review" if practice.status == "Approved" else practice.status) if candidate else practice.status,
             # Ingestion pipeline of the latest upload, same object as /api/admin/library/documents/status/{job_id}.
-            "ingestion": ingestion_status(db, (job or {}).get("ingestionJobId")),
+            "ingestion": ingestion_status(db, (newest or {}).get("ingestionJobId")),
         })
     return rows
 

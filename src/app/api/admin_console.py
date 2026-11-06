@@ -442,12 +442,15 @@ def admin_add_member(
 
 @router.get("/library")
 def library_management(
-    practice: str = "", admin: User = Depends(require_admin), db: Session = Depends(get_db)
+    practice: str = "", source: str = "", admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ) -> dict:
-    """Library pipeline for one practice: its latest upload when it has one, otherwise the sample walkthrough."""
+    """Library pipeline for one source of a practice (by default its latest upload), otherwise the sample walkthrough.
+
+    ``practice`` is the practice as created with its sources and their versions, or null without ``practice``."""
     screen = {**_library_sample(), **_screen(db, "admin_library")}
     inventory = admin_library.inventory_rows(db)
-    sections = admin_library.library_sections(db, practice.strip().lower() or None)
+    practice_id = practice.strip().lower()
+    sections = admin_library.library_sections(db, practice_id or None, source.strip().upper())
     view = {
         **screen,
         "selectedPracticeId": screen.get("qualityReview", {}).get("id", ""),
@@ -459,8 +462,11 @@ def library_management(
     }
     # Ingestion pipeline: the selected practice's latest upload (same object as each inventory row's
     # ``ingestion`` and /api/admin/library/documents/status/{job_id}), and uploads not yet attached to a practice.
-    view["ingestion"] = admin_library.ingestion_for_practice(db, view.get("selectedPracticeId") or None)
+    view["ingestion"] = admin_library.ingestion_for_practice(
+        db, view.get("selectedPracticeId") or None, view.get("selectedSourceId") or ""
+    )
     view["pendingUploads"] = admin_library.pending_uploads(db)
+    view["practice"] = admin_library.practice_overview(db, practice_id) if practice_id else None
     return view
 
 
@@ -479,6 +485,17 @@ class CorrectionRequest(ReasonedRequest):
     source_location: str = Field(default="", max_length=300)
     severity: str = Field(default="", max_length=120)
     due: str = Field(default="", max_length=40)
+    # The source whose latest version needs the correction; empty for the practice's latest upload.
+    source_id: str = Field(default="", alias="sourceId", max_length=16)
+
+    model_config = {"populate_by_name": True}
+
+
+class PublishRequest(ReasonedRequest):
+    # The source whose latest version is published; empty for the practice's latest upload.
+    source_id: str = Field(default="", alias="sourceId", max_length=16)
+
+    model_config = {"populate_by_name": True}
 
 
 @router.post("/library/{practice_id}/request-correction")
@@ -503,7 +520,7 @@ def request_practice_correction(
     admin_library.record_correction(db, practice.id, {
         "id": correction_id, "reason": body.reason, "assignee": body.assignee, "sourceLocation": body.source_location,
         "severity": body.severity, "due": body.due, "requestedBy": display_name(admin),
-    })
+    }, body.source_id.strip().upper())
     if review is not None:
         review.state = "Changes requested"
         _notify(db, review.owner_id, kind="review", title=f"{correction_id} correction requested: {practice.title}",
@@ -515,12 +532,18 @@ def request_practice_correction(
 
 @router.post("/library/{practice_id}/publish")
 def publish_practice(
-    practice_id: str, body: ReasonedRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)
+    practice_id: str, body: PublishRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ) -> dict:
-    """Approve and publish this version. Without an earlier approval, the publishing administrator is the approver."""
+    """Approve and publish the latest version of a source. Without an earlier approval, the publishing administrator
+    is the approver."""
     practice, review = _practice_review(db, practice_id)
+    source_id = body.source_id.strip().upper()
+    if practice.status == admin_library.DRAFT:
+        raise HTTPException(status_code=409, detail=f"{practice.id.upper()} has no sources yet; upload one first")
+    if source_id and admin_library.latest_job(db, practice.id, source_id) is None:
+        raise HTTPException(status_code=404, detail=f"{practice.id.upper()} has no source {source_id}")
     review = admin_library.approve_as_admin(db, practice, review, admin)
-    admin_library.release(db, practice, review, admin)
+    admin_library.release(db, practice, review, admin, source_id)
     practice.status = "Approved"
     practice.updated_at = utcnow()
     _admin_event(db, admin, project_id=None, title=f"{practice.id.upper()} {practice.version_label} published",

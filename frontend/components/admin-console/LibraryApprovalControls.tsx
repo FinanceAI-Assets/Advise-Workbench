@@ -10,7 +10,18 @@ import { useAdminAction } from "@/hooks/useAdminConsole";
 const PUBLISH_REASON = "Approved and published from Library management";
 
 /** Approve and publish the candidate after a confirmation; disabled, with the reasons, while the server reports anything blocking it. */
-export function PublishControl({ practiceId, canPublish, blockers }: { practiceId: string; canPublish: boolean; blockers: string[] }) {
+/** `sourceId` names the source whose latest version is published, for an API that keeps several per practice. */
+export function PublishControl({
+  practiceId,
+  sourceId,
+  canPublish,
+  blockers,
+}: {
+  practiceId: string;
+  sourceId?: string;
+  canPublish: boolean;
+  blockers: string[];
+}) {
   const publish = useAdminAction();
   const [confirming, setConfirming] = useState(false);
 
@@ -34,7 +45,7 @@ export function PublishControl({ practiceId, canPublish, blockers }: { practiceI
   }
 
   async function confirm() {
-    await publish.mutateAsync({ path: `/library/${practiceId}/publish`, body: { reason: PUBLISH_REASON } });
+    await publish.mutateAsync({ path: `/library/${practiceId}/publish`, body: { reason: PUBLISH_REASON, ...(sourceId ? { sourceId } : {}) } });
     setConfirming(false);
   }
 

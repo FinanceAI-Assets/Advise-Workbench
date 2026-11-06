@@ -1,56 +1,28 @@
-import { Badge } from "@/components/ui/Badge";
-import { cn } from "@/lib/utils";
+"use client";
+
+import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import type { ReviewQueueRow } from "@/types/api";
 
-const STATE_CLASS: Record<string, string> = {
-  "Changes requested": "border-[var(--surface-border)] bg-[#FCF3E2] text-[#8C5B12]",
-  "Attribution gap": "border-[var(--surface-border)] bg-[#FCF3E2] text-[#8C5B12]",
-  "Test failed": "border-[var(--surface-border)] bg-[#FBEFEB] text-[#A53E37]",
-  "Blocked · High risk": "border-[var(--surface-border)] bg-[#FBEFEB] text-[#A53E37]",
-};
+const COLUMNS: DataTableColumn<ReviewQueueRow>[] = [
+  { key: "item", header: "Item / reference", sortValue: (row) => row.itemReference, cell: (row) => <span className="font-semibold text-[var(--text-default)]">{row.itemReference}</span> },
+  { key: "reviewer", header: "Reviewer", sortValue: (row) => row.reviewer, cell: (row) => row.reviewer },
+  { key: "type", header: "Type", sortValue: (row) => row.type, hideBelow: "md", cell: (row) => <span className="text-[var(--text-muted)]">{row.type}</span> },
+  { key: "state", header: "State", sortValue: (row) => row.state, cell: (row) => <StatusBadge>{row.state}</StatusBadge> },
+];
 
-export function ReviewQueueTable({
-  rows,
-  activeId,
-  onSelect,
-}: {
-  rows: ReviewQueueRow[];
-  activeId: string;
-  onSelect: (id: string) => void;
-}) {
+/** Open reviews; selecting a row shows it in the panel beside the table. */
+export function ReviewQueueTable({ rows, activeId, onSelect }: { rows: ReviewQueueRow[]; activeId: string; onSelect: (id: string) => void }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-[var(--surface-border)] bg-white">
-      <table className="w-full min-w-[600px] text-left text-sm">
-        <thead>
-          <tr className="border-b border-[var(--surface-border)] text-xs text-[var(--text-muted)]">
-            <th className="px-4 py-3 font-medium">Item / reference</th>
-            <th className="px-4 py-3 font-medium">Reviewer</th>
-            <th className="px-4 py-3 font-medium">Type</th>
-            <th className="px-4 py-3 font-medium">State</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr
-              key={row.id}
-              onClick={() => onSelect(row.id)}
-              className={cn(
-                "cursor-pointer border-b border-[var(--surface-border)] last:border-b-0 hover:bg-[var(--surface-muted)]",
-                row.id === activeId && "border-l-2 border-l-[var(--accent-green)] bg-[#EFF6E6] hover:bg-[#EFF6E6]"
-              )}
-            >
-              <td className="px-4 py-3 font-medium text-[var(--text-default)]">{row.itemReference}</td>
-              <td className="px-4 py-3 text-[var(--text-default)]">{row.reviewer}</td>
-              <td className="px-4 py-3 text-[var(--text-muted)]">{row.type}</td>
-              <td className="px-4 py-3">
-                <Badge className={cn("whitespace-nowrap", STATE_CLASS[row.state] ?? "border-[var(--surface-border)] bg-white text-[var(--text-muted)]")}>
-                  {row.state}
-                </Badge>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      label="Review queue"
+      itemName="reviews"
+      columns={COLUMNS}
+      rows={rows}
+      rowKey={(row) => row.id}
+      onRowClick={(row) => onSelect(row.id)}
+      isRowActive={(row) => row.id === activeId}
+      minWidth="min-w-[560px]"
+    />
   );
 }

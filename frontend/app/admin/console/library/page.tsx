@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Upload } from "lucide-react";
+import { Plus, Upload } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, Suspense, useState } from "react";
 
@@ -10,30 +10,31 @@ import {
   ExtractChunkTab,
   INITIAL_PRACTICE_LIST,
   IndexValidateTab,
-  IngestionJobPanel,
-  LibraryBadge,
-  LibraryUploadsPanel,
   PipelineStepper,
+  PracticeDetailsCard,
+  PracticeDetailsForm,
   PracticeInventoryPanel,
   type PracticeListState,
+  PracticeSourcesPanel,
   PublishControl,
   QualityGatesTab,
-  QualityReviewPanel,
   RequestCorrectionModal,
   SourceFilePanel,
+  SourceUploadForm,
   StepperFooter,
   StoredDataPanel,
   UploadProgressPanel,
-  UploadSourcesModal,
+  type UploadTarget,
+  stageLabel,
 } from "@/components/admin-console";
-import { EngagementTabs } from "@/components/engagements/EngagementTabs";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { BackButton } from "@/components/workbench/BackButton";
-import { ErrorNote, Field, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
-import { type LibraryUploadJob, queuedJobIds, useAdminLibraryQuery } from "@/hooks/useAdminConsole";
+import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
+import { type LibraryUploadJob, queuedJobIds, useAdminLibraryQuery, useCreatePractice } from "@/hooks/useAdminConsole";
+import { EMPTY_PRACTICE, type PracticeDetails } from "@/lib/libraryPractices";
+import type { EngagementStep, LibrarySource } from "@/types/api";
 
-// One view per ingestion pipeline step; the keys match the pipeline step ids, so the stepper navigates.
+// One view per ingestion pipeline step of a source; the keys match the pipeline step ids, so the stepper navigates.
 const STEPS = [
   { key: "source-upload", label: "Source upload" },
   { key: "extract-chunk", label: "Extract & chunk" },
@@ -46,27 +47,37 @@ type LibraryStep = (typeof STEPS)[number]["key"];
 
 const isLibraryStep = (value: string | null): value is LibraryStep => STEPS.some((step) => step.key === value);
 
+/** Before a source is uploaded, only its first step is open. */
+const UPLOAD_ONLY_STEPS: EngagementStep[] = STEPS.map((step, index) => ({
+  id: step.key,
+  index: index + 1,
+  label: step.label,
+  status: index === 0 ? "in-progress" : "upcoming",
+  helper: index === 0 ? "Choose a file" : "After upload",
+}));
+
+/** `source` value of a source that is being added, not yet uploaded. */
+const NEW_SOURCE = "new";
+
 const BREADCRUMB = "Admin console / Leading practice library";
-const SUBTITLE = "Ingest, verify and publish versioned practices. Only approved releases are available for user retrieval.";
+const SUBTITLE = "Create practices, upload their sources, then verify and publish them. Only approved releases are available for user retrieval.";
 
-const LIST_TABS = [
-  { key: "practices", label: "Practices" },
-  { key: "uploads", label: "Uploads" },
-] as const;
-
-type ListTab = (typeof LIST_TABS)[number]["key"];
-
-/** The list, one practice, or one pipeline step of a practice. Every level is a URL, so back and reload work. */
-function libraryHref(practice = "", step?: LibraryStep) {
+/**
+ * Every level is a URL, so back and reload work: the list, Create practice, a practice, and one pipeline step of one
+ * of its sources.
+ */
+function libraryHref({ practice = "", source = "", step, create = false }: { practice?: string; source?: string; step?: LibraryStep; create?: boolean } = {}) {
   const params = new URLSearchParams();
+  if (create) params.set("create", "1");
   if (practice) params.set("practice", practice);
+  if (source) params.set("source", source);
   if (step) params.set("tab", step);
   const query = params.toString();
   return `/admin/console/library${query ? `?${query}` : ""}`;
 }
 
 function MissingStep() {
-  return <ErrorNote error={new Error("This pipeline step has no data. Upload a source to run the pipeline.")} />;
+  return <ErrorNote error={new Error("This pipeline step has no data yet. Upload the source to run the pipeline.")} />;
 }
 
 /** "JOB-12 · LP-041: Queued for extraction"; before intake has run the file name stands in for the job. */
@@ -74,8 +85,6 @@ function uploadSummary(job: LibraryUploadJob) {
   const label = job.id ? `${job.id} · ${job.practiceId.toUpperCase()}` : (job.ingestion?.filename ?? "Source");
   return `${label}: ${job.outcome}`;
 }
-
-type UploadTarget = { id: string; title: string; owner?: string; heading?: string };
 
 export default function AdminConsoleLibraryPage() {
   return (
@@ -88,18 +97,88 @@ export default function AdminConsoleLibraryPage() {
 function LibraryScreen() {
   const router = useRouter();
   const params = useSearchParams();
+  const creating = params.get("create") === "1";
   const practice = (params.get("practice") ?? "").trim().toLowerCase();
+  const source = (params.get("source") ?? "").trim();
   const requestedStep = params.get("tab");
-  const library = useAdminLibraryQuery(practice);
+  const library = useAdminLibraryQuery(practice, source === NEW_SOURCE ? "" : source);
+  const createPractice = useCreatePractice();
 
-  const [listTab, setListTab] = useState<ListTab>("practices");
   const [listState, setListState] = useState<PracticeListState>(INITIAL_PRACTICE_LIST);
-  const [upload, setUpload] = useState<{ practice?: UploadTarget } | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   // Ingestion jobs of the latest upload, followed live until each one finishes.
   const [uploadJobIds, setUploadJobIds] = useState<string[]>([]);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionSent, setCorrectionSent] = useState<{ practice: string; id: string } | null>(null);
+
+  const listBack = <BackButton href={libraryHref()} label="Back to Library management" />;
+
+  // ---- Create practice: its details on a screen of their own; sources are uploaded from the practice afterwards.
+  if (creating) {
+    return (
+      <PageFrame
+        back={listBack}
+        breadcrumb={`${BREADCRUMB} / Create practice`}
+        title="Create practice"
+        subtitle="Enter the practice details. You upload its sources from the practice once it is created."
+      >
+        <ErrorNote error={createPractice.error} />
+        <PracticeDetailsForm
+          initial={EMPTY_PRACTICE}
+          submitting={createPractice.isPending}
+          onCancel={() => router.push(libraryHref())}
+          onSubmit={(details) => {
+            createPractice
+              .mutateAsync({
+                title: details.title,
+                description: details.description,
+                category: details.taxonomy,
+                maturity: details.maturity,
+                version: details.version,
+                owner: details.owner,
+                classification: details.classification,
+                rights: details.rights,
+              })
+              .then((created) => router.replace(libraryHref({ practice: created.id })))
+              // createPractice.error is shown above the form.
+              .catch(() => undefined);
+          }}
+        />
+      </PageFrame>
+    );
+  }
+
+  const message = (
+    <>
+      {uploadMessage ? (
+        <p role="status" className="text-sm text-[var(--accent-green-dark)]">
+          {uploadMessage}
+        </p>
+      ) : null}
+      <UploadProgressPanel
+        jobIds={uploadJobIds}
+        onOpenPractice={(id) => router.push(libraryHref({ practice: id }))}
+        onDismiss={() => {
+          setUploadJobIds([]);
+          setUploadMessage(null);
+        }}
+      />
+    </>
+  );
+
+  /** After an upload: one source opens where its pipeline runs; otherwise the practice (or the list) shows progress. */
+  const afterUpload = (jobs: LibraryUploadJob[], fallback: string) => {
+    const first = jobs[0];
+    setCorrectionSent(null);
+    setUploadMessage(jobs.length === 1 ? `${uploadSummary(first)}.` : `${jobs.length} sources uploaded: ${jobs.map(uploadSummary).join("; ")}.`);
+    setUploadJobIds(queuedJobIds(jobs));
+    if (jobs.length === 1 && first?.practiceId) {
+      router.push(libraryHref({ practice: first.practiceId, source: first.sourceId || "SRC-1", step: "extract-chunk" }));
+    } else {
+      // Intake may still be running; the progress panel links to the practice once it exists.
+      router.push(first?.practiceId ? libraryHref({ practice: first.practiceId }) : fallback);
+    }
+  };
 
   // Opening a practice keeps the previous one's data up while it loads; never show (or act on) that as this practice.
   if (library.isPending || (practice && library.isPlaceholderData)) return <PageSkeleton />;
@@ -112,73 +191,31 @@ function LibraryScreen() {
     );
   }
 
-  const uploadButton = (label = "Upload sources", target?: UploadTarget, secondary = false) => (
-    <Button
-      type="button"
-      variant={secondary ? "secondary" : undefined}
-      className="flex items-center gap-2 whitespace-nowrap text-sm"
-      onClick={() => setUpload({ practice: target })}
-    >
-      <Upload size={16} aria-hidden />
-      {label}
-    </Button>
-  );
-
-  const message = (
-    <>
-      {uploadMessage ? (
-        <p role="status" className="text-sm text-[var(--accent-green-dark)]">
-          {uploadMessage}
-        </p>
-      ) : null}
-      <UploadProgressPanel
-        jobIds={uploadJobIds}
-        onOpenPractice={(id) => router.push(libraryHref(id, "extract-chunk"))}
-        onDismiss={() => {
-          setUploadJobIds([]);
-          setUploadMessage(null);
-        }}
-      />
-    </>
-  );
-
-  const uploadModal = upload ? (
-    <UploadSourcesModal
-      practice={upload.practice}
-      onClose={() => setUpload(null)}
-      onUploaded={(jobs) => {
-        const first = jobs[0];
-        setUpload(null);
-        setCorrectionSent(null);
-        setUploadMessage(jobs.length === 1 ? `${uploadSummary(first)}.` : `${jobs.length} sources uploaded: ${jobs.map(uploadSummary).join("; ")}.`);
-        setUploadJobIds(queuedJobIds(jobs));
-        // One source opens where its pipeline runs; several stay on the list, each linked from its progress row.
-        // Intake may still be running, in which case the progress panel links to the practice once it exists.
-        if (jobs.length === 1 && first?.practiceId) router.push(libraryHref(first.practiceId, "extract-chunk"));
-      }}
-    />
-  ) : null;
-
   // ---- Level 1: the list of practices.
   if (!practice) {
     return (
-      <PageFrame breadcrumb={BREADCRUMB} title="Library management" subtitle={SUBTITLE} actions={uploadButton()}>
+      <PageFrame
+        breadcrumb={BREADCRUMB}
+        title="Library management"
+        subtitle={SUBTITLE}
+        actions={
+          <Button type="button" className="flex items-center gap-2 whitespace-nowrap text-sm" onClick={() => router.push(libraryHref({ create: true }))}>
+            <Plus size={16} aria-hidden />
+            Create practice
+          </Button>
+        }
+      >
         {message}
-        <EngagementTabs tabs={[...LIST_TABS]} active={listTab} onChange={setListTab} />
-        {listTab === "practices" ? (
-          <PracticeInventoryPanel rows={data.practiceInventory} state={listState} onChange={setListState} hrefFor={(id) => libraryHref(id)} />
-        ) : (
-          <div className="space-y-5">
-            {data.pipelineSource === "upload" ? <IngestionJobPanel job={data.latestIngestionJob} /> : null}
-            <LibraryUploadsPanel activeId="" onSelect={(id) => router.push(libraryHref(id))} />
-          </div>
-        )}
-        {uploadModal}
+        <PracticeInventoryPanel
+          rows={data.practiceInventory}
+          state={listState}
+          onChange={setListState}
+          hrefFor={(id) => libraryHref({ practice: id })}
+        />
       </PageFrame>
     );
   }
 
-  const listBack = <BackButton href={libraryHref()} label="Back to Library management" />;
   const row = data.practiceInventory.find((item) => item.id === practice);
   const code = practice.toUpperCase();
 
@@ -190,151 +227,132 @@ function LibraryScreen() {
     );
   }
 
-  const title = row.practiceSource.split(" · ")[0];
+  // The API falls back to a sample walkthrough for a practice with no upload; that data is not this practice's.
+  const uploaded = data.pipelineSource === "upload" && data.selectedPracticeId === practice && (!source || data.selectedSourceId === source);
+  const review = data.qualityReview;
+  const published = row.lifecycle === "Approved";
+  const title = data.practice?.title ?? (uploaded ? review.title : row.practiceSource.split(" · ")[0]);
+  const sources: LibrarySource[] = data.practice?.sources ?? [];
+  const details: Partial<PracticeDetails> = data.practice
+    ? {
+        description: data.practice.description,
+        taxonomy: data.practice.taxonomy,
+        maturity: data.practice.maturity,
+        version: data.practice.versionLabel,
+        owner: data.practice.owner,
+        classification: data.practice.classification,
+        rights: data.practice.rights,
+      }
+    : uploaded
+      ? { taxonomy: review.taxonomy, maturity: review.maturity, version: row.version, owner: review.practiceOwner, rights: review.sourceAttribution }
+      : { version: row.version };
+  const uploadDefaults = { owner: details.owner ?? "", classification: details.classification ?? "", rights: details.rights ?? "" };
   const onDeleted = (deletedMessage: string) => {
     setUploadMessage(deletedMessage);
     router.push(libraryHref());
   };
   const deleteAction = <DeletePracticeButton key={row.id} practiceId={row.id} className="px-4 py-2 text-xs font-semibold" onDeleted={onDeleted} />;
-  // The API falls back to a sample walkthrough for a practice with no upload; that data is not this practice's.
-  const uploaded = data.pipelineSource === "upload" && data.selectedPracticeId === practice;
+  const practiceHref = libraryHref({ practice });
+  const practiceBack = <BackButton href={practiceHref} label={`Back to ${title}`} />;
 
-  // ---- Level 2 without a pipeline: a practice that never came through upload.
-  if (!uploaded) {
-    const published = row.lifecycle === "Approved";
+  // ---- Level 2: the practice, its details and its sources; Upload source opens the stepper.
+  if (!source) {
     return (
-      <PageFrame
+      <PracticeOverview
         back={listBack}
-        breadcrumb={`${BREADCRUMB} / ${code}`}
+        code={code}
         title={title}
-        subtitle={`${code} · ${row.version}`}
-        actions={uploadButton("Upload new version", { id: row.id, title, heading: "Upload new version" }, !published)}
-      >
-        {message}
-        <Card className="max-w-2xl space-y-4">
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Version">{row.version}</Field>
-            <Field label="Indexing">
-              <LibraryBadge>{row.indexing}</LibraryBadge>
-            </Field>
-            <Field label="Lifecycle">
-              <LibraryBadge>{published ? "Published" : row.lifecycle}</LibraryBadge>
-            </Field>
-          </div>
-          <p className="text-sm text-[var(--text-default)]">
-            {published
-              ? "Published in the Leading Practice Library. Upload a new version to start a candidate review."
-              : "No uploaded source is in review for this practice. Publishing records you as its approver."}
-          </p>
-          <div className="flex flex-wrap items-start gap-2 border-t border-[var(--surface-border)] pt-4">
-            {!published ? <PublishControl practiceId={row.id} canPublish blockers={[]} /> : null}
-            {deleteAction}
-          </div>
-        </Card>
-        {uploadModal}
-      </PageFrame>
-    );
-  }
-
-  const quality = data.qualityGates;
-  const review = data.qualityReview;
-  const steps = data.pipelineSteps;
-  const correctionId = correctionSent?.practice === practice ? correctionSent.id : null;
-  const correctionTarget: UploadTarget = { id: practice, title, owner: quality?.correction.assignee };
-  const newVersionTarget: UploadTarget = review.approvalState === "Published" ? { ...correctionTarget, heading: "Upload new version" } : correctionTarget;
-  const correctionModal =
-    correctionOpen && quality ? (
-      <RequestCorrectionModal
-        practiceId={practice}
-        draft={quality.correction}
-        onClose={() => setCorrectionOpen(false)}
-        onSent={(id) => setCorrectionSent({ practice, id })}
-      />
-    ) : null;
-  const openStep = (stepId: string) => {
-    if (isLibraryStep(stepId)) router.push(libraryHref(practice, stepId));
-  };
-  const stepIndex = STEPS.findIndex((step) => step.key === requestedStep);
-
-  // ---- Level 2: the practice itself; its pipeline opens from here.
-  if (stepIndex < 0) {
-    const current = steps.find((step) => step.status === "in-progress");
-    const published = review.approvalState === "Published";
-    return (
-      <PageFrame
-        back={listBack}
-        breadcrumb={`${BREADCRUMB} / ${review.code}`}
-        title={review.title}
-        subtitle={
-          <span className="flex flex-wrap items-center gap-2">
-            {review.code}
-            <LibraryBadge tone="neutral">{review.versionLabel}</LibraryBadge>
-            <LibraryBadge tone={published ? "success" : "warning"}>{review.approvalState}</LibraryBadge>
-          </span>
-        }
-        actions={uploadButton(published ? "Upload new version" : "Upload corrected source", newVersionTarget, true)}
-      >
-        {message}
-        <PipelineStepper steps={steps} activeId={current?.id ?? steps[steps.length - 1]?.id ?? ""} onSelect={openStep} />
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <QualityReviewPanel review={review} />
-          <Card className="h-fit space-y-4">
-            <div>
-              <p className="text-2xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">{current ? "Next step" : "Pipeline"}</p>
-              <p className="mt-1 text-sm font-semibold text-[var(--text-default)]">{current?.label ?? "All steps complete"}</p>
-              {current ? <p className="text-xs text-[var(--text-muted)]">{current.helper}</p> : null}
-            </div>
-            <Button
-              type="button"
-              className="flex w-full items-center justify-center gap-2 text-sm"
-              onClick={() => openStep(current?.id ?? STEPS[0].key)}
-            >
-              {current ? `Continue to ${current.label}` : "View pipeline"}
-              <ArrowRight size={16} aria-hidden />
-            </Button>
-            {quality && !published ? (
-              <Button type="button" variant="secondary" className="w-full text-sm" onClick={() => setCorrectionOpen(true)}>
-                {correctionId || quality.openCorrection ? "Update correction request" : "Request correction"}
-              </Button>
+        details={details}
+        status={published ? "Published" : row.lifecycle}
+        sources={sources}
+        message={message}
+        onUpload={() => router.push(libraryHref({ practice, source: NEW_SOURCE, step: "source-upload" }))}
+        onOpenSource={(id) => router.push(libraryHref({ practice, source: id }))}
+        onNewVersion={(id) => router.push(libraryHref({ practice, source: id, step: "source-upload" }))}
+        footer={
+          <>
+            {/* A practice that never came through upload can still be published as it stands; a new one needs a source first. */}
+            {!published && sources.length === 0 && !uploaded && row.lifecycle !== "Draft" ? (
+              <PublishControl practiceId={row.id} canPublish blockers={[]} />
             ) : null}
-            <p className="text-2xs text-[var(--text-muted)]">{review.footnote}</p>
-            <div className="border-t border-[var(--surface-border)] pt-4">{deleteAction}</div>
-          </Card>
-        </div>
-        {correctionModal}
-        {uploadModal}
+            {deleteAction}
+          </>
+        }
+      />
+    );
+  }
+
+  // ---- Level 3, new source: the stepper opens on Source upload; the other steps follow once a file is uploaded.
+  if (source === NEW_SOURCE) {
+    return (
+      <PageFrame back={practiceBack} breadcrumb={`${BREADCRUMB} / ${code} / Upload source`} title="Source upload" subtitle={`${code} · ${title} · New source`}>
+        <PipelineStepper steps={UPLOAD_ONLY_STEPS} activeId="source-upload" onSelect={() => undefined} />
+        {message}
+        <SourceUploadForm
+          target={{ kind: "source", practiceId: practice, ...uploadDefaults }}
+          maxFiles={10}
+          onCancel={() => router.push(practiceHref)}
+          onUploaded={(jobs) => afterUpload(jobs, practiceHref)}
+        />
+        <StepperFooter
+          position={1}
+          total={STEPS.length}
+          backLabel="Back to practice"
+          onBack={() => router.push(practiceHref)}
+          nextLabel={`Next: ${STEPS[1].label}`}
+          nextDisabled
+          onNext={() => undefined}
+        />
       </PageFrame>
     );
   }
 
-  // ---- Level 3: the pipeline stepper, one step at a time.
+  const sourceDetail = sources.find((item) => item.id === source);
+  if (!uploaded || !sourceDetail) {
+    return (
+      <PageFrame back={practiceBack} breadcrumb={`${BREADCRUMB} / ${code}`} title={title}>
+        <ErrorNote error={new Error(`${code} has no source ${source}. Open a source from the practice.`)} />
+      </PageFrame>
+    );
+  }
+
+  // ---- Level 3: the pipeline stepper of one source, one step at a time.
+  const quality = data.qualityGates;
+  const steps = data.pipelineSteps;
+  const requestedIndex = STEPS.findIndex((step) => step.key === requestedStep);
+  // Opening a source without a step lands on the step it has reached.
+  const reached = steps.find((step) => step.status === "in-progress")?.id ?? steps[steps.length - 1]?.id;
+  const stepIndex = requestedIndex >= 0 ? requestedIndex : Math.max(0, STEPS.findIndex((step) => step.key === reached));
   const step = STEPS[stepIndex];
   const previous = STEPS[stepIndex - 1];
   const next = STEPS[stepIndex + 1];
-  // The upload job behind the selected practice.
-  const ingestionJobId = data.ingestion?.job_id;
+  const correctionId = correctionSent?.practice === practice ? correctionSent.id : null;
+  const versionTarget: UploadTarget = { kind: "version", practiceId: practice, sourceId: source, sourceName: sourceDetail.name, ...uploadDefaults };
+  const sourceHref = (key?: LibraryStep) => libraryHref({ practice, source, step: key });
 
   const stepView = (heading: string, subtitle: ReactNode, content: ReactNode) => (
-    <PageFrame
-      back={listBack}
-      breadcrumb={`${BREADCRUMB} / ${review.code} / ${step.label}`}
-      title={heading}
-      subtitle={subtitle}
-    >
-      <PipelineStepper steps={steps} activeId={step.key} onSelect={openStep} />
+    <PageFrame back={practiceBack} breadcrumb={`${BREADCRUMB} / ${code} / ${sourceDetail.name} / ${step.label}`} title={heading} subtitle={subtitle}>
+      <PipelineStepper steps={steps} activeId={step.key} onSelect={(id) => isLibraryStep(id) && router.push(sourceHref(id))} />
       {message}
       {content}
       <StepperFooter
         position={stepIndex + 1}
         total={STEPS.length}
         backLabel={previous ? `Previous: ${previous.label}` : "Back to practice"}
-        onBack={() => router.push(libraryHref(practice, previous?.key))}
+        onBack={() => router.push(previous ? sourceHref(previous.key) : practiceHref)}
         // "Next:" keeps this apart from the step's own actions; the Approve & publish button in a panel really publishes.
         nextLabel={next ? `Next: ${next.label}` : "Back to practice"}
-        onNext={() => router.push(libraryHref(practice, next?.key))}
+        onNext={() => router.push(next ? sourceHref(next.key) : practiceHref)}
       />
-      {correctionModal}
-      {uploadModal}
+      {correctionOpen && quality ? (
+        <RequestCorrectionModal
+          practiceId={practice}
+          sourceId={source}
+          draft={quality.correction}
+          onClose={() => setCorrectionOpen(false)}
+          onSent={(id) => setCorrectionSent({ practice, id })}
+        />
+      ) : null}
     </PageFrame>
   );
 
@@ -345,16 +363,12 @@ function LibraryScreen() {
         data.extraction?.subtitle,
         <>
           {data.extraction ? <ExtractChunkTab extraction={data.extraction} /> : <MissingStep />}
-          {ingestionJobId ? <StoredDataPanel jobId={ingestionJobId} /> : null}
+          {data.ingestion?.job_id ? <StoredDataPanel jobId={data.ingestion.job_id} /> : null}
         </>,
       );
 
     case "index-validate":
-      return stepView(
-        step.label,
-        data.indexValidation?.subtitle,
-        data.indexValidation ? <IndexValidateTab validation={data.indexValidation} /> : <MissingStep />,
-      );
+      return stepView(step.label, data.indexValidation?.subtitle, data.indexValidation ? <IndexValidateTab validation={data.indexValidation} /> : <MissingStep />);
 
     case "quality-review":
       return stepView(
@@ -365,7 +379,7 @@ function LibraryScreen() {
             quality={quality}
             correctionSent={correctionId}
             onRequestCorrection={() => setCorrectionOpen(true)}
-            onUploadCorrection={() => setUpload({ practice: correctionTarget })}
+            onUploadCorrection={() => router.push(sourceHref("source-upload"))}
           />
         ) : (
           <MissingStep />
@@ -380,7 +394,7 @@ function LibraryScreen() {
           <ApprovePublishTab
             release={data.release}
             publishAction={
-              <PublishControl practiceId={practice} canPublish={Boolean(data.release.canPublish)} blockers={data.release.blockers ?? []} />
+              <PublishControl practiceId={practice} sourceId={source} canPublish={Boolean(data.release.canPublish)} blockers={data.release.blockers ?? []} />
             }
           />
         ) : (
@@ -391,11 +405,63 @@ function LibraryScreen() {
     default:
       return stepView(
         step.label,
-        data.extraction?.subtitle,
-        <SourceFilePanel
-          job={data.ingestion}
-          action={uploadButton(review.approvalState === "Published" ? "Upload new version" : "Upload corrected source", newVersionTarget, true)}
-        />,
+        `${sourceDetail.name} · Version ${sourceDetail.versions[0]?.number ?? 1}`,
+        <>
+          <SourceFilePanel job={data.ingestion} />
+          <SourceUploadForm target={versionTarget} onUploaded={(jobs) => afterUpload(jobs, practiceHref)} />
+        </>,
       );
   }
+}
+
+/** A practice: its details, its sources, and Upload source. */
+function PracticeOverview({
+  back,
+  code,
+  title,
+  details,
+  status,
+  sources,
+  message,
+  footer,
+  onUpload,
+  onOpenSource,
+  onNewVersion,
+}: {
+  back: ReactNode;
+  code: string;
+  title: string;
+  details: Partial<PracticeDetails>;
+  status: string;
+  sources: LibrarySource[];
+  message: ReactNode;
+  footer?: ReactNode;
+  onUpload: () => void;
+  onOpenSource: (sourceId: string) => void;
+  onNewVersion: (sourceId: string) => void;
+}) {
+  const statusText = status === "Approved" ? "Published" : status;
+  return (
+    <PageFrame
+      back={back}
+      breadcrumb={`${BREADCRUMB} / ${code}`}
+      title={title}
+      subtitle={`${code} · ${sources.length} source${sources.length === 1 ? "" : "s"}`}
+      actions={
+        <Button type="button" className="flex items-center gap-2 whitespace-nowrap text-sm" onClick={onUpload}>
+          <Upload size={16} aria-hidden />
+          Upload source
+        </Button>
+      }
+    >
+      {message}
+      <PracticeDetailsCard details={details} status={statusText} footer={footer} />
+      <PracticeSourcesPanel
+        sources={sources}
+        statusLabel={(value) => (value === "completed" ? "Indexed" : stageLabel(value))}
+        onOpen={onOpenSource}
+        onNewVersion={onNewVersion}
+      />
+    </PageFrame>
+  );
 }

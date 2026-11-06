@@ -15,6 +15,9 @@ const TONE_CLASS: Record<LibraryBadgeTone, string> = {
 const STATE_TONE: Record<string, LibraryBadgeTone> = {
   Indexed: "success",
   Published: "success",
+  Completed: "success",
+  Draft: "neutral",
+  Failed: "error",
   Passed: "success",
   "Quality review": "warning",
   "In review": "warning",
@@ -35,20 +38,24 @@ export function libraryTone(state: string): LibraryBadgeTone {
 export function LibraryBadge({
   children,
   tone,
+  dot = false,
   className,
 }: {
   children: string;
   tone?: LibraryBadgeTone;
+  /** A leading dot in the badge's colour, for status columns. */
+  dot?: boolean;
   className?: string;
 }) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center whitespace-nowrap rounded border px-2 py-0.5 text-2xs font-medium leading-4",
+        "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded border px-2 py-0.5 text-2xs font-medium leading-4",
         TONE_CLASS[tone ?? libraryTone(children)],
         className
       )}
     >
+      {dot ? <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden /> : null}
       {children}
     </span>
   );
