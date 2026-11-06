@@ -48,16 +48,23 @@ def _check_pptx_regeneration_mode(ctx: AgentContext) -> dict[str, Any] | None:
             "feedback": "improve design..."
         }
     """
-    if not ctx.init_state:
+    # AgentContext carries no init_state: Phase 5 passes a regeneration through the plan (see
+    # phase5_rejection_handler.regeneration_plan). A partial one reuses the Visual QA repair inputs.
+    plan = ctx.plan_payload if isinstance(ctx.plan_payload, dict) else {}
+    feedback = plan.get("pptx_visual_feedback") if isinstance(plan.get("pptx_visual_feedback"), list) else []
+    if plan.get("prior_pptx_slides") and feedback:
+        regenerate_mode = "partial"
+    elif "Design review rejected the PPTX" in str(plan.get("regeneration_directive") or ""):
+        regenerate_mode = "full"
+    else:
         return None
-
-    regen_data = ctx.init_state.get("pptx_regenerate")
-    if not regen_data:
-        return None
-
-    regenerate_mode = regen_data.get("regenerate_mode")
-    if regenerate_mode not in ("partial", "full"):
-        return None
+    rejected = sorted(_pptx_visual_feedback_indices(feedback))
+    regen_data = {
+        "regenerate_mode": regenerate_mode,
+        "rejected_slides": rejected,
+        "approved_slides": [n for n in range(1, len(plan.get("prior_pptx_slides") or []) + 1) if n not in rejected],
+        "feedback": "; ".join(str(h.get("instruction") or "") for h in feedback if isinstance(h, dict)),
+    }
 
     _LOG.info(f"[PPTX-REGEN] Regeneration detected: mode={regenerate_mode}")
 

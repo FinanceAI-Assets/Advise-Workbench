@@ -66,7 +66,7 @@ export function WordArtifactPanel({
         type="button"
         disabled={!onDownload}
         onClick={onDownload}
-        title={onDownload ? undefined : "Available after independent approval"}
+        title={onDownload ? undefined : "Available after the deck is accepted"}
         className="flex w-full items-center justify-center gap-2 text-sm"
       >
         <Download size={16} aria-hidden />

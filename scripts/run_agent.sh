@@ -439,6 +439,7 @@ OO_ENABLED="$(env_get OPENOBSERVE_ENABLED)"
 OO_URL="$(env_get OPENOBSERVE_URL)"; OO_URL="${OO_URL:-http://localhost:5080}"
 OO_PORT="$(echo "$OO_URL" | sed -E 's#.*:([0-9]+)/?$#\1#')"
 OO_UP=0
+OO_START_LOCAL=0  # set to 1 below when a local OpenObserve is installed and its port is free
 OO_HOSTPART="${OO_URL#*://}"; OO_HOSTPART="${OO_HOSTPART%%[:/]*}"
 case "$OO_HOSTPART" in localhost|127.0.0.1|"") OO_REMOTE=0 ;; *) OO_REMOTE=1 ;; esac
 if [ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 1 ]; then
@@ -448,7 +449,7 @@ if [ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 1 ]; then
 elif [ "$OO_ENABLED" = "true" ]; then
   S="$(check_port openobserve "$OO_PORT" "$OO_URL/healthz")"
   case "$S" in up) OO_UP=1; pass "OpenObserve already running on $OO_PORT" ;;
-    free) if [ -x "$ROOT/.tools/openobserve/openobserve" ]; then pass "port $OO_PORT is free for OpenObserve"
+    free) if [ -x "$ROOT/.tools/openobserve/openobserve" ]; then pass "port $OO_PORT is free for OpenObserve"; OO_START_LOCAL=1
           else fail "OPENOBSERVE_ENABLED=true but OpenObserve is not installed" "./scripts/openobserve.sh setup"; fi ;;
     *) fail "port $OO_PORT is used by ${S#busy:}" "stop that process or change OPENOBSERVE_URL" ;; esac
 fi

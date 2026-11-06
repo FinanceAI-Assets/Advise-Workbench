@@ -1,28 +1,19 @@
 "use client";
 
-import { ClipboardCheck, Download } from "lucide-react";
+import { Download } from "lucide-react";
 import { useState } from "react";
 
-import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { SlideCanvas } from "@/components/deliverables/SlideCanvas";
-import { DeckDecisionButtons, SlideDecisionButtons, type SlideReview } from "@/components/deliverables/SlideDecision";
+import { DeckDecisionButtons, SlideReviewBar, type SlideReview } from "@/components/deliverables/SlideDecision";
 import { SlideThumbnailNav } from "@/components/deliverables/SlideThumbnailNav";
 import type { DeliverablesDetail } from "@/types/api";
-
-const STATUS_CLASS: Record<string, string> = {
-  "Changes requested": "border-[var(--surface-border)] bg-[#FCF3E2] text-[#8C5B12]",
-  Draft: "border-[var(--surface-border)] bg-[#F4F5F3] text-[#677067]",
-  Approved: "border-[var(--surface-border)] bg-[#EFF6E6] text-[#356B12]",
-};
 
 export function ArtifactViewer({
   pptx,
   getSlideDetail,
   onSlideChange,
-  reviewLabel = "Open review",
-  onOpenReview,
   onDownload,
   slideReview,
 }: {
@@ -35,11 +26,9 @@ export function ArtifactViewer({
   // evidence/sources panel in sync with whichever slide is on screen, since
   // the selected index otherwise lives only in this component's state.
   onSlideChange?: (index: number) => void;
-  // Review and download actions; each button is disabled until its handler is supplied.
-  reviewLabel?: string;
-  onOpenReview?: () => void;
+  // Download action; the button is disabled until its handler is supplied.
   onDownload?: () => void;
-  // Accept and reject buttons on the slide, shown when the caller supplies it.
+  // Accept and reject buttons below the slide, shown when the caller supplies it.
   slideReview?: SlideReview;
 }) {
   const [activeIndex, setActiveIndex] = useState(pptx.activeSlideIndex);
@@ -69,37 +58,23 @@ export function ArtifactViewer({
         <span className="text-xs text-[var(--text-muted)]">{pptx.versionLabel}</span>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Badge className={STATUS_CLASS[pptx.status]}>{pptx.status}</Badge>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            type="button"
-            disabled={!onOpenReview}
-            onClick={onOpenReview}
-            className="flex items-center gap-2 whitespace-nowrap text-sm"
-          >
-            <ClipboardCheck size={16} aria-hidden />
-            {reviewLabel}
-          </Button>
-          <Button
-            variant="secondary"
-            type="button"
-            disabled={!onDownload}
-            onClick={onDownload}
-            title={onDownload ? undefined : "Available after independent approval"}
-            className="flex items-center gap-2 whitespace-nowrap text-sm"
-          >
-            <Download size={16} aria-hidden />
-            Download PPTX
-          </Button>
-        </div>
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          type="button"
+          disabled={!onDownload}
+          onClick={onDownload}
+          title={onDownload ? undefined : "Available after the deck is accepted"}
+          className="flex items-center gap-2 whitespace-nowrap text-sm"
+        >
+          <Download size={16} aria-hidden />
+          Download PPTX
+        </Button>
       </div>
 
-      <SlideCanvas
-        slide={slide}
-        actions={slideReview ? <SlideDecisionButtons slideNumber={activeSlide.index} review={slideReview} /> : undefined}
-      />
+      <SlideCanvas slide={slide} />
+
+      <SlideReviewBar index={activeIndex} total={pptx.slides.length} onSelect={selectSlide} review={slideReview} />
 
       <SlideThumbnailNav slides={pptx.slides} activeIndex={activeIndex} onSelect={selectSlide} decisionOf={slideReview?.decisionOf} />
 

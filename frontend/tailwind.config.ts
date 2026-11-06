@@ -16,6 +16,16 @@ const config: Config = {
         "2xs": "0.6875rem",
         "2xl": "1.75rem",
       },
+      // Progress bar for work whose length is unknown (a segment sweeping across the track).
+      keyframes: {
+        indeterminate: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(250%)" },
+        },
+      },
+      animation: {
+        indeterminate: "indeterminate 1.6s ease-in-out infinite",
+      },
     },
     /* Rounded corners (sampled from Figma design — small radius, not sharp/pill) */
     borderRadius: {

@@ -778,6 +778,7 @@ def run_progress(pid: str, user: User = Depends(get_current_user), db: Session =
             "finished": run.status in _RUN_FINISHED,
             "failed": run.status == "failed",
             "needsApproval": run.status == "plan_ready",
+            "evaluationPassed": bool(run.evaluation_passed),
             "error": run.error_message or "",
             "elapsedSeconds": max(0, int((end - started).total_seconds())),
             "lastUpdateSeconds": max(0, int((utcnow() - latest).total_seconds())) if active else 0,

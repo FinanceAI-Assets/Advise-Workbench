@@ -128,6 +128,7 @@ export type RunProgress = {
   finished: boolean;
   failed: boolean;
   needsApproval: boolean;
+  evaluationPassed: boolean;
   error: string;
   elapsedSeconds: number;
   lastUpdateSeconds: number;

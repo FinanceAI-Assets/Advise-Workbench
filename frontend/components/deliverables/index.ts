@@ -1,11 +1,13 @@
 export { EngagementFilesPanel } from "@/components/deliverables/EngagementFilesPanel";
 export { VersionHistoryPanel } from "@/components/deliverables/VersionHistoryPanel";
 export { SlideCanvas } from "@/components/deliverables/SlideCanvas";
-export { DeckDecisionButtons, SlideDecisionButtons, type SlideReview } from "@/components/deliverables/SlideDecision";
+export { DeckDecisionButtons, SlideReviewBar, type SlideReview } from "@/components/deliverables/SlideDecision";
 export { SlideThumbnailNav } from "@/components/deliverables/SlideThumbnailNav";
 export { SlideEvidencePanel } from "@/components/deliverables/SlideEvidencePanel";
 export { WordArtifactPanel } from "@/components/deliverables/WordArtifactPanel";
 export { ArtifactViewer } from "@/components/deliverables/ArtifactViewer";
+export { ArtifactApproval } from "@/components/deliverables/ArtifactApproval";
+export { RegeneratingNotice, RegeneratingSlideOverlay } from "@/components/deliverables/RegeneratingNotice";
 export { ExportApprovalNotice } from "@/components/deliverables/ExportApprovalNotice";
 export { SlideNavigator } from "@/components/deliverables/SlideNavigator";
 export { DocumentOutline, WordDocumentReader, toPages } from "@/components/deliverables/WordDocumentReader";

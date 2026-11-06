@@ -137,7 +137,7 @@ class Run(Base):
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Phase 5: HITL Review tracking
-    phase_5_status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # pending, approved, max_rejections_reached
+    phase_5_status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # pending, approved, timed_out
     phase_5_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     phase_5_approval_data: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # JSON: {pptx: {attempt, version, status}, docx: {...}}
 

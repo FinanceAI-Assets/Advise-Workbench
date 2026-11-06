@@ -1174,7 +1174,8 @@ PHASE_CARRY: dict[str, tuple[str, ...]] = {
     "path_rag_search": ('_run_cost', '_run_usage', 'init_state', 'routing_decision'),  # NEW
     "generate": ('_run_cost', '_run_usage', 'hard_gate_enabled', 'init_state', 'output_type_representations', 'plan_payload_obj', 'requested', 'run_dir'),
     "evaluate": ('_run_cost', '_run_usage', 'final_artifact_report', 'hard_gate_enabled', 'plan_payload_obj', 'requested', 'run_dir', 'run_todos', 'state'),
-    "hitl_review": ('state', 'run', 'session'),  # NEW: Phase 5 HITL Review
+    # Phase 5 HITL Review; it re-runs generate for rejected artifacts, so it carries generate's inputs too.
+    "hitl_review": ('_run_cost', '_run_usage', 'hard_gate_enabled', 'init_state', 'output_type_representations', 'plan_payload_obj', 'requested', 'state'),
     "remember": ('state',),
     "finalize": ('_run_cost', '_run_usage', 'run_todos', 'state'),
 }

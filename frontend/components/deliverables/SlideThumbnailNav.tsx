@@ -1,5 +1,4 @@
 import { SlideDecisionMark, type SlideReview } from "@/components/deliverables/SlideDecision";
-import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import type { Slide } from "@/types/api";
 
@@ -15,8 +14,6 @@ export function SlideThumbnailNav({
   decisionOf?: SlideReview["decisionOf"];
 }) {
   const active = slides[activeIndex];
-  const atStart = activeIndex === 0;
-  const atEnd = activeIndex === slides.length - 1;
 
   // Show a 5-wide window trailing the active slide (matches the design: slide
   // 4 of 12 appears as the 4th of 5 visible tiles, not centered) and clamp to
@@ -28,31 +25,9 @@ export function SlideThumbnailNav({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-[var(--text-muted)]">
-          Slide {active.index} of {slides.length} · {active.title}
-        </p>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            type="button"
-            className="whitespace-nowrap text-sm"
-            disabled={atStart}
-            onClick={() => onSelect(Math.max(0, activeIndex - 1))}
-          >
-            Previous
-          </Button>
-          <Button
-            variant="secondary"
-            type="button"
-            className="whitespace-nowrap text-sm"
-            disabled={atEnd}
-            onClick={() => onSelect(Math.min(slides.length - 1, activeIndex + 1))}
-          >
-            Next
-          </Button>
-        </div>
-      </div>
+      <p className="text-sm text-[var(--text-muted)]">
+        Slide {active.index} of {slides.length} · {active.title}
+      </p>
       <div className="grid grid-cols-5 gap-2">
         {visibleSlides.map((slide, offset) => {
           const i = windowStart + offset;
