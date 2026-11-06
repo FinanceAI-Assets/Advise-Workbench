@@ -19,7 +19,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
-/** A source the user checked in Talk to data; only these move into an engagement. */
+/** A source the user checked in library chat; only these move into an engagement. */
 export type SelectedSource = {
   practiceId: string;
   code: string;
@@ -173,10 +173,10 @@ function AnswerTurn({ turn, author }: { turn: DiscoveryTurn; author: string }) {
 }
 
 /**
- * Talk to data: ask the approved library, check the retrieved sources worth keeping, then add the checked ones to an
+ * Library chat: ask the approved library, check the retrieved sources worth keeping, then add the checked ones to an
  * engagement's sources. Checking a source never changes the answers unless "Ask selected sources only" is on.
  */
-export function TalkToData({
+export function TalkToKnowledge({
   turns,
   setTurns,
   selection,
@@ -489,3 +489,6 @@ export function TalkToData({
     </div>
   );
 }
+
+// Backward-compatible alias during UI naming transition.
+export const TalkToData = TalkToKnowledge;

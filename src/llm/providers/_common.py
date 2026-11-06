@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any
+
+# A caller's hard limit for the current model call, in seconds (``claude_generate(timeout_sec=...)``). Providers
+# that run the model out of process stop it at this limit instead of their own, longer one.
+call_timeout: ContextVar[float | None] = ContextVar("llm_call_timeout", default=None)
 
 
 def system_text(system: Any) -> str:

@@ -110,12 +110,12 @@ def project(monkeypatch):
             {"chunk_id": f"wiki_bad_{pid}", "embedding": vec("payment risk"),
              "metadata": {"wiki_id": f"wiki_bad_{pid}", "project_id": pid}},
         ])
-    return {"pid": pid, "calls": calls, "doc": doc_id}
+    return {"pid": pid, "calls": calls, "doc": doc_id, "get_store": get_store}
 
 
 def ask(project, question, history=None):
     with session_scope() as db:
-        return qp.answer_question(db, project["pid"], question, history or [])
+        return qp.answer_question(db, qp.QueryScope(index=project["pid"]), question, history or [])
 
 
 def test_answer_cites_verified_sources(project):
@@ -252,7 +252,7 @@ def test_wiki_pages_are_verified_against_their_source_chunks(project):
     assert r.retrieval["dropped_low_verification"] >= 1 and r.retrieval["reranker"] == "keyword"
     assert all(s["verification"] == 1.0 for s in r.sources if s["type"] == "chunk")
     with session_scope() as db:
-        detail = qp.source_detail(db, project["pid"], "wiki", f"wiki_{project['pid']}")
+        detail = qp.source_detail(db, "wiki", f"wiki_{project['pid']}", index=project["pid"])
     assert detail["evidence"] and detail["evidence"][0]["id"].startswith(project["doc"])
 
 
@@ -417,6 +417,82 @@ def test_hosted_reranker_is_used_when_configured(monkeypatch):
     assert [s.key for s in qp.rerank("duplicate invoice", [a, c], 5)] == ["c", "a"]
     assert sent["url"] == "http://reranker/rerank" and sent["body"]["texts"] == [a.text, c.text]
     assert qp.reranker_name().startswith("cross-encoder")
+
+
+# ----------------------------------------------------------------------------- engagement documents
+@pytest.fixture
+def engagement(project):
+    """An engagement whose upload the ingestion pipeline indexed under the engagement's id (Postgres + Qdrant)."""
+    with session_scope() as db:
+        uid, eid, job = f"u_{uuid.uuid4().hex[:6]}", f"e_{uuid.uuid4().hex[:8]}", str(uuid.uuid4())
+        db.add(User(id=uid, email=f"{uid}@example.com", hashed_password="x"))
+        db.flush()
+        db.add(Project(id=eid, name="engagement", created_by=uid))
+        db.flush()
+        db.add(DocumentJob(id=f"doc_{job[:8]}", job_id=job, project_id=eid, user_id=uid, filename="workshop-notes.txt",
+                           status="completed"))
+        db.flush()
+        doc = DocumentFile(id=f"docfile_{job[:8]}", project_id=eid, job_id=job, filename="workshop-notes.txt")
+        db.add(doc)
+        db.flush()
+        db.add(ParsedDocument(id=f"parsed_{doc.id}", document_file_id=doc.id, project_id=eid))
+        db.flush()
+        records = []
+        for n, (text, page) in enumerate([("Northwind found duplicate invoice payment risk twice last year in AP.", 2),
+                                          ("The cafeteria menu changes every Monday.", 3)], start=1):
+            cid = f"pas_{eid}_{n}"
+            db.add(ChunkArchive(id=cid, document_file_id=doc.id, parsed_document_id=f"parsed_{doc.id}", project_id=eid,
+                                chunk_number=n, text=text, page_number=page, source_type="section"))
+            db.flush()
+            db.add(DocumentChunkLink(document_file_id=doc.id, chunk_number=n, chunk_id=cid, page_number=page))
+            records.append({"chunk_id": cid, "embedding": vec(text), "metadata": {"chunk_id": cid, "project_id": eid, "text": text}})
+        project["get_store"]().store_embeddings_batch(records)
+    return {**project, "eid": eid}
+
+
+def ask_scope(scope, question):
+    with session_scope() as db:
+        return qp.answer_question(db, scope, question, [])
+
+
+def test_engagement_documents_are_searched_and_cited(engagement):
+    r = ask_scope(qp.QueryScope(index=None, engagement_id=engagement["eid"]), "What is the duplicate invoice payment risk?")
+    assert r.status == "answered"
+    cite = r.citations[0]
+    assert cite["type"] == "chunk" and cite["scope"] == "engagement" and cite["filename"] == "workshop-notes.txt"
+    assert cite["page_number"] == 2 and cite["link"].endswith(f"?engagement_id={engagement['eid']}")
+    assert r.retrieval["engagement_candidates"] >= 1
+    with session_scope() as db:
+        detail = qp.source_detail(db, "chunk", cite["id"], engagement_id=engagement["eid"])
+        other_scope = qp.source_detail(db, "chunk", cite["id"], index=engagement["pid"])  # not this engagement's id
+    assert detail["text"].startswith("Northwind") and detail["scope"] == "engagement" and other_scope is None
+
+
+def test_engagement_and_library_are_searched_together(engagement):
+    r = ask_scope(qp.QueryScope(index=engagement["pid"], engagement_id=engagement["eid"]), "What is the duplicate payment risk?")
+    assert {s["scope"] for s in r.sources} == {"engagement", "library"}
+
+
+def test_selected_practices_keep_engagement_documents_only_from_the_engagement(engagement):
+    scope = qp.QueryScope(index=engagement["pid"], engagement_id=engagement["eid"], practice_ids=("not-this-one",))
+    r = ask_scope(scope, "What is the duplicate payment risk?")
+    assert r.sources and all(s["scope"] == "engagement" for s in r.sources)
+
+
+def test_deleted_engagement_documents_are_not_answered(engagement):
+    with session_scope() as db:
+        db.query(DocumentJob).filter(DocumentJob.project_id == engagement["eid"]).update({"status": "deleted"})
+    r = ask_scope(qp.QueryScope(index=None, engagement_id=engagement["eid"]), "What is the duplicate invoice payment risk?")
+    assert r.status == "insufficient_evidence" and r.reason == "no_results"
+
+
+def test_passage_ids_are_shared_in_the_library_and_private_to_each_engagement():
+    from src.workers.document_parsing_tasks import passage_id
+
+    sha = hashlib.sha256(b"same text").hexdigest()
+    assert passage_id(sha) == passage_id(sha, qp.LIBRARY_SCOPE) == f"pas_{sha[:40]}"
+    assert len({passage_id(sha), passage_id(sha, "p_one"), passage_id(sha, "p_two")}) == 3
+    assert passage_id(sha, "p_one") == passage_id(sha, "p_one")
 
 
 SAMPLES = Path(__file__).resolve().parents[2] / "data" / "examples" / "northwind-p2p" / "source-documents"

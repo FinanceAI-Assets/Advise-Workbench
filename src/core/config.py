@@ -151,7 +151,8 @@ class Settings(BaseSettings):
     query_llm_timeout_sec: float = 90.0  # per answer attempt
     query_llm_retries: int = 2  # extra attempts after a timeout or API error
     query_llm_retry_backoff_sec: float = 1.0  # wait before retry n is n x this (doubled when rate limited)
-    query_event_retention_days: int = 90  # question log behind /api/admin/library/query/metrics
+    query_max_concurrent_answers: int = 8  # answer calls running at once per process; others wait (counted in the timeout)
+    query_rate_limit: str = "30/minute"  # POST /api/query per user
 
     anthropic_api_key: str = ""
 
@@ -465,6 +466,9 @@ class Settings(BaseSettings):
     advise_workbench_runs_debug_log: str = ""
     observability_snapshot_path: str = ""
     structured_logging_enabled: bool = False
+    # Console log level of the API process (DEBUG, INFO, WARNING). INFO shows the [UPLOAD], [SHELDON], [RAG_AGENT] and
+    # [QUERY] lines; the Celery worker prints its stage lines ([S3], [PARSE], [CHUNK], [EMBED]) with --loglevel=INFO.
+    log_level: str = "INFO"
 
     model_realtime_redis_channel_prefix: str = "advise-workbench:model-events"
     drawio_collab_channel_prefix: str = "advise-workbench:drawio-collab"
@@ -802,6 +806,44 @@ def log_run_queue_startup_config(*, repo_env_present: bool) -> None:
             "local Redis-queue testing; switch DATABASE_URL to Postgres before staging/production "
             "(enforced there — see Settings._validate_secrets_and_urls)."
         )
+
+
+def _endpoint_for_logs(url: str) -> str:
+    """scheme://host:port of a service URL, without credentials, path or query (or "(not set)")."""
+    from urllib.parse import urlsplit
+
+    if not url:
+        return "(not set)"
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+    except ValueError:
+        return "(unparseable)"
+
+
+def log_document_pipeline_config(process: str) -> None:
+    """One startup line per service the document pipeline uses (engagement uploads, Sheldon's rag_agent, the query
+    pipeline), so a wrong or missing .env value shows in the backend / worker log. No secrets are logged."""
+    import logging
+
+    log = logging.getLogger("advise_workbench.config")
+    prefix = settings.qdrant_collection_prefix
+    log.info("[STARTUP] %s document pipeline: database=%s broker=%s", process,
+             describe_database_url_for_logs(settings.database_url), _endpoint_for_logs(settings.celery_broker_url))
+    log.info("[STARTUP] %s SeaweedFS (S3)=%s bucket=%s prefix=%s | Qdrant=%s collections=%s%s, %s%s",
+             process, _endpoint_for_logs(settings.s3_endpoint_url), settings.s3_bucket or "(not set)",
+             settings.s3_intake_prefix, _endpoint_for_logs(settings.qdrant_url), prefix, settings.qdrant_collection,
+             prefix, settings.qdrant_wiki_collection)
+    log.info("[STARTUP] %s embeddings=%s model=%s | Docling OCR=%s | LLM provider=%s | LOG_LEVEL=%s",
+             process, _endpoint_for_logs(settings.embedding_base_url) if settings.embedding_base_url else "(local model)",
+             settings.embedding_model, settings.docling_ocr_enabled, settings.llm_provider or "(default)",
+             settings.log_level)
+    missing = [name for name, value in (("S3_ENDPOINT_URL", settings.s3_endpoint_url), ("S3_BUCKET", settings.s3_bucket),
+                                        ("QDRANT_URL", settings.qdrant_url)) if not value]
+    if missing:
+        log.warning("[STARTUP] %s: %s not set in .env; engagement uploads cannot be processed", process,
+                    ", ".join(missing))
 
 
 def bash_allowlist_set() -> frozenset[str]:

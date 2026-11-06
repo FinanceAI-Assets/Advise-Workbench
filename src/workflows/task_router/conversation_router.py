@@ -14,6 +14,7 @@ RouterIntent = Literal[
     "clarify",
     "refine",
     "out_of_scope",
+    "knowledge_question",   # A question answered from the engagement's documents / the library (Sheldon's rag_agent)
     # Collaborative story-building intents (Phase 2)
     "storyline_feedback",   # User reacting to a narrative arc proposal (agree / redirect)
     "slide_agree",          # User agrees with the current slide concept
@@ -44,7 +45,7 @@ _VALID_STATES = {
 
 _VALID_INTENTS = {
     "greeting", "ack", "smalltalk", "commit", "discovery_answer",
-    "clarify", "refine", "out_of_scope",
+    "clarify", "refine", "out_of_scope", "knowledge_question",
     "storyline_feedback", "slide_agree", "slide_modify", "structure_approve",
 }
 
@@ -118,8 +119,12 @@ def route_turn(
         "Return ONLY JSON with keys:\n"
         "intent, confidence, extracted_slots, output_types, representations, content_skill_hint, "
         "next_state, missing_slots, reply_hint, rationale.\n\n"
-        "intent enum: greeting|ack|smalltalk|commit|discovery_answer|clarify|refine|out_of_scope"
+        "intent enum: greeting|ack|smalltalk|commit|discovery_answer|clarify|refine|out_of_scope|knowledge_question"
         "|storyline_feedback|slide_agree|slide_modify|structure_approve.\n"
+        "  knowledge_question = the user asks for facts or information to be looked up in the engagement's uploaded "
+        "documents or the Leading Practice Library (e.g. 'what does the discovery workshop say about vendor master "
+        "changes?', 'what are the leading practices for three-way match?'), and does NOT ask for a deliverable "
+        "(deck, document, spreadsheet) to be created. Not for answers to discovery questions.\n"
         "  storyline_feedback = user reacting to a narrative arc proposal (e.g. 'I prefer SCQA', 'looks good', 'use pyramid').\n"
         "  slide_agree = user agrees with the current proposed slide concept.\n"
         "  slide_modify = user wants to change the current slide concept.\n"

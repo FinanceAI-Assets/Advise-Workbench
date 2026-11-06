@@ -1,9 +1,11 @@
 """Celery application for the document ingestion pipeline."""
 
+import logging
 import ssl
+import sys
 
 from celery import Celery
-from celery.signals import worker_init
+from celery.signals import after_setup_logger, worker_init, worker_ready
 
 from src.core.config import settings
 
@@ -48,6 +50,29 @@ if settings.celery_broker_url.startswith("amqps://"):
 if settings.celery_result_backend.startswith("rediss://"):
     app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED, **(
         {"ssl_ca_certs": settings.ssl_ca_file} if settings.ssl_ca_file else {})}
+
+
+@after_setup_logger.connect
+def _quiet_http_clients(**_kwargs) -> None:
+    # Keep the worker console to the pipeline's stage lines ([S3], [PARSE], [CHUNK], [EMBED], [PIPELINE]): the S3,
+    # Qdrant and embedding clients would otherwise log every HTTP request.
+    for name in ("httpx", "httpcore", "botocore", "boto3", "urllib3", "s3transfer"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    # Status lines printed with emoji must not fail a task when the log file cannot encode them (Windows cp1252).
+    for stream in {sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__} - {None}:
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
+
+
+@worker_ready.connect
+def _log_ready(**_kwargs) -> None:
+    from src.core.config import log_document_pipeline_config
+
+    log_document_pipeline_config("worker")
+    logging.getLogger("advise_workbench.worker").info(
+        "[WORKER] ready: consuming queue %s; each upload logs [S3] -> [PARSE] -> [CHUNK] -> [EMBED] -> [PIPELINE]",
+        INGESTION_QUEUE,
+    )
 
 
 @worker_init.connect

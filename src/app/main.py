@@ -1,7 +1,9 @@
 import importlib.util
 import json
 import logging
+import os
 import shutil
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,7 +30,14 @@ if not dotenv_ignored():
 from src.app.api.routes import router
 from src.app.api.wiki import router as wiki_router
 from src.app.api.failure_tracking import router as failure_tracking_router
-from src.core.config import log_memory_config_warnings, log_run_queue_startup_config, log_wiki_config_warnings, settings
+from src.app.api.quality_evaluation import router as quality_evaluation_router
+from src.core.config import (
+    log_document_pipeline_config,
+    log_memory_config_warnings,
+    log_run_queue_startup_config,
+    log_wiki_config_warnings,
+    settings,
+)
 from src.deliverables.deliverable import DeliverableRegistry
 from src.deliverables.docx.deliverable_docx import DOCXDeliverable
 from src.deliverables.pdf.deliverable_pdf import PDFDeliverable
@@ -70,6 +79,22 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=True)
 
 
+for _stream in {sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__} - {None}:
+    # Some modules print status lines with emoji; on a console or log file that cannot encode them (Windows cp1252
+    # when output is redirected) print() would raise and fail the request. Escape such characters instead.
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="backslashreplace")
+
+if not logging.getLogger().handlers:
+    # Application logs on the console (uvicorn only configures its own loggers); LOG_LEVEL sets how much.
+    logging.basicConfig(
+        level=getattr(logging, str(settings.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    for _noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3", "s3transfer", "multipart"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 if settings.structured_logging_enabled:
     root = logging.getLogger()
     if root.handlers:
@@ -85,6 +110,7 @@ async def lifespan(_app: FastAPI):
     log_run_queue_startup_config(
         repo_env_present=(_repo_root / ".env").is_file(),
     )
+    log_document_pipeline_config("backend")
     init_otel_if_enabled()
     validate_llm_on_startup()
     init_db()
@@ -175,6 +201,8 @@ app.include_router(router, prefix="/api")
 app.include_router(wiki_router)
 
 app.include_router(failure_tracking_router)
+
+app.include_router(quality_evaluation_router)
 
 
 @app.get("/health")

@@ -10,13 +10,19 @@ import logging
 from typing import Any
 
 from src.core.config import settings
-from src.core.db.models import ChunkArchive, ChunkEmbedding, DocumentChunkLink
+from src.core.db.models import ChunkArchive, ChunkEmbedding, DocumentChunkLink, DocumentFile
 from src.core.db.session import session_scope
 from src.core.embeddings.embedding_service import get_embedding_service
 from src.core.tz import ist_now
 from src.core.vector_db.qdrant_client import get_qdrant_client, point_id_for
 from src.workers.celery_app import app
-from src.workers.pipeline import IngestionTask, PermanentIngestionError, complete_job, update_job
+from src.workers.pipeline import (
+    IngestionTask,
+    PermanentIngestionError,
+    complete_job,
+    replace_older_versions,
+    update_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +93,16 @@ def embed_chunks(ctx: dict[str, Any]) -> dict[str, Any]:
                 )
             )
         db.commit()
-        summary = f"{len(passage_ids)} passages: {len(todo)} embedded, {len(reused)} reused from the library"
+        summary = f"{len(passage_ids)} passages: {len(todo)} embedded, {len(reused)} reused"
         if not ctx.get("knowledge") and not ctx.get("library"):
-            complete_job(db, ctx, summary)
+            # An engagement upload: this version replaces the earlier ones of the same file, unless a newer one won.
+            doc = db.get(DocumentFile, document_file_id)
+            if doc is None or replace_older_versions(db, doc):
+                complete_job(db, ctx, summary)
 
-    logger.info("[EMBED] job=%s %s (%d points written) in %s", job_id, summary, indexed, store.collection_name)
+    logger.info("[EMBED] job=%s project=%s file=%s %s with %s; Qdrant collection %s: %d points written "
+                "(project_id=%s); Postgres chunk_embeddings", job_id, ctx["project_id"], ctx["filename"], summary,
+                embedder.model_name, store.collection_name, indexed, ctx["project_id"])
     return {
         **ctx,
         "embedded": len(todo),

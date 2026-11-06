@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from importlib.metadata import version
@@ -16,7 +17,7 @@ from src.core.storage.seaweedfs_client import get_seaweedfs_client
 from src.core.tz import ist_now
 from src.memory.knowledge import practice_ingest as ingest
 from src.workers.celery_app import app
-from src.workers.pipeline import IngestionTask, PermanentIngestionError, update_job
+from src.workers.pipeline import LIBRARY_SCOPE, IngestionTask, PermanentIngestionError, update_job
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,10 @@ def parse_document_with_docling(ctx: dict[str, Any]) -> dict[str, Any]:
         update_job(db, job_id, parse_mode="docling", text_content=full_text)
 
     logger.info(
-        "[PARSE] job=%s parsed %s: %d pages, %d tables, %d chars in %dms",
-        job_id, ctx["filename"], result["page_count"], result["table_count"], len(full_text), duration_ms,
+        "[PARSE] job=%s project=%s file=%s read from SeaweedFS and parsed by Docling: %d pages, %d tables, %d chars "
+        "in %dms; Postgres parsed_documents id=%s",
+        job_id, ctx["project_id"], ctx["filename"], result["page_count"], result["table_count"], len(full_text),
+        duration_ms, parsed_id,
     )
     return {**ctx, "parsed_document_id": parsed_id, "page_count": result["page_count"]}
 
@@ -94,7 +97,7 @@ def chunk_parsed_content(ctx: dict[str, Any]) -> dict[str, Any]:
         reused = 0
         known: set[str] = set()
         for number, chunk in enumerate(chunks, start=1):
-            chunk_id = passage_id(chunk["sha256"])
+            chunk_id = passage_id(chunk["sha256"], ctx["project_id"])
             chunk["chunkId"] = chunk_id
             exists = chunk_id in known or db.get(ChunkArchive, chunk_id) is not None
             if not exists:
@@ -125,11 +128,15 @@ def chunk_parsed_content(ctx: dict[str, Any]) -> dict[str, Any]:
         }
         update_job(db, job_id, chunk_count=len(chunks))
 
-    logger.info("[CHUNK] job=%s %d passages: %d new, %d already in the library", job_id, len(chunks),
-                len(chunks) - reused, reused)
+    logger.info("[CHUNK] job=%s project=%s file=%s %d passages (%d new, %d already stored in this scope); "
+                "Postgres chunk_archive + document_chunk_links", job_id, ctx["project_id"], ctx["filename"],
+                len(chunks), len(chunks) - reused, reused)
     return {**ctx, "chunk_count": len(chunks), "reused_chunks": reused}
 
 
-def passage_id(sha256: str) -> str:
-    """Stable id of a passage text across the library (chunk_archive.id)."""
-    return f"pas_{sha256[:40]}"
+def passage_id(sha256: str, project_id: str = LIBRARY_SCOPE) -> str:
+    """Stable id of a passage text (chunk_archive.id): shared across the library, and within one engagement only, so
+    an engagement's passages never mix with the library's or another engagement's."""
+    if project_id == LIBRARY_SCOPE:
+        return f"pas_{sha256[:40]}"
+    return f"pas_{hashlib.sha256(f'{project_id}:{sha256}'.encode()).hexdigest()[:40]}"

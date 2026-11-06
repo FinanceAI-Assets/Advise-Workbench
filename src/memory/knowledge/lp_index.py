@@ -215,7 +215,7 @@ def _released_semantic(index: LPIndex, query: str, top_k: int) -> list[tuple[int
     try:
         from src.core.embeddings.embedding_service import get_embedding_service
         from src.core.vector_db.qdrant_client import get_qdrant_client
-        from src.workers.pipeline import LIBRARY_SCOPE
+        from src.memory.knowledge.library_release import LIBRARY_SCOPE
 
         vector = get_embedding_service().embed_batch([query])[0]
         hits = get_qdrant_client().search_in(vector, field="job_id", values=job_ids, limit=top_k, project_id=LIBRARY_SCOPE)

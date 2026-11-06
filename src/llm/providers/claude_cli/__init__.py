@@ -23,7 +23,7 @@ from src.llm.base_provider import BaseLLMProvider, HealthStatus, RoundCallback, 
 from src.llm.capabilities import Capabilities
 from src.llm.config import LLMConfig
 from src.llm.errors import LLMBadRequestError, LLMConfigError
-from src.llm.providers._common import blocks, message, system_text, tool_result_text
+from src.llm.providers._common import blocks, call_timeout, message, system_text, tool_result_text
 from src.llm.providers.claude_cli.process import classify_failure, clean_env, run_cli
 from src.llm.providers.claude_cli.tool_bridge import TOOL_PREFIX, get_bridge
 from src.llm.providers.claude_cli.transcript import NO_TOOLS_NOTE, collapse_messages, stdin_payload
@@ -127,7 +127,9 @@ class ClaudeCliProvider(BaseLLMProvider):
 
     @property
     def _timeout(self) -> float:
-        return float(self._config.options.get("timeout_sec") or 600)
+        timeout = float(self._config.options.get("timeout_sec") or 600)
+        limit = call_timeout.get()  # claude_generate(timeout_sec=...): e.g. the query pipeline's per-answer limit
+        return min(timeout, float(limit)) if limit else timeout
 
     def _command(self, binary: str, model: str, system_file: str) -> list[str]:
         cmd = [

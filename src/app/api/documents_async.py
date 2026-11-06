@@ -28,7 +28,7 @@ from src.core.db.models import (
 from src.core.db.session import get_db
 from src.core.storage.seaweedfs_client import get_seaweedfs_client
 from src.core.vector_db.qdrant_client import get_qdrant_client
-from src.workers.pipeline import KNOWLEDGE_STAGES, LIBRARY_SCOPE, SEARCH_STAGES, TERMINAL_STATUSES
+from src.workers.pipeline import ENGAGEMENT_STAGES, KNOWLEDGE_STAGES, LIBRARY_SCOPE, SEARCH_STAGES, TERMINAL_STATUSES
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -64,12 +64,14 @@ class JobStatus(BaseModel):
     error_message: Optional[str] = None
 
 
-def _stages() -> list[str]:
+def _stages(project_id: str = LIBRARY_SCOPE) -> list[str]:
+    if project_id != LIBRARY_SCOPE:
+        return list(ENGAGEMENT_STAGES)
     return SEARCH_STAGES + (KNOWLEDGE_STAGES if settings.knowledge_building_enabled else [])
 
 
-def _wiki_pages_for(db: Session, document_file_id: str) -> list[WikiPageFinal]:
-    pages = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == LIBRARY_SCOPE).all()
+def _wiki_pages_for(db: Session, document_file_id: str, project_id: str = LIBRARY_SCOPE) -> list[WikiPageFinal]:
+    pages = db.query(WikiPageFinal).filter(WikiPageFinal.project_id == project_id).all()
     return [p for p in pages if document_file_id in (p.merge_info or {}).get("source_documents", [])]
 
 
@@ -84,16 +86,17 @@ def split_document_key(key: str) -> tuple[Optional[str], str]:
     return (parts[0], parts[-1]) if len(parts) > 1 else (None, key)
 
 
-def ingestion_status(db: Session, job_id: str | None) -> dict[str, Any] | None:
-    """JSON-ready pipeline status of one library ingestion job (None when there is no such job)."""
+def ingestion_status(db: Session, job_id: str | None, project_id: str = LIBRARY_SCOPE) -> dict[str, Any] | None:
+    """JSON-ready pipeline status of one ingestion job of ``project_id`` (None when there is no such job)."""
     if not job_id:
         return None
-    job = db.query(DocumentJob).filter(DocumentJob.job_id == job_id, DocumentJob.project_id == LIBRARY_SCOPE).first()
-    return _job_status(db, job).model_dump(mode="json") if job else None
+    job = db.query(DocumentJob).filter(DocumentJob.job_id == job_id, DocumentJob.project_id == project_id).first()
+    return job_status(db, job).model_dump(mode="json") if job else None
 
 
-def _job_status(db: Session, job: DocumentJob) -> JobStatus:
-    stages = _stages()
+def job_status(db: Session, job: DocumentJob) -> JobStatus:
+    """Stage, progress, counts and failure details of one job (library or engagement upload)."""
+    stages = _stages(job.project_id)
     doc = db.query(DocumentFile).filter(DocumentFile.job_id == job.job_id).first()
     counts = JobCounts(chunks=job.chunk_count or 0)
     if doc is not None:
@@ -103,7 +106,7 @@ def _job_status(db: Session, job: DocumentJob) -> JobStatus:
         counts.embeddings = links.join(ChunkEmbedding, ChunkEmbedding.chunk_id == DocumentChunkLink.chunk_id).count()
         if parsed_ids:
             counts.facts = db.query(ExtractedFact).filter(ExtractedFact.parsed_document_id.in_(parsed_ids)).count()
-        counts.wiki_pages = len(_wiki_pages_for(db, doc.id))
+        counts.wiki_pages = len(_wiki_pages_for(db, doc.id, job.project_id))
     if job.status == "completed":
         index = len(stages)
     elif job.status in stages:
@@ -152,7 +155,7 @@ def _job_for(job_id: str, db: Session) -> DocumentJob:
 @router.get("/status/{job_id}", response_model=JobStatus)
 def get_job_status(job_id: str, admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> JobStatus:
     """Poll one ingestion job: stage, progress, counts, failure details."""
-    return _job_status(db, _job_for(job_id, db))
+    return job_status(db, _job_for(job_id, db))
 
 
 @router.get("/jobs", response_model=list[JobStatus])
@@ -163,7 +166,7 @@ def list_jobs(admin: User = Depends(require_admin), db: Session = Depends(get_db
         db.query(DocumentJob).filter(DocumentJob.project_id == LIBRARY_SCOPE).order_by(DocumentJob.created_at.desc())
     ):
         latest.setdefault(job.filename, job)
-    return [_job_status(db, j) for j in latest.values() if j.status != "deleted"]
+    return [job_status(db, j) for j in latest.values() if j.status != "deleted"]
 
 
 @router.get("/wiki")
@@ -201,7 +204,7 @@ def get_job_details(
 ) -> dict[str, Any]:
     """What the pipeline stored for this job in SeaweedFS (S3), Postgres and Qdrant."""
     job = _job_for(job_id, db)
-    status = _job_status(db, job).model_dump()
+    status = job_status(db, job).model_dump()
     doc_file = db.query(DocumentFile).filter(DocumentFile.job_id == job.job_id).first()
     if doc_file is None:
         return {"job": status, "seaweedfs": None, "postgres": None, "qdrant": None, "knowledge": None}

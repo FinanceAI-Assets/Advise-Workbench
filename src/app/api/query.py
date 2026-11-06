@@ -1,48 +1,57 @@
-"""Query API: ask the Leading Practice Library a question and get a cited answer, in a stored conversation.
+"""Query API: the query pipeline over HTTP, for any caller (other services, Postman, tests).
 
-POST   /api/query                                              ask (new conversation, or a follow-up)
-GET    /api/query/health                                       can questions be answered right now; limits
-GET    /api/query/conversations                                the caller's conversations, newest first
-GET    /api/query/conversations/{id}                           one conversation with every turn
-PATCH  /api/query/conversations/{id}                           rename
-DELETE /api/query/conversations/{id}                           delete
-PUT    /api/query/conversations/{id}/turns/{turn_id}/feedback  rate an answer (up / down, optional comment)
-GET    /api/query/sources/{chunk|wiki}/{id}                    a cited source in full (``citations[].link``)
-GET    /api/admin/library/query/metrics                        admin: outcomes, latency, model errors, feedback,
-                                                               unanswered questions (``admin_router``)
+POST   /api/query                          ask: a cited answer from an engagement's documents and/or the library
+GET    /api/query/health                   can questions be answered right now; limits
+GET    /api/query/sources/{kind}/{id}      a cited source in full (``citations[].link``)
 
-Library content is readable by every signed-in user (as with the Leading Practice Library itself); only the
-released version of Approved practices is ever retrieved or shown. Conversations are private to their owner.
+The same pipeline answers inside the app: Sheldon's rag_agent (engagement Conversation) and Talk to data (Leading
+Practice Library) call ``src.query.service.ask`` directly. The API is stateless: send earlier turns as ``history``
+for follow-up questions. Library content is readable by every signed-in user (released practices only); an
+engagement's documents only by its members.
 """
 
 import asyncio
+import hashlib
+import logging
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
-from src.core.auth import get_current_user, require_admin
+from src.core.auth import get_current_user
 from src.core.config import settings
-from src.core.db.models import User, utcnow
+from src.core.db.models import User
 from src.core.db.session import get_db
+from src.core.rate_limit import limiter
 from src.core.vector_db.qdrant_client import get_qdrant_client
 from src.llm.claude import is_claude_enabled
-from src.query import conversations, events
-from src.query.pipeline import answer_question, reranker_name, source_detail
-from src.workers.pipeline import LIBRARY_SCOPE
+from src.query import service
+from src.query.pipeline import reranker_name
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
-admin_router = APIRouter()
 
 Status = Literal["answered", "insufficient_evidence", "llm_unavailable"]
 Reason = Literal["no_results", "low_confidence", "low_verification", "model_declined", "uncited_answer", "llm_failed"]
+SourceType = Literal["chunk", "wiki"]
 QUESTION_MAX_CHARS = 2000
 TOP_K_MAX = 12
 
 
-# --- request / response models (the contract the frontend integrates against) --------------------------------------
+def _rate_limit() -> str:
+    return (settings.query_rate_limit or "30/minute").strip() or "30/minute"
+
+
+def _caller_key(request: Request) -> str:
+    """Rate-limit per signed-in caller (their token), falling back to the client address."""
+    auth = request.headers.get("authorization") or ""
+    return "q:" + hashlib.sha256(auth.encode()).hexdigest()[:24] if auth else get_remote_address(request)
+
+
+# --- request / response models -------------------------------------------------------------------------------------
 
 
 class Turn(BaseModel):
@@ -52,12 +61,13 @@ class Turn(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str = Field(min_length=2, max_length=QUESTION_MAX_CHARS)
-    conversation_id: str | None = Field(default=None, max_length=64, description="Omit to start a new conversation")
-    save: bool = Field(default=True, description="False answers without storing a conversation turn")
-    history: list[Turn] = Field(default_factory=list, max_length=20,
-                                description="Only for save=false without conversation_id; ignored otherwise")
+    engagement_id: str | None = Field(default=None, max_length=64,
+                                      description="Also search this engagement's uploaded documents (members only)")
+    include_library: bool = Field(default=True, description="Search the approved Leading Practice Library")
+    practice_ids: list[str] = Field(default_factory=list, max_length=20,
+                                    description="Only these library practices (Talk to data: selected sources)")
+    history: list[Turn] = Field(default_factory=list, max_length=20, description="Earlier turns, for follow-ups")
     top_k: int | None = Field(default=None, ge=1, le=TOP_K_MAX, description="Sources given to the model (default 10)")
-    project_id: str | None = Field(default=None, description="Accepted for compatibility; the library is searched")
 
 
 class Understanding(BaseModel):
@@ -65,7 +75,7 @@ class Understanding(BaseModel):
                     "verification", "fact", "other"]
     question_type: Literal["who", "what", "when", "where", "why", "how", "which", "yes_no", "other"]
     is_follow_up: bool
-    context_turns: int = Field(description="Earlier questions of the conversation that were loaded")
+    context_turns: int = Field(description="Earlier questions of the conversation that were given")
     entities: list[str]
     keywords: list[str]
     language: Literal["en", "other"]
@@ -80,7 +90,8 @@ class Variant(BaseModel):
 
 class Citation(BaseModel):
     ref: str = Field(description="S1, S2, ... as written in the answer")
-    type: Literal["chunk", "wiki"]
+    type: SourceType
+    scope: Literal["engagement", "library"]
     id: str
     title: str
     filename: str | None = None
@@ -97,7 +108,8 @@ class Citation(BaseModel):
 
 
 class SourceView(BaseModel):
-    type: Literal["chunk", "wiki"]
+    type: SourceType
+    scope: Literal["engagement", "library"]
     id: str
     label: str
     title: str
@@ -124,11 +136,14 @@ class Coverage(BaseModel):
 
 class Retrieval(BaseModel):
     candidates: int = 0
+    engagement_candidates: int = 0
     verified: int = 0
     dropped_low_verification: int = 0
     top_score: float = 0.0
     reranker: str = "keyword"
     final: int = 0
+    pending_documents: list[str] = Field(default_factory=list,
+                                         description="Engagement uploads still being processed, so not searched yet")
 
 
 class AnswerMetadata(BaseModel):
@@ -142,15 +157,7 @@ class AnswerMetadata(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict, description="{sources, chars, tokens_est, max_tokens}")
 
 
-class Feedback(BaseModel):
-    rating: Literal["up", "down"]
-    comment: str = ""
-    at: str | None = None
-
-
-class AnswerTurn(BaseModel):
-    id: str | None = Field(default=None, description="Turn id; null when save=false")
-    created_at: str | None = None
+class AnswerResponse(BaseModel):
     status: Status
     reason: Reason | None = None
     question: str
@@ -167,40 +174,6 @@ class AnswerTurn(BaseModel):
     answer_metadata: AnswerMetadata
     model_calls: int
     timings_ms: dict[str, int]
-    feedback: Feedback | None = None
-
-
-class AnswerResponse(AnswerTurn):
-    conversation_id: str | None = Field(default=None, description="Send back as conversation_id for follow-ups")
-    turn_id: str | None = None
-
-
-class ConversationSummary(BaseModel):
-    id: str
-    title: str
-    created_at: str | None = None
-    updated_at: str | None = None
-    turn_count: int
-    last_question: str | None = None
-    last_status: Status | None = None
-
-
-class ConversationList(BaseModel):
-    items: list[ConversationSummary]
-    total: int
-
-
-class Conversation(ConversationSummary):
-    turns: list[AnswerTurn]
-
-
-class RenameRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=80)
-
-
-class FeedbackRequest(BaseModel):
-    rating: Literal["up", "down"]
-    comment: str = Field(default="", max_length=1000)
 
 
 class Evidence(BaseModel):
@@ -214,7 +187,8 @@ class Evidence(BaseModel):
 
 
 class SourceDetail(BaseModel):
-    type: Literal["chunk", "wiki"]
+    type: SourceType
+    scope: Literal["engagement", "library"]
     id: str
     label: str
     title: str
@@ -232,7 +206,7 @@ class SourceDetail(BaseModel):
 
 
 class Health(BaseModel):
-    ready: bool = Field(description="False: disable the ask box (search_available or model_available is false)")
+    ready: bool = Field(description="False: questions cannot be answered (search_available or model_available is false)")
     search_available: bool
     model_available: bool
     embedding_model: str
@@ -243,46 +217,33 @@ class Health(BaseModel):
 # --- endpoints ------------------------------------------------------------------------------------------------------
 
 
-def _conversation_or_404(db: Session, user: User, conversation_id: str) -> dict[str, Any]:
-    conversation = conversations.get(db, user.id, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation
-
-
 @router.post("", response_model=AnswerResponse)
-async def ask(body: QueryRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+@limiter.limit(_rate_limit, key_func=_caller_key)
+async def ask(
+    request: Request, body: QueryRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> dict[str, Any]:
     """Answer one question. status: answered | insufficient_evidence | llm_unavailable (``reason`` says why).
 
-    Follow-ups: send the ``conversation_id`` from the previous response; earlier turns are read from the server.
-    503 when search itself (embeddings / Qdrant) is unreachable.
+    403 when ``engagement_id`` is not the caller's engagement; 503 when search (embeddings / Qdrant) is down.
     """
+    if not body.engagement_id and not body.include_library:
+        raise HTTPException(status_code=422, detail="Nothing to search: give engagement_id or include_library=true")
+    scope = service.scope_for(engagement_id=body.engagement_id, include_library=body.include_library,
+                              practice_ids=body.practice_ids)
     history = [t.model_dump() for t in body.history]
-    if body.conversation_id:
-        conversation = _conversation_or_404(db, user, body.conversation_id)
-        if body.save and conversation["turn_count"] >= conversations.MAX_TURNS:
-            raise HTTPException(status_code=409, detail="This conversation is full; start a new one")
-        history = conversations.history(conversation)
     try:
-        result = await asyncio.to_thread(answer_question, db, LIBRARY_SCOPE, body.question, history, body.top_k)
-    except Exception as e:  # embedding service / Qdrant unreachable
-        raise HTTPException(status_code=503, detail=f"Search is unavailable: {e}") from e
-    if not body.save:
-        events.record(db, user.id, result, conversation_id=None, turn_id=None)
-        return {**asdict(result), "conversation_id": body.conversation_id}
-    try:
-        conversation_id, turn = conversations.append(db, user.id, body.conversation_id, result)
-    except LookupError as e:
-        raise HTTPException(status_code=404, detail="Conversation not found") from e
-    except conversations.ConversationFull as e:
-        raise HTTPException(status_code=409, detail="This conversation is full; start a new one") from e
-    events.record(db, user.id, result, conversation_id=conversation_id, turn_id=turn["id"])
-    return {**turn, "conversation_id": conversation_id, "turn_id": turn["id"]}
+        result = await asyncio.to_thread(service.ask, db, user.id, body.question, scope, history=history, top_k=body.top_k)
+    except service.AccessDenied as e:
+        raise HTTPException(status_code=403, detail="You do not have access to this engagement") from e
+    except Exception as e:
+        logger.exception("[QUERY] search unavailable")
+        raise HTTPException(status_code=503, detail="Search is unavailable right now; try again shortly") from e
+    return asdict(result)
 
 
 @router.get("/health", response_model=Health)
 def health(user: User = Depends(get_current_user)) -> dict[str, Any]:
-    """Whether questions can be answered right now, and the request limits for the ask form."""
+    """Whether questions can be answered right now, and the request limits."""
     try:
         search = get_qdrant_client().health_check()
     except Exception:  # unreachable or misconfigured: report it, do not fail
@@ -294,77 +255,22 @@ def health(user: User = Depends(get_current_user)) -> dict[str, Any]:
         "model_available": model,
         "embedding_model": settings.embedding_model,
         "reranker": reranker_name(),
-        "limits": {"question_max_chars": QUESTION_MAX_CHARS, "top_k_max": TOP_K_MAX, "top_k_default": settings.query_top_k,
-                   "max_turns_per_conversation": conversations.MAX_TURNS},
+        "limits": {"question_max_chars": QUESTION_MAX_CHARS, "top_k_max": TOP_K_MAX, "top_k_default": settings.query_top_k},
     }
-
-
-@router.get("/conversations", response_model=ConversationList)
-def list_conversations(
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    return conversations.list_for(db, user.id, limit=limit, offset=offset)
-
-
-@router.get("/conversations/{conversation_id}", response_model=Conversation)
-def get_conversation(conversation_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _conversation_or_404(db, user, conversation_id)
-
-
-@router.patch("/conversations/{conversation_id}", response_model=ConversationSummary)
-def rename_conversation(
-    conversation_id: str, body: RenameRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> dict[str, Any]:
-    summary = conversations.rename(db, user.id, conversation_id, body.title)
-    if summary is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return summary
-
-
-@router.delete("/conversations/{conversation_id}")
-def delete_conversation(conversation_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, str]:
-    if not conversations.delete(db, user.id, conversation_id):
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return {"deleted": conversation_id}
-
-
-@router.put("/conversations/{conversation_id}/turns/{turn_id}/feedback", response_model=AnswerTurn)
-def rate_answer(
-    conversation_id: str, turn_id: str, body: FeedbackRequest,
-    user: User = Depends(get_current_user), db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Rate one answer; sending again replaces the earlier rating. Admins see ratings in the query metrics."""
-    feedback = {"rating": body.rating, "comment": body.comment.strip(), "at": utcnow().isoformat(timespec="seconds")}
-    turn = conversations.set_feedback(db, user.id, conversation_id, turn_id, feedback)
-    if turn is None:
-        raise HTTPException(status_code=404, detail="Answer not found")
-    events.set_feedback(db, turn_id, feedback)
-    db.commit()
-    return turn
 
 
 @router.get("/sources/{kind}/{source_id}", response_model=SourceDetail)
 def get_source(
-    kind: Literal["chunk", "wiki"], source_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    kind: SourceType,
+    source_id: str,
+    engagement_id: str | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """A cited passage or wiki page in full. 404 when it is gone or not part of a released practice."""
-    detail = source_detail(db, LIBRARY_SCOPE, kind, source_id)
+    """A cited passage or wiki page in full; an engagement upload's passage needs ``engagement_id`` (as in
+    ``citations[].link``). 404 when it is gone, not part of a released practice, or not in one of the caller's
+    engagements."""
+    detail = service.source(db, user.id, kind, source_id, engagement_id=engagement_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return detail
-
-
-@admin_router.get("/metrics")
-def query_metrics(
-    days: int = Query(7, ge=1, le=365),
-    top: int = Query(20, ge=1, le=100),
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Library Q&A over the last ``days``: outcomes by status/reason/intent, answer rate, latency (avg/p50/p95),
-    model calls and errors by kind, feedback, the most-asked questions the library could not answer (content
-    gaps), and a daily series."""
-    return events.summary(db, days=min(days, settings.query_event_retention_days), top=top)

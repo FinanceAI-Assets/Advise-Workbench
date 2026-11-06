@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import uuid
+
 import numpy as np
 import pytest
+from sqlalchemy import delete
 
 from src.core.cache import cache_service
 from src.core.config import settings
+from src.core.db.models import WorkbenchRecord
+from src.core.db.session import session_scope
 from src.core.storage import workspace_path
 from src.memory.knowledge import lp_index, lp_rag
 from src.memory.knowledge.leading_practices import leading_practice_library_service as service
@@ -186,3 +192,60 @@ def test_prompt_registry_files_are_valid() -> None:
     assert all(p.version and (p.system or p.user) for p in prompts)
     with pytest.raises(KeyError):
         get_prompt("lp_rag_answer").render_user(question="only one variable")
+
+
+def test_project_scoped_search_returns_nothing_without_linked_practices(library, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_id = f"p_{uuid.uuid4().hex[:10]}"
+    monkeypatch.setattr(lp_index, "load_index", lambda force=False: type("Idx", (), {"fingerprint": "fp-test"})())
+    called: dict[str, object] = {}
+
+    def fake_run(query: str, *, max_results: int = 5, want_answer: bool = False, practice_ids=None):
+        called["query"] = query
+        called["practice_ids"] = practice_ids
+        return {"results": [{"heading": "should not be returned"}]}
+
+    monkeypatch.setattr(lp_rag, "run_lp_rag", fake_run)
+    monkeypatch.setattr("src.memory.knowledge.leading_practices.run_lp_rag", fake_run)
+    monkeypatch.setattr(cache_service, "get", lambda key: None)
+
+    results = service.search("invoice controls", project_id=project_id, max_results=3)
+    assert results == []
+    assert called == {}
+
+
+def test_project_scoped_search_uses_only_linked_practices(library, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_id = f"p_{uuid.uuid4().hex[:10]}"
+    with session_scope() as db:
+        db.add(
+            WorkbenchRecord(
+                collection="engagement_practices",
+                record_id=f"{project_id}:lp-002",
+                project_id=project_id,
+                payload_json=json.dumps({"practiceId": "lp-002", "title": "Invoice approvals"}),
+            )
+        )
+    monkeypatch.setattr(lp_index, "load_index", lambda force=False: type("Idx", (), {"fingerprint": "fp-test"})())
+    call: dict[str, object] = {}
+
+    def fake_run(query: str, *, max_results: int = 5, want_answer: bool = False, practice_ids=None):
+        call["query"] = query
+        call["max_results"] = max_results
+        call["practice_ids"] = practice_ids
+        return {"results": [{"heading": "Invoice approvals", "practice_id": "lp-002"}]}
+
+    monkeypatch.setattr(lp_rag, "run_lp_rag", fake_run)
+    monkeypatch.setattr("src.memory.knowledge.leading_practices.run_lp_rag", fake_run)
+    monkeypatch.setattr(cache_service, "get", lambda key: None)
+
+    try:
+        results = service.search("invoice controls", project_id=project_id, max_results=4)
+        assert [r["practice_id"] for r in results] == ["lp-002"]
+        assert call["practice_ids"] == ["lp-002"]
+    finally:
+        with session_scope() as db:
+            db.execute(
+                delete(WorkbenchRecord).where(
+                    WorkbenchRecord.collection == "engagement_practices",
+                    WorkbenchRecord.project_id == project_id,
+                )
+            )

@@ -1,154 +1,206 @@
-# Library Q&A API (frontend integration)
+# Query pipeline: Sheldon, Talk to data and the Query API
 
-Ask the Leading Practice Library a question and get an answer that cites its sources. Answers are kept in conversations, so follow-up questions work, and users can rate answers. The live schema is at `/docs` (Swagger) and `/openapi.json`; look for the `query` tag.
+Every question answered from documents takes one path, the query pipeline. It answers from an engagement's uploaded documents and/or the approved Leading Practice Library, cites `[S#]` sources, and says "insufficient evidence" instead of guessing. The pipeline is used in three places:
 
-- **Auth**: every call needs `Authorization: Bearer <access token>`, the same as the rest of the workbench (`apiFetch` in `frontend/lib/apiClient.ts`). Without it you get `401`.
-- **Who sees what**: any signed-in user can ask. Only the published version of Approved practices is ever searched or shown. Candidates still in review never appear. Each conversation is visible only to the user who started it. The metrics endpoint is for administrators only.
-- **Code**: `src/app/api/query.py` (endpoints and response models), `src/query/pipeline.py` (the pipeline), `src/query/conversations.py` (conversations), `src/query/events.py` (question log and metrics).
+| Where | How it reaches the pipeline | What it searches |
+|---|---|---|
+| Engagement **Conversation** (Sheldon) | Sheldon's router agent sends document questions to the **rag_agent** | The engagement's uploaded documents + the Leading Practice Library |
+| Leading Practice Library → **Talk to data** | `POST /api/library/ask` → rag_agent (content questions; catalog questions such as counts and owners are answered directly) | The library (or only the selected practices) |
+| Any other caller, Postman, tests | `POST /api/query` | What the request asks for |
 
-## Endpoints
+The live schema is at `/docs` (Swagger) and `/openapi.json` under the `query` tag.
+
+## Code map
+
+| File | Purpose |
+|---|---|
+| `src/agents/conversation/sheldon_router_agent.py` | Picks the agent for a Sheldon message: `rag`, `supervisor` (deliverables: discovery → plan → "go" → run) or `conversation` (chat) |
+| `src/agents/conversation/rag_agent.py` | Calls the pipeline and turns its result into Sheldon's message (answer + sources, or why there is none) |
+| `src/query/service.py` | The single entry point: access check, then the pipeline (`ask`, `source`) |
+| `src/query/pipeline.py` | Understanding → retrieval → answer → error handling |
+| `src/app/api/documents.py` | Engagement uploads: `/api/documents/upload`, `/list`, `/status/{job_id}`, `/reindex`, `/delete`. Upload queues the ingestion pipeline |
+| `src/workers/pipeline.py` | The ingestion pipeline (Celery): SeaweedFS → Docling → chunks (Postgres) → embeddings (Qdrant), for the library and for engagements |
+| `src/app/api/query.py` | `POST /api/query`, `/health`, `/sources/...` |
+| `src/app/api/projects/conversation.py` | Sheldon's turn: `_turn_respond` asks the router agent; `_persist_rag_response` stores the rag_agent's reply |
+| `src/workflows/task_router/conversation_router.py` | The per-message router LLM call; intent `knowledge_question` marks document questions |
+
+## Engagement documents: upload and processing
+
+Engagement uploads go through the same ingestion pipeline as the Leading Practice Library, in the background:
+
+1. `POST /api/documents/upload` (form-data: `project_id`, `file`; Owner or Editor):
+   - Saves the file to the engagement's workspace, as before; other features read it from there.
+   - Stores the file in SeaweedFS (S3) and queues the pipeline.
+   - Returns at once with `ingestion: {job_id, status, ...}`.
+2. A Celery worker runs `uploading → parsing (Docling, OCR for scanned PDFs) → chunking → embedding`:
+   - Passages go to Postgres (`chunk_archive`), and vectors to Qdrant (`document_chunks`), with `project_id` = the engagement id.
+   - An engagement's passages are never shared with the library or with another engagement.
+3. When the job is `completed` (`ingestion.searchable: true`), Sheldon's answers include the document.
+   - Until then, Sheldon's reply names it as "still processing".
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/query/health` | Whether questions can be answered right now, plus the form limits |
-| `POST` | `/api/query` | Ask a question (starts a conversation, or continues one with `conversation_id`) |
-| `GET` | `/api/query/conversations?limit=50&offset=0` | The user's conversations, most recently updated first |
-| `GET` | `/api/query/conversations/{id}` | One conversation with all its turns |
-| `PATCH` | `/api/query/conversations/{id}` | Rename: `{"title": "..."}` (1–80 characters) |
-| `DELETE` | `/api/query/conversations/{id}` | Delete |
-| `PUT` | `/api/query/conversations/{id}/turns/{turn_id}/feedback` | Rate an answer: `{"rating": "up"\|"down", "comment": "..."}` |
-| `GET` | `/api/query/sources/{chunk\|wiki}/{id}` | A cited source in full (this is `citations[].link`) |
-| `GET` | `/api/admin/library/query/metrics?days=7&top=20` | Admin: outcomes, latency, model errors, feedback, unanswered questions |
+| `POST` | `/api/documents/upload` | Upload; returns `ingestion` |
+| `GET` | `/api/documents/list?project_id=` | Every document with its latest `ingestion` (`items` is kept for older callers) |
+| `GET` | `/api/documents/status/{job_id}?project_id=` | Poll one document: `status`, `stage`, `progress_percent`, `chunk_count`, `error` |
+| `POST` | `/api/documents/reindex?project_id=` | Queue every document again: uploads from before the pipeline, or after a failure (unchanged content completes at once) |
+| `DELETE` | `/api/documents/delete?project_id=&filename=` | Removes the file and the pipeline's copy (S3 object, passages, vectors) |
 
-## Health (call when the Q&A panel opens)
+**Re-uploading a file with the same name replaces it:**
+- The old version stays searchable until the new one is processed, then it is removed.
+- If the broker or S3 is down, the upload still succeeds, with `ingestion.status: "failed"` and the reason. Use `/reindex` once the service is back.
 
-```json
-{ "ready": true, "search_available": true, "model_available": true,
-  "embedding_model": "BAAI/bge-small-en-v1.5", "reranker": "keyword",
-  "limits": { "question_max_chars": 2000, "top_k_max": 12, "top_k_default": 10, "max_turns_per_conversation": 100 } }
-```
+## Sheldon flow
 
-When `ready` is false, disable the ask box and say why: "Search is unavailable" if `search_available` is false, otherwise "Answers are unavailable". Use `limits.question_max_chars` for the input's `maxLength`.
+1. The user sends a message: `POST /api/projects/{pid}/conversation/messages` (the UI uses `?background=true` and polls the turn).
+2. The conversation router (one LLM call) classifies it. `sheldon_router_agent.route` turns that into an agent:
+   - **rag**: intent `knowledge_question` ("what does the workshop say about vendor master changes?"), or, when the router is unavailable, a question with no deliverable request outside a deliverable flow.
+   - **supervisor**: the message asks to create a deliverable ("create a deck on …"), or the conversation is in a deliverable flow (discovery, storyline, slides, plan).
+   - **conversation**: everything else (greetings, thanks, chat).
+3. rag → `rag_agent.answer(engagement_id=pid)` → `service.ask` (checks membership) → pipeline. Earlier messages of the thread are passed, so follow-ups ("and who approves it?") work.
+4. The reply is stored as an assistant message:
+   - `content`: the answer with `[S1]` markers, then a numbered `Sources:` list, with each source marked as an engagement document or the Leading Practice Library. If nothing supports an answer, it is a plain sentence.
+   - `metadata`: `{kind: "rag_answer", status, reason, citations, sources, coverage, retrieval, scope}`. The `citations` have the same shape as in the API below.
 
-## Ask
+## Talk to data
+
+`POST /api/library/ask` `{question, practiceIds?, maxResults?}` keeps its response shape, so `TalkToData.tsx` works unchanged:
+
+- **Response:** `{answer, practices, documents, sources}`. For a content question, the citations are renumbered `[1]`, `[2]` …, and `sources[i]` is `[i+1]`.
+- **Extra fields:** `status`, `reason` and `citations` (the full citation objects).
+
+## Query API
+
+Auth for every call: `Authorization: Bearer <access token>` from `POST /api/auth/login` `{email, password}`. `POST /api/query` is rate-limited per caller (`QUERY_RATE_LIMIT`, default 30/minute).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/query` | Ask a question |
+| `GET` | `/api/query/health` | Whether questions can be answered right now, plus limits |
+| `GET` | `/api/query/sources/{chunk\|wiki}/{id}` | A cited source in full (`citations[].link`); an engagement passage needs `?engagement_id=` |
+
+### Ask
 
 ```http
 POST /api/query
-{ "question": "How are new vendors screened?" }
+{ "question": "How long do vendor master changes take?",
+  "engagement_id": "p_3ac35e5cff",
+  "include_library": true }
 ```
 
-For a follow-up, send back the `conversation_id` from the previous response. The server reads the earlier turns itself, so don't send them:
-
-```json
-{ "question": "and who approves it?", "conversation_id": "conv_3f2a..." }
-```
-
-Optional fields: `save: false` answers without storing a conversation (for a one-off search box), and `top_k` (1–12, default 10) sets how many sources go to the model.
+| Field | Default | Meaning |
+|---|---|---|
+| `question` | required | 2–2,000 characters |
+| `engagement_id` | none | Also search this engagement's uploaded documents. The caller must be a member (Owner, Editor or Viewer), otherwise `403` |
+| `include_library` | `true` | Search the approved Leading Practice Library (published versions only) |
+| `practice_ids` | `[]` | Only these library practices |
+| `history` | `[]` | Earlier turns `[{role: "user"\|"assistant", content}]` for follow-ups. The API is stateless |
+| `top_k` | 10 | Sources given to the model (1–12) |
 
 Response (shortened):
 
 ```json
 {
-  "conversation_id": "conv_3f2a...", "turn_id": "turn_91bc...", "created_at": "2026-10-27T10:42:03",
   "status": "answered", "reason": null,
-  "question": "How are new vendors screened?",
-  "standalone_question": "How are new vendors screened?",
-  "answer": "New vendors are screened against sanctions lists before onboarding [S1]. Finance approves bank details [S2].",
-  "answer_markdown": "New vendors are screened ... onboarding [S1](chunk_ab12). Finance approves bank details [S2](wiki_77fe).",
+  "question": "How long do vendor master changes take?",
+  "standalone_question": "How long do vendor master changes take?",
+  "answer": "Vendor master changes need an IT ticket and take nine days on average [S1].",
+  "answer_markdown": "... on average [S1](<sha>:3).",
   "citations": [
-    { "ref": "S1", "type": "chunk", "id": "chunk_ab12", "title": "Vendor onboarding, page 3",
-      "filename": "vendor-onboarding.docx", "page_number": 3, "chunk_number": 7,
-      "practice_id": "lp-004", "practice_title": "Vendor onboarding", "supports": null,
-      "score": 0.81, "verification": 1.0, "snippet": "All new vendors are screened ...",
-      "link": "/api/query/sources/chunk/chunk_ab12", "markdown": "[Vendor onboarding, page 3](chunk_ab12)" }
+    { "ref": "S1", "type": "chunk", "scope": "engagement", "id": "pas_9c1e...", "title": "workshop-notes.txt, page 4",
+      "filename": "workshop-notes.txt", "page_number": 4, "chunk_number": 3, "practice_id": null,
+      "score": 0.82, "verification": 1.0, "snippet": "Vendor master changes require ...",
+      "link": "/api/query/sources/chunk/pas_9c1e...?engagement_id=p_3ac35e5cff", "markdown": "[workshop-notes.txt, page 4](pas_9c1e...)" }
   ],
-  "sources": [ { "type": "wiki", "id": "wiki_77fe", "title": "Vendor approval", "score": 0.74, "rank_score": 0.71,
-                 "verification": 0.83, "verification_details": { "method": "term_support", "supported_terms": 10,
-                 "total_terms": 12, "unsupported_terms": ["..."], "evidence_ids": ["chunk_cd34"], "passed": true },
-                 "snippet": "...", "link": "/api/query/sources/wiki/wiki_77fe" } ],
-  "coverage": { "claims": 2, "cited": 2, "ratio": 1.0, "uncited": [], "fully_cited": true, "invalid_refs": [] },
-  "understanding": { "intent": "procedure", "question_type": "how", "is_follow_up": false, "context_turns": 0,
-                     "entities": [], "keywords": ["new", "vendors", "screened"], "language": "en" },
-  "variants": [ { "text": "How are new vendors screened?", "kind": "original", "score": 1.0, "embedded": true },
-                { "text": "new vendors screened", "kind": "keywords", "score": 0.91, "embedded": true } ],
-  "queries": ["How are new vendors screened?", "new vendors screened"],
-  "retrieval": { "candidates": 41, "verified": 23, "dropped_low_verification": 1, "top_score": 0.81, "reranker": "keyword", "final": 10 },
-  "answer_metadata": { "provider": "claude_cli", "model": "claude-sonnet-...", "attempts": 1, "errors": [], "latency_ms": 2900,
-                       "answer_chars": 112, "context": { "sources": 12, "chars": 14100, "tokens_est": 3525, "max_tokens": 3800 } },
-  "model_calls": 1, "timings_ms": { "understanding": 40, "retrieval": 120, "answer": 2900, "total": 3070 },
-  "feedback": null
+  "sources": [ { "type": "chunk", "scope": "library", "id": "...", "title": "Vendor onboarding, page 3", "...": "..." } ],
+  "coverage": { "claims": 1, "cited": 1, "ratio": 1.0, "uncited": [], "fully_cited": true, "invalid_refs": [] },
+  "understanding": { "intent": "fact", "question_type": "how", "is_follow_up": false, "...": "..." },
+  "variants": [], "queries": [],
+  "retrieval": { "candidates": 41, "engagement_candidates": 6, "verified": 29, "dropped_low_verification": 0,
+                 "top_score": 0.82, "reranker": "keyword", "final": 10, "pending_documents": [] },
+  "answer_metadata": { "provider": "claude_cli", "model": "...", "attempts": 1, "errors": [], "latency_ms": 2900 },
+  "model_calls": 1, "timings_ms": { "understanding": 40, "retrieval": 120, "answer": 2900, "total": 3070 }
 }
 ```
 
-A call usually takes a few seconds because of the model. Show a loading state, and don't send the same question twice while one is still pending.
+Source fields:
 
-## Rendering an answer
+- **`type`:** `chunk` (a passage) or `wiki` (a library wiki page, scored against its source passages).
+- **`scope`:** `engagement` (an engagement upload; its `link` carries `?engagement_id=`) or `library`.
+- **`retrieval.pending_documents`:** engagement uploads still being processed, so not searched yet.
 
-1. **Answer text**: render `answer` and turn each `[S1]`, `[S2]` … into a clickable chip for `citations[]` with the matching `ref`. If you just render markdown, `answer_markdown` already has each marker linked to the source id. References to sources the model was never given have already been removed.
-2. **Citation chip or popover**: show `title`, plus `practice_title` when it is set, and `snippet`. To show the full source, call `GET` on `link`.
-3. **Practice link**: when `practice_id` is set, link to `/library?practice={practice_id}`.
-4. **Sources list** (optional): for an answered question, `sources` is everything the model was given. For other statuses, it is what was retrieved. A `wiki` source's `verification_details` explains its score; you could show it as "Supported by 3 source passages (83%)".
-5. **Uncited claims** (optional): when `coverage.fully_cited` is false, you can show a "some statements are not cited" hint. `coverage.uncited` lists those sentences.
-6. **Feedback**: thumbs up or down under each saved answer (`turn_id` set) calls `PUT …/turns/{turn_id}/feedback`. The response is the updated turn. A turn's `feedback` field shows the saved rating when the conversation is reloaded.
-7. **Debug details** (optional, for example an "i" icon): `understanding`, `variants`, `retrieval`, `answer_metadata` and `timings_ms`.
+### Status and reason
 
-## Status and reason
+| `status` | `reason` | What happened |
+|---|---|---|
+| `answered` | `null` | The answer is grounded in the sources, with citations |
+| `insufficient_evidence` | `no_results` | Nothing matched |
+| `insufficient_evidence` | `low_confidence` | There were only weak matches |
+| `insufficient_evidence` | `low_verification` | There were matches, but none was well supported by its source documents |
+| `insufficient_evidence` | `model_declined` | The sources didn't answer the question |
+| `insufficient_evidence` | `uncited_answer` | The draft answer cited too few of its statements |
+| `llm_unavailable` | `llm_failed` | The model failed after its retries. `sources` lists what was found |
 
-| `status` | `reason` | What happened | Suggested UI |
-|---|---|---|---|
-| `answered` | `null` | Answer grounded in the sources, with citations | Render it |
-| `insufficient_evidence` | `no_results` | Nothing in the published library matched | "No published practice covers this. Try rephrasing." |
-| `insufficient_evidence` | `low_confidence` | Only weak matches | Same message |
-| `insufficient_evidence` | `low_verification` | Matches existed, but none was well supported by its source documents | Same message |
-| `insufficient_evidence` | `model_declined` | The sources didn't answer the question | Same message; `sources` may still be worth showing |
-| `insufficient_evidence` | `uncited_answer` | The draft answer cited less than half of its statements, so it was rejected | Same message |
-| `llm_unavailable` | `llm_failed` | The model failed after its retries (timeouts and API errors are tried 3 times; configuration errors once) | Show `answer` ("Unable to process question now…") and the `sources`; offer a retry (ask the same question again) |
+For any status other than `answered`, `answer` holds a ready-made message.
 
-For every status other than `answered`, `answer` holds a ready-made message you can display as is. Every status is saved as a turn of the conversation, so it can be rated and reloaded like any other.
-
-## Errors
+### Errors
 
 | HTTP | When |
 |---|---|
 | `401` | Missing or expired token |
-| `403` | The metrics endpoint, called by someone who isn't an administrator |
-| `404` | Conversation, turn or source not found, or it belongs to another user; a source that isn't part of a published practice |
-| `409` | The conversation has 100 turns; start a new one |
-| `422` | Invalid body (for example, a question shorter than 2 or longer than 2,000 characters, or a rating other than `up`/`down`) |
+| `403` | `engagement_id` is not one of the caller's engagements |
+| `404` | Source not found, not published, or in an engagement the caller can't read |
+| `422` | Invalid body, or nothing to search (`include_library: false` without `engagement_id`) |
+| `429` | Rate limit exceeded |
 | `503` | Search is down (embedding service or Qdrant). Retry later; `/api/query/health` shows when it is back |
 
-## Conversations
+## Testing with Postman
 
-`GET /api/query/conversations` returns `{ "items": [ { "id", "title", "created_at", "updated_at", "turn_count", "last_question", "last_status" } ], "total" }`. The title starts as the first question (up to 80 characters) and can be renamed. `GET /api/query/conversations/{id}` adds `turns`. Each turn has the same shape as the ask response, without `conversation_id` and `turn_id`; its own id is `id`.
+Before you start, the API and a Celery worker must be running, along with RabbitMQ, SeaweedFS, Postgres, Qdrant and
+the embedding service (`scripts/check_shared_services.py --env .env`).
 
-## Source detail
+1. `POST {{base}}/api/auth/login` with body `{"email": "...", "password": "..."}`. Copy `access_token`.
+2. Set the header `Authorization: Bearer <access_token>` on every request below.
+3. Engagement: use an existing one, or `POST {{base}}/api/projects` with `{"name": "Test"}` and copy `id`.
+4. Upload: `POST {{base}}/api/documents/upload`, body form-data `project_id=<id>` and `file=<your file>`. Copy `ingestion.job_id`.
+5. Wait for processing: `GET {{base}}/api/documents/status/<job_id>?project_id=<id>` until `ingestion.status` is `completed`.
+   If it is `failed`, `ingestion.error` says why; fix it and call `POST {{base}}/api/documents/reindex?project_id=<id>`.
+6. Through Sheldon: `POST {{base}}/api/projects/<id>/conversation/messages` with `{"content": "What does the workshop say about vendor master changes?"}`.
+   The last message in `messages` is Sheldon's reply, with `metadata.kind == "rag_answer"` and citations naming your file.
+   With `?background=true` you get a `turn_id`; poll `GET {{base}}/api/projects/<id>/conversation/turns/<turn_id>` until `status` is `done`.
+7. The pipeline directly: `POST {{base}}/api/query` with `{"question": "...", "engagement_id": "<id>", "include_library": false}`.
+8. Open a source: `GET {{base}}<citations[0].link>`.
+9. Delete: `DELETE {{base}}/api/documents/delete?project_id=<id>&filename=<file>`. Ask again: you should get `insufficient_evidence`.
+10. Library question (needs a released practice): `POST {{base}}/api/query` with `{"question": "What are the leading practices for three-way match?"}`.
 
-`GET /api/query/sources/chunk/{id}` returns the full passage: `text`, `filename`, `page_number`, `chunk_number`, `practice_id`, `practice_title` and `verification` (always 1.0, because a passage is the source text itself).
+## How the pipeline answers
 
-`GET /api/query/sources/wiki/{id}` returns the wiki page's `text`, `verification_details`, and `evidence`: the source passages it was checked against, each with its own `link`.
+1. **Understanding**:
+   - Works out the intent, question type, entities, keywords and language.
+   - Rewrites a follow-up into a standalone question using the earlier turns.
+   - Adds variants: focused, keywords, and an English translation for a non-English question. With `QUERY_LLM_VARIANTS=always`, it also adds a model-written rewrite and a paraphrase.
+   - Drops variants that drift off-topic and searches the best 3.
+2. **Retrieval**:
+   - **Library:** Qdrant passages and wiki pages, checked against Postgres; only published practices are used.
+   - **Engagement:** the same Qdrant search and Postgres check, under the engagement's id. Only processed, not-deleted uploads are used.
+   - Wiki pages are scored against their source passages, and those below 0.6 are dropped.
+   - The rest are reranked (by a cross-encoder when one is configured), and the top 10 are kept.
+   - A weak best match means "insufficient evidence".
+3. **Answer**:
+   - The sources, plus the passages behind each wiki page, are deduplicated and capped at about 3,800 tokens.
+   - The model must answer from the sources only and cite `[S#]`.
+   - Each attempt has a 90-second limit (the model call itself is stopped at that limit), and timeouts and API errors are retried twice.
+   - Invalid citations are removed, and answers that cite too little are rejected.
 
-## Admin metrics (Library admin console)
+## Production notes
 
-`GET /api/admin/library/query/metrics?days=7` returns data for a Q&A panel in the admin console. `days` is capped by the retention period, 90 days by default.
-
-```json
-{ "window_days": 7, "since": "...", "total": 214, "answered": 171, "answer_rate": 0.799,
-  "by_status": { "answered": 171, "insufficient_evidence": 39, "llm_unavailable": 4 },
-  "by_reason": { "no_results": 22, "model_declined": 11, "low_confidence": 6, "llm_failed": 4 },
-  "by_intent": { "procedure": 80, "definition": 41, "...": 0 },
-  "latency_ms": { "avg": 3400, "p50": 2900, "p95": 7800 },
-  "llm": { "calls": 230, "failed_requests": 4, "errors_by_kind": { "timeout": 6, "api_error": 3 } },
-  "feedback": { "up": 52, "down": 7, "recent_comments": [ { "rating": "down", "comment": "...", "at": "..." } ] },
-  "unanswered_questions": [ { "question": "What is the vendor exit process?", "count": 5, "reason": "no_results", "last_asked_at": "..." } ],
-  "daily": [ { "date": "2026-10-21", "total": 30, "answered": 24 } ] }
-```
-
-`unanswered_questions` lists the content gaps: questions users ask that no published practice answers yet, most frequent first.
-
-## How the backend answers (for reference)
-
-1. **Understanding**: works out the intent, question type, entities, keywords and language, and loads the conversation's earlier turns. A follow-up is rewritten into a standalone question. Variants are added: focused (entities and keywords), keywords, and an English translation for a non-English question; with `QUERY_LLM_VARIANTS=always`, also a model-written rewrite and paraphrase. Each variant is scored by similarity to the question, variants that drift off-topic are dropped, and the best 3 are searched.
-2. **Retrieval**: Qdrant search over passages and wiki pages (50 hits per variant). Each hit is checked against Postgres: it must still exist and be published. Every wiki page in the top 20 is scored against its source passages, and pages scoring below 0.6 are dropped. The rest are reranked (a cross-encoder when one is configured), and the top 10 are kept. If the best match is weak, the answer is "insufficient evidence".
-3. **Answer**: the sources go to the model together with the passages behind each wiki page, deduplicated and capped at about 3,800 tokens. The model must answer from the sources only and cite `[S#]`. Each attempt has a 90-second limit, and timeouts and API errors are retried twice. Citations are then checked, invalid ones removed, and answers that cite too little are rejected.
-
-Settings are under `query_*` in `src/core/config.py` (environment variables `QUERY_*`).
+- **Concurrency:**
+  - Requests share no state; each has its own database session.
+  - Answer calls run on one bounded pool per process (`QUERY_MAX_CONCURRENT_ANSWERS`, default 8). A call that overruns is stopped at its limit.
+  - Documents are processed by Celery workers, not the API, so uploads return at once and any API server answers from the same Postgres + Qdrant.
+  - Workers: on Linux run several with `--pool=prefork --concurrency=N`. `./scripts/run_agent.sh` and `make` start one `--pool=solo` worker, which is enough for development.
+  - Scanned PDFs need OCR in the worker (`DOCLING_OCR_ENABLED=true`, the default).
+- **Configuration:**
+  - Set `ADVISE_WORKBENCH_ENV=production`.
+  - Use an API model provider (`LLM_PROVIDER=anthropic` or `openai_compatible`) rather than `claude_cli` for many concurrent users, because the CLI starts one process per call.
+- **Settings:** `query_*` in `src/core/config.py` (environment variables `QUERY_*`; see `.env.example`).

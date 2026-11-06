@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.core.db.models import DocumentFile, LpPractice, WorkbenchRecord
 
+LIBRARY_SCOPE = "library"  # scope id of Leading Practice Library sources (stored in the project_id columns)
 JOBS = "ingestion_jobs"
 CHUNKS = "library_chunks"
 

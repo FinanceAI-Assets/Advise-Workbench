@@ -324,7 +324,7 @@ export type LibraryAnswer = {
   sources: Array<{ heading: string; source: string; text: string; practiceId: string }>;
 };
 
-/** Talk to data: `practiceIds` limits the answer to those approved practices ("Ask selected sources only"). */
+/** Library chat: `practiceIds` limits the answer to those approved practices ("Ask selected sources only"). */
 export type LibraryQuestion = { question: string; practiceIds?: string[]; maxResults?: number };
 
 export function useLibraryAskMutation() {
