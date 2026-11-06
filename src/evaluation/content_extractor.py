@@ -107,15 +107,20 @@ class ContentExtractor:
             for slide_num, slide in enumerate(prs.slides, 1):
                 slide_content = [f"=== SLIDE {slide_num} ==="]
 
-                for shape in slide.shapes:
+                for shape_idx, shape in enumerate(slide.shapes):
                     if hasattr(shape, "text") and shape.text:
                         slide_content.append(shape.text)
                     elif hasattr(shape, "table"):
                         # Extract table content
-                        table = shape.table
-                        for row in table.rows:
-                            row_text = " | ".join(cell.text for cell in row.cells)
-                            slide_content.append(row_text)
+                        try:
+                            table = shape.table
+                            for row in table.rows:
+                                row_text = " | ".join(cell.text for cell in row.cells)
+                                slide_content.append(row_text)
+                        except Exception as table_err:
+                            logger.error(f"[DEBUG-PPTX] Failed to read table from shape {shape_idx} on slide {slide_num}: {table_err}")
+                            # Skip this malformed table, continue with next shape
+                            continue
 
                 slides_text.append("\n".join(slide_content))
 

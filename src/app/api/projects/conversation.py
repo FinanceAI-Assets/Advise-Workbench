@@ -58,6 +58,18 @@ from src.agents.tool_agent import _record_message_usage, _extract_final_text_fro
 from src.workflows.orchestrator import append_memory_event, append_run_event, enqueue_run_execution
 from src.extensions.swarm.swarm import persist_instruction_broadcast_swarm_event_payload
 
+# Phase 2 agents - lazy imports to avoid dependency issues on startup
+def _get_phase2_agents():
+    """Lazy import Phase 2 agents to avoid startup dependency issues."""
+    try:
+        from src.agents.sheldon_router_agent import route_user_intent
+        from src.agents.conversation.answer_agent import answer_user_question
+        from src.agents.conversation.rag_agent import search_knowledge_base
+        return route_user_intent, answer_user_question, search_knowledge_base
+    except ImportError as e:
+        _LOG.warning("Phase 2 agents not available: %s. Using fallback routing.", e)
+        return None, None, None
+
 # Helper clusters live in sibling modules; re-imported here so tests that
 # monkeypatch app.api.projects.conversation.<name> (and access them as module
 # globals) keep working, and so in-module callers pick up patched versions.
@@ -2167,6 +2179,7 @@ def _turn_receive(turn: Turn) -> dict | None:
 
     Returns the reply when this phase ends the turn, else None to continue with the next phase.
     """
+    print("✅ [PHASE-RECEIVE] executed")
     pid, body, user, db = turn.pid, turn.body, turn.user, turn.db  # noqa: F841
     try:
         require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
@@ -2282,6 +2295,7 @@ def _turn_receive(turn: Turn) -> dict | None:
 
 
 def _turn_understand(turn: Turn) -> dict | None:
+    print("✅ [PHASE-UNDERSTAND] executed")
     """Build the working instruction from the history and extract the discovery answers given so far.
 
     Returns the reply when this phase ends the turn, else None to continue with the next phase.
@@ -2389,6 +2403,7 @@ def _turn_route(turn: Turn) -> dict | None:
 
     Returns the reply when this phase ends the turn, else None to continue with the next phase.
     """
+    print("✅ [PHASE-ROUTE] executed")
     pid, body, user, db = turn.pid, turn.body, turn.user, turn.db  # noqa: F841
     available_output_types = turn.vars.get("available_output_types")
     combined_instruction = turn.vars.get("combined_instruction")
@@ -2542,6 +2557,7 @@ def _turn_respond(turn: Turn) -> dict | None:
 
     Returns the reply when this phase ends the turn, else None to continue with the next phase.
     """
+    print("✅ [PHASE-RESPOND] executed")
     pid, body, user, db = turn.pid, turn.body, turn.user, turn.db  # noqa: F841
     canonical_missing_slots = turn.vars.get("canonical_missing_slots")
     combined_instruction = turn.vars.get("combined_instruction")
@@ -2760,10 +2776,384 @@ def _turn_respond(turn: Turn) -> dict | None:
         _keep_turn(turn, locals())
 
 
+def _turn_context_validate(turn: Turn) -> dict | None:
+    """Context Validation: Check for wiki/LP conflicts and freshness.
+
+    Runs after context is loaded but before routing decision.
+    If issues found, asks user for clarification and returns dialog.
+    Otherwise stores validation results and continues to phase2_route.
+
+    Returns reply dict to END or None to CONTINUE.
+    """
+    from src.core.context.validation import ContextValidator
+
+    pid, user, db = turn.pid, turn.user, turn.db
+    conv = turn.vars.get("conv")
+    project_context = turn.vars.get("project_context", "")
+    resolved_wiki_refs = turn.vars.get("resolved_wiki_refs", [])
+    combined_instruction = turn.vars.get("combined_instruction", "")
+    state = turn.vars.get("state")
+    content = turn.vars.get("content", "")
+    prior_messages = turn.vars.get("prior_messages", [])
+
+    print(f"\n{'='*80}")
+    print(f"[PHASE-2-VALIDATE] START for user={user}, conversation={conv.id if conv else 'unknown'}")
+    print(f"[PHASE-2-VALIDATE] Instruction: {combined_instruction[:80]}...")
+    print(f"{'='*80}\n")
+    _LOG.info(f"[PHASE-2-VALIDATE] START: user={user}, conversation={conv.id if conv else 'unknown'}")
+
+    try:
+        # Check if this is a clarification response (user replied to context question)
+        last_message_kind = None
+        if prior_messages:
+            last_assistant_msg = next(
+                (m for m in reversed(prior_messages) if m.get("role") == "assistant"),
+                None
+            )
+            if last_assistant_msg:
+                metadata = last_assistant_msg.get("metadata", {})
+                last_message_kind = metadata.get("kind")
+
+        if last_message_kind == "context_clarification":
+            print("[CONTEXT-VALIDATE] Processing user clarification response...")
+            clarification_decision = _parse_clarification_response(content)
+            print(f"[CONTEXT-VALIDATE] User decision: {clarification_decision}")
+
+            # Merge clarification into project_context
+            validated_context = _merge_clarification_into_context(
+                project_context, clarification_decision, content
+            )
+            turn.vars["project_context"] = validated_context
+
+            # Store decision
+            turn.vars["context_validation"] = {
+                "validated": True,
+                "user_decision": clarification_decision,
+                "clarification_note": content,
+                "overall_confidence": 0.95,  # User confirmed, high confidence
+            }
+
+            print("[CONTEXT-VALIDATE] ✅ Clarification processed, continuing to phase2_route...")
+            return None
+
+        # First validation run
+        print("[CONTEXT-VALIDATE] Starting context validation...")
+
+        # Build context dicts for validation
+        wiki_context = {"text": project_context, "refs": resolved_wiki_refs}
+        lp_context = {"text": project_context}  # LP info is embedded in project_context
+
+        # Run validation
+        validator = ContextValidator(
+            wiki_context=wiki_context,
+            lp_context=lp_context,
+            instruction=combined_instruction,
+            wiki_refs=resolved_wiki_refs,
+        )
+        validation_report = validator.validate_all()
+
+        print(
+            f"[CONTEXT-VALIDATE] Report: has_issues={validation_report['has_issues']}, "
+            f"confidence={validation_report['overall_confidence']:.2f}"
+        )
+
+        # If critical issues → Ask user for clarification
+        if validation_report["needs_clarification"]:
+            print("[CONTEXT-VALIDATE] Found issues, asking user for clarification...")
+            return _ask_user_context_clarification(db, conv, validation_report)
+
+        # Store validation results for downstream phases
+        turn.vars["context_validation"] = {
+            "validated": True,
+            "conflicts": validation_report["conflicts"],
+            "freshness": validation_report["freshness"],
+            "overall_confidence": validation_report["overall_confidence"],
+            "user_decision": None,  # No user decision needed
+        }
+
+        print("[CONTEXT-VALIDATE] ✅ Validation passed, continuing to phase2_route...")
+        return None
+
+    except Exception as e:
+        _LOG.error(f"Context validation error: {e}", exc_info=True)
+        # On error, continue anyway with lower confidence
+        turn.vars["context_validation"] = {
+            "validated": False,
+            "error": str(e),
+            "overall_confidence": 0.7,
+        }
+        return None
+
+    finally:
+        _keep_turn(turn, locals())
+
+
+def _parse_clarification_response(user_response: str) -> str:
+    """Parse user's clarification response.
+
+    Returns: "wiki", "practices", or "custom"
+    """
+    response_lower = user_response.lower().strip()
+
+    if "wiki" in response_lower or "project" in response_lower:
+        return "wiki"
+    elif "practice" in response_lower or "best" in response_lower or "fresh" in response_lower:
+        return "practices"
+    else:
+        return "custom"
+
+
+def _merge_clarification_into_context(
+    original_context: str, decision: str, clarification_note: str
+) -> str:
+    """Merge user's clarification into the context.
+
+    Adds metadata about user's decision to the context.
+    """
+    if decision == "wiki":
+        note = "\n[USER CONFIRMED: Using project wiki data as-is]"
+    elif decision == "practices":
+        note = "\n[USER CONFIRMED: Using best practices, may differ from wiki]"
+    else:
+        note = f"\n[USER CLARIFIED: {clarification_note}]"
+
+    return original_context + note
+
+
+def _ask_user_context_clarification(
+    db: Session, conv: Conversation, validation_report: dict
+) -> dict:
+    """Ask user to clarify context conflicts or freshness issues.
+
+    Returns a ConversationMessage with the question and waits for next turn.
+    """
+    conflicts = validation_report.get("conflicts", {}).get("conflicts", [])
+    freshness_issues = validation_report.get("freshness", {}).get("freshness_issues", [])
+
+    # Build question based on issues found
+    issues_text_parts = []
+
+    if conflicts:
+        issues_text_parts.append("🔶 **Wiki vs Best Practice Conflicts Found:**")
+        for conflict in conflicts[:2]:  # Show top 2 conflicts
+            issues_text_parts.append(
+                f"- **{conflict.get('field', 'Unknown')}**: "
+                f"{conflict.get('description', conflict.get('wiki_value', 'N/A'))}"
+            )
+
+    if freshness_issues:
+        issues_text_parts.append("\n⚠️ **Context Freshness Issues:**")
+        for issue in freshness_issues[:2]:  # Show top 2 freshness issues
+            age = issue.get("age_days", 0)
+            issues_text_parts.append(
+                f"- **{issue.get('source', 'Unknown')}**: "
+                f"Last updated {age} days ago"
+            )
+
+    prompt_text = (
+        "\n".join(issues_text_parts)
+        + "\n\n**What should I do?**\n"
+        "- **Use your wiki/project data** (may be outdated but project-specific)\n"
+        "- **Use best practices** (current but generic)\n"
+        "- **Please clarify** (provide custom guidance)\n\n"
+        "Reply with: `wiki`, `practices`, or brief clarification."
+    )
+
+    clarification_msg = ConversationMessage(
+        conversation_id=conv.id,
+        role="assistant",
+        content=prompt_text,
+        metadata_json=json.dumps({
+            "kind": "context_clarification",
+            "validation_issues": {
+                "conflicts_count": len(conflicts),
+                "freshness_issues_count": len(freshness_issues),
+            },
+        }),
+    )
+    db.add(clarification_msg)
+    conv.updated_at = datetime.now(IST).replace(tzinfo=None)
+    db.commit()
+
+    return {
+        "conversation_id": conv.id,
+        "messages": _serialize_messages(db, conv.id),
+        "open_questions": ["context_clarification"],
+        "ready_for_confirmation": False,
+        "plan_hash": None,
+    }
+
+
+def _turn_phase2_route(turn: Turn) -> dict | None:
+    """Phase 2: Intelligent routing with three paths.
+
+    Path 1.a: Conversation/Direct Answer → End turn
+    Path 1.b: RAG Search → Answer or continue to Path 1.c
+    Path 1.c: Generation → Continue to respond phase
+
+    Returns reply dict to END or None to CONTINUE.
+    """
+    pid, user, db = turn.pid, turn.user, turn.db
+    content = turn.vars.get("content", "")
+    combined_instruction = turn.vars.get("combined_instruction", "")
+    prior_messages = turn.vars.get("prior_messages", [])
+    state = turn.vars.get("state")
+    conv = turn.vars.get("conv")
+    decision = turn.vars.get("decision")
+    template_ids = turn.vars.get("template_ids", [])
+
+    try:
+        print(f"🔵 [PHASE2-ENTERED] intent={decision.intent if decision else 'None'} | has_agents={bool(route_user_intent) if 'route_user_intent' in locals() else '?'}")
+        _LOG.info("[PHASE2] Executing phase2_route | pid=%s | intent=%s | template_ids=%s", pid, decision.intent if decision else "None", bool(template_ids))
+
+        # Phase 2: Intelligent routing that intercepts BEFORE respond phase
+        # Handles: conversational answers, RAG searches
+        # Falls through to respond for: proposals, discovery, collaborative building, etc.
+
+        if decision and decision.intent in {"smalltalk", "clarify", "greeting", "ack", "contextual_followup"}:
+            # Lazy load Phase 2 agents
+            route_user_intent, answer_user_question, search_knowledge_base = _get_phase2_agents()
+            print(f"🔵 [PHASE2] Agents loaded: router={bool(route_user_intent)}, answer={bool(answer_user_question)}, rag={bool(search_knowledge_base)}")
+            _LOG.info("[PHASE2] Agents loaded: router=%s, answer=%s, rag=%s", bool(route_user_intent), bool(answer_user_question), bool(search_knowledge_base))
+
+            # Skip if agents not available
+            if not route_user_intent or not answer_user_question or not search_knowledge_base:
+                print(f"🔵 [PHASE2] Agents NOT available, skipping Phase 2")
+                _LOG.warning("[PHASE2] Agents not available, skipping Phase 2 routing")
+                return None
+
+            # Build router input for Sheldon's intelligent routing
+            context_validation = turn.vars.get("context_validation", {})
+            router_input = {
+                "user_instruction": content,
+                "conversation_digest": "\n".join([f"{m.get('author', 'User')}: {m.get('content', '')}" for m in prior_messages[-5:]]),
+                "project_id": pid,
+                "context_validation": context_validation,
+                "context_confidence": context_validation.get("overall_confidence", 1.0),
+            }
+
+            # Step 1: Sheldon Router decides the path
+            try:
+                print(f"🔵 [PHASE2] Calling router_user_intent...")
+                _LOG.info("[PHASE2] Calling router_user_intent with input: %s...", str(router_input)[:100])
+                routing_decision = route_user_intent(router_input)
+                print(f"🔵 [PHASE2] Router returned: path={routing_decision.get('path')}")
+                _LOG.info("[PHASE2] Router returned: path=%s, confidence=%s", routing_decision.get("path"), routing_decision.get("confidence"))
+                path = routing_decision.get("path", "1.c")
+            except Exception as e:
+                print(f"🔵 [PHASE2] Router FAILED: {type(e).__name__}: {str(e)[:100]}")
+                _LOG.warning("Router decision failed: %s | %s", type(e).__name__, str(e))
+                path = "1.c"  # Default to generation on router error
+
+            # Path 1.a: Direct Conversational Answer
+            if path == "1.a":
+                try:
+                    print(f"🔵 [PHASE2] Path 1.a: Calling answer_user_question...")
+                    _LOG.info("[PHASE2] Path 1.a: Calling answer_user_question")
+                    answer_result = answer_user_question(router_input)
+                    print(f"🔵 [PHASE2] Path 1.a: Answer returned success={answer_result.get('success')}")
+                    _LOG.info("[PHASE2] Path 1.a: Answer returned success=%s", answer_result.get("success"))
+                    if answer_result.get("success"):
+                        # Save to database
+                        if state:
+                            state.state = "exploring"
+                            save_state(conv, state)
+                            db.flush()
+
+                        # Persist message to conversation
+                        answer_text = answer_result.get("answer", "")
+                        msg = ConversationMessage(
+                            conversation_id=conv.id,
+                            role="assistant",
+                            content=answer_text,
+                            metadata_json=json.dumps({"kind": "phase2_answer", "path": "1.a"}),
+                        )
+                        db.add(msg)
+                        db.commit()
+
+                        print(f"🔵 [PHASE2] Path 1.a: Message saved to database")
+                        _LOG.info("[PHASE2] Path 1.a: Message saved to database")
+
+                        messages = _serialize_messages(db, conv.id)
+                        return {
+                            "conversation_id": conv.id,
+                            "messages": messages,
+                            "open_questions": [],
+                            "ready_for_confirmation": False,
+                            "plan_hash": None,
+                        }
+                except Exception as e:
+                    print(f"🔵 [PHASE2] Path 1.a FAILED: {type(e).__name__}: {str(e)[:100]}")
+                    _LOG.warning("Answer agent failed: %s | %s", type(e).__name__, str(e))
+                    import traceback
+                    traceback.print_exc()
+                    pass  # Fall through to Path 1.b
+
+            # Path 1.b: RAG Search + Decision
+            if path == "1.b":
+                try:
+                    print(f"🔵 [PHASE2] Path 1.b: Calling search_knowledge_base...")
+                    _LOG.info("[PHASE2] Path 1.b: Calling search_knowledge_base")
+                    rag_result = search_knowledge_base(router_input)
+                    print(f"🔵 [PHASE2] Path 1.b: RAG returned should_answer={rag_result.get('should_answer')}")
+                    _LOG.info("[PHASE2] Path 1.b: RAG returned should_answer=%s", rag_result.get("should_answer"))
+                    if rag_result.get("should_answer"):
+                        # Save to database
+                        if state:
+                            state.state = "exploring"
+                            save_state(conv, state)
+                            db.flush()
+
+                        # Persist message to conversation
+                        answer_text = rag_result.get("answer_preview", rag_result.get("answer", ""))
+                        msg = ConversationMessage(
+                            conversation_id=conv.id,
+                            role="assistant",
+                            content=answer_text,
+                            metadata_json=json.dumps({"kind": "phase2_rag_answer", "path": "1.b", "documents": len(rag_result.get("documents", []))}),
+                        )
+                        db.add(msg)
+                        db.commit()
+
+                        print(f"🔵 [PHASE2] Path 1.b: RAG answer saved to database")
+                        _LOG.info("[PHASE2] Path 1.b: RAG answer saved to database")
+
+                        messages = _serialize_messages(db, conv.id)
+                        return {
+                            "conversation_id": conv.id,
+                            "messages": messages,
+                            "open_questions": [],
+                            "ready_for_confirmation": False,
+                            "plan_hash": None,
+                        }
+                    else:
+                        # RAG found context but generation needed - enrich state
+                        print(f"🔵 [PHASE2] Path 1.b: Continuing to generation (no answer)")
+                        _LOG.info("[PHASE2] Path 1.b: Continuing to generation (no answer)")
+                        if state and rag_result.get("context"):
+                            state.rag_context = rag_result.get("context")
+                            save_state(conv, state)
+                            db.flush()
+                except Exception as e:
+                    print(f"🔵 [PHASE2] Path 1.b FAILED: {type(e).__name__}: {str(e)[:100]}")
+                    _LOG.warning("RAG agent failed: %s | %s", type(e).__name__, str(e))
+                    import traceback
+                    traceback.print_exc()
+                    pass  # Fall through to Path 1.c
+
+        # Path 1.c: Continue to generation (default/respond phase)
+        return None
+
+    finally:
+        _keep_turn(turn, locals())
+
+
 TURN_PHASES = (
     ("receive", _turn_receive),
     ("understand", _turn_understand),
     ("route", _turn_route),
+    ("context_validate", _turn_context_validate),
+    ("phase2_route", _turn_phase2_route),
     ("respond", _turn_respond),
 )
 

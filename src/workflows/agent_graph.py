@@ -28,7 +28,18 @@ from src.workflows.checkpoint import checkpoint_serde, get_checkpointer
 
 _LOG = logging.getLogger(__name__)
 _SERDE = checkpoint_serde()
-PHASE_ORDER = ("prepare", "context", "generate", "evaluate", "remember", "finalize")
+PHASE_ORDER = (
+    "prepare",
+    "context",
+    "path_router",  # NEW: Phase 2 Router Node
+    "path_conversation",  # NEW: Phase 2 Path 1.a Node
+    "path_rag_search",  # NEW: Phase 2 Path 1.b Node
+    "generate",
+    "evaluate",
+    "hitl_review",  # NEW: Phase 5 HITL Design Review
+    "remember",
+    "finalize"
+)
 
 # The job a graph thread is working on. A job holds a database session and ORM objects, which cannot
 # be checkpointed; after a restart it is rebuilt from the checkpointed variables (see _job_for).
@@ -151,13 +162,52 @@ def _next_after(name: str):
     return route
 
 
+def _route_phase2_path(state: RunGraphState) -> str:
+    """Route Phase 2 based on Sheldon Router decision.
+
+    Path 1.a (conversation) → path_conversation (may END)
+    Path 1.b (rag_search) → path_rag_search (may END or continue)
+    Path 1.c (generate) → generate (continue to Phase 3)
+    """
+    routing_decision = state.get("carry", {}).get("routing_decision", {})
+    path = routing_decision.get("path", "1.c")
+
+    if path == "1.a":
+        return "path_conversation"
+    elif path == "1.b":
+        return "path_rag_search"
+    else:
+        return "generate"
+
+
 def build_run_graph(checkpointer: Any = None) -> Any:
     graph = StateGraph(RunGraphState)
     for name in PHASE_ORDER:
         graph.add_node(name, _phase_node(name))
     graph.add_edge(START, PHASE_ORDER[0])
+
+    # Add edges for all phases except the special Phase 2 routing
     for name in PHASE_ORDER[:-1]:
-        graph.add_conditional_edges(name, _next_after(name), [PHASE_ORDER[PHASE_ORDER.index(name) + 1], END])
+        if name == "context":
+            # After context node, go to path_router
+            graph.add_edge("context", "path_router")
+        elif name == "path_router":
+            # After path_router, conditional edge to one of three paths
+            graph.add_conditional_edges(
+                "path_router",
+                _route_phase2_path,
+                ["path_conversation", "path_rag_search", "generate"]
+            )
+        elif name == "path_conversation":
+            # path_conversation can END (outcome) or continue (next phase)
+            graph.add_conditional_edges("path_conversation", _next_after("path_conversation"), ["path_rag_search", END])
+        elif name == "path_rag_search":
+            # path_rag_search can END (outcome) or continue to generate
+            graph.add_conditional_edges("path_rag_search", _next_after("path_rag_search"), ["generate", END])
+        else:
+            # Standard conditional edges for other phases
+            graph.add_conditional_edges(name, _next_after(name), [PHASE_ORDER[PHASE_ORDER.index(name) + 1], END])
+
     graph.add_edge(PHASE_ORDER[-1], END)
     return graph.compile(checkpointer=checkpointer)
 

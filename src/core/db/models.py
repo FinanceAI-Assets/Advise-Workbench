@@ -129,11 +129,17 @@ class Run(Base):
     pause_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     resume_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     abort_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    evaluation_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     tokens_input: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_output: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_cache_read: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_cache_creation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Phase 5: HITL Review tracking
+    phase_5_status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # pending, approved, max_rejections_reached
+    phase_5_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    phase_5_approval_data: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # JSON: {pptx: {attempt, version, status}, docx: {...}}
 
 
 class SwarmTeam(Base):
@@ -877,4 +883,45 @@ class InAppNotification(Base):
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ArtifactApprovalRecord(Base):
+    """Phase 5 HITL: Track artifact approval/rejection decisions and versions."""
+
+    __tablename__ = "artifact_approvals"
+    __table_args__ = (
+        Index("ix_artifact_approvals_run_artifact", "run_id", "artifact_type"),
+        Index("ix_artifact_approvals_run_current", "run_id", "is_current"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("runs.id"), nullable=False, index=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False, index=True)
+    artifact_type: Mapped[str] = mapped_column(String(32), nullable=False)  # pptx, docx, xlsx, pdf, sop, narrative, drawio
+
+    # Version tracking
+    version: Mapped[str] = mapped_column(String(8), nullable=False)  # v1, v2, v3...
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    is_immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # Locked after approval
+
+    # Approval state
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # approved, rejected, partial_reject, regenerating
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # 1/3, 2/3, 3/3
+
+    # For PPTX: per-slide tracking (JSON arrays)
+    total_slides: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approved_slides: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")  # JSON: [1, 3, 5]
+    rejected_slides: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")  # JSON: [2, 4]
+
+    # Rejection metadata
+    user_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rejected_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Version history
+    replaced_by: Mapped[str | None] = mapped_column(String(8), nullable=True)  # v2 if this is v1 and was replaced
+    replaced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

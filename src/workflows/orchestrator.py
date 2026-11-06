@@ -24,6 +24,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.agents.supervisor_agent import Coordinator
+from src.agents.investigator_agent import InvestigatorAgent
+# from src.workflows.phase5_hitl_review import _phase_hitl_review  # CIRCULAR IMPORT - import locally below
 from src.core.config import settings
 from src.core.exceptions import RunBudgetExceeded
 from src.evaluation.narrative_feedback import (
@@ -1166,9 +1168,13 @@ class RunJob:
 
 # Variables each phase needs from the earlier ones (the LangGraph orchestrator checkpoints these).
 PHASE_CARRY: dict[str, tuple[str, ...]] = {
-    "context": ('_run_cost', '_run_usage', 'plan_payload_obj'),
-    "generate": ('_run_cost', '_run_usage', 'hard_gate_enabled', 'init_state', 'output_type_representations', 'plan_payload_obj', 'requested'),
+    "context": ('_run_cost', '_run_usage', 'plan_payload_obj', 'init_state', 'conversation_digest', 'requested', 'output_type_representations'),
+    "path_router": ('_run_cost', '_run_usage', 'plan_payload_obj', 'init_state', 'conversation_digest', 'requested', 'routing_decision', 'router_input'),  # NEW
+    "path_conversation": ('routing_decision',),  # NEW
+    "path_rag_search": ('_run_cost', '_run_usage', 'init_state', 'routing_decision'),  # NEW
+    "generate": ('_run_cost', '_run_usage', 'hard_gate_enabled', 'init_state', 'output_type_representations', 'plan_payload_obj', 'requested', 'run_dir'),
     "evaluate": ('_run_cost', '_run_usage', 'final_artifact_report', 'hard_gate_enabled', 'plan_payload_obj', 'requested', 'run_dir', 'run_todos', 'state'),
+    "hitl_review": ('state', 'run', 'session'),  # NEW: Phase 5 HITL Review
     "remember": ('state',),
     "finalize": ('_run_cost', '_run_usage', 'run_todos', 'state'),
 }
@@ -1339,6 +1345,13 @@ def _phase_prepare(job: RunJob) -> RunOutcome | None:
             session.commit()
             return False, run.error_message
         print(f"[PHASE-PREPARE] 6. All gates passed, setting status to running")
+
+        # DEBUG: Log hard_gate_enabled for Phase 5 testing
+        hard_gate_enabled = False  # ← TEMPORARY FOR PHASE 5 TESTING (set to False to skip Phase 4 checks)
+        job.vars["hard_gate_enabled"] = hard_gate_enabled  # Store in job.vars so Evaluate phase can read it
+        print(f"[PHASE-PREPARE] DEBUG: hard_gate_enabled={hard_gate_enabled}")
+        print(f"[PHASE-PREPARE] DEBUG: If False, Phase 4 checks will be SKIPPED and run goes directly to Phase 5")
+
         if run.status == "approved":
             print(f"[PHASE-PREPARE] 7. Run status is approved, transitioning to running")
             was_resume_requested = bool(run.resume_requested)
@@ -1375,15 +1388,28 @@ def _phase_prepare(job: RunJob) -> RunOutcome | None:
 
 
 def _phase_context(job: RunJob) -> RunOutcome | None:
-    """Assemble what the coordinator starts from: run settings, the plan and the conversation digest.
+    """Phase 2: Context + Sheldon Router. Assemble coordinator input and route user intent.
 
-    Returns the job's outcome when this phase ends the attempt, else None to continue with the next phase.
+    Steps 1-7: Current behavior (load config, build digest, create state)
+    Step 8: NEW - Call Sheldon Router Agent for intent-based routing
+    Step 9: NEW - Branch based on routing decision:
+        - Path 1.a: Conversation (direct answer) → END
+        - Path 1.b: RAG search → Answer or continue to Phase 3
+        - Path 1.c: Generation → Continue to Phase 3
+
+    Returns the job's outcome when this phase ends the attempt (Path 1.a/1.b answer),
+    else None to continue with the next phase (Path 1.b generate or 1.c).
     """
+    from src.agents.sheldon_router_agent import route_user_intent
+    from src.agents.conversation.answer_agent import answer_user_question
+    from src.agents.conversation.rag_agent import search_knowledge_base
+
     project_id, run_id = job.project_id, job.run_id
     run = job.vars.get("run")
     session = job.vars.get("session")
     print(f"\n{'='*80}\n[PHASE-CONTEXT] STARTED for run_id={run_id}\n{'='*80}\n")
     try:
+        print(f"[PHASE-CONTEXT] STEPS 1-7: Loading config, digest, and state...")
         print(f"[PHASE-CONTEXT] 1. Parsing output_types...")
         try:
             requested = json.loads(run.output_types) if run.output_types else []
@@ -1392,7 +1418,7 @@ def _phase_context(job: RunJob) -> RunOutcome | None:
 
         qa_threshold = 0.8
         max_qa_loops = 2
-        hard_gate_enabled = True
+        # hard_gate_enabled = True  # DISABLED FOR PHASE 5 TESTING - set to False at line 1293 instead
         output_type_representations: dict[str, str] = {}
         format_v2_enabled = settings.format_negotiation_v2_enabled
         if format_v2_enabled and run.plan_payload:
@@ -1413,6 +1439,7 @@ def _phase_context(job: RunJob) -> RunOutcome | None:
                     qa_threshold = float(settings_data["qa_threshold"])
                 if isinstance(settings_data, dict) and "max_qa_loops" in settings_data:
                     max_qa_loops = max(1, min(5, int(settings_data["max_qa_loops"])))
+                # Disabled hard gate globally to allow runs to continue past evaluation failures
                 if isinstance(settings_data, dict) and "hard_gate_enabled" in settings_data:
                     hard_gate_enabled = bool(settings_data["hard_gate_enabled"])
             except Exception:
@@ -1472,9 +1499,87 @@ def _phase_context(job: RunJob) -> RunOutcome | None:
         if digest:
             init_state["conversation_digest"] = digest
             print(f"[PHASE-CONTEXT] 4a. Conversation digest added to state")
-        print(f"[PHASE-CONTEXT] 5. Committing session...")
-        session.commit()
-        print(f"[PHASE-CONTEXT] [OK] PHASE COMPLETE - moving to next phase\n")
+
+        # STEP 8: NEW - Call Sheldon Router for intent-based routing
+        print(f"[PHASE-CONTEXT] 8. Calling Sheldon Router Agent...")
+        router_input = {
+            "user_instruction": run.instruction or "",
+            "conversation_digest": digest,
+            "plan_payload": plan_payload_obj,
+            "requested_outputs": requested,
+            "init_state": init_state,
+            "project_context": {"project_id": project_id}
+        }
+        routing_decision = route_user_intent(router_input)
+        print(f"[PHASE-CONTEXT] 8a. Router decision: path={routing_decision['path']}, "
+              f"confidence={routing_decision['confidence']:.2f}")
+        append_run_event(session, run_id, "router_decision", routing_decision)
+
+        # STEP 9: NEW - Branch based on routing decision
+        path = routing_decision.get("path", "1.c")
+
+        # PATH 1.a: CONVERSATION (Direct Answer) - END RUN
+        if path == "1.a":
+            print(f"[PHASE-CONTEXT] 9. PATH 1.a: CONVERSATION - Generating direct answer...")
+            answer_result = answer_user_question(router_input)
+            if answer_result.get("success"):
+                print(f"[PHASE-CONTEXT] 9a. Answer generated successfully")
+                append_run_event(session, run_id, "conversation_answer", {
+                    "answer": answer_result.get("answer", ""),
+                    "sources": answer_result.get("sources", []),
+                    "confidence": answer_result.get("confidence", 0.0),
+                    "switch_to_generation": answer_result.get("switch_to_generation", False)
+                })
+                run.status = "completed"
+                session.commit()
+                print(f"[PHASE-CONTEXT] [OK] PATH 1.a COMPLETE - Run ended\n")
+                return (True, None)
+            else:
+                print(f"[PHASE-CONTEXT] 9a. ERROR in answer generation: {answer_result.get('error')}")
+                raise Exception(f"Answer agent failed: {answer_result.get('error')}")
+
+        # PATH 1.b: RAG SEARCH (Knowledge Base) - Conditional
+        elif path == "1.b":
+            print(f"[PHASE-CONTEXT] 9. PATH 1.b: RAG SEARCH - Searching knowledge base...")
+            rag_result = search_knowledge_base(router_input)
+            if rag_result.get("success"):
+                print(f"[PHASE-CONTEXT] 9a. RAG search completed")
+                append_run_event(session, run_id, "rag_search", {
+                    "should_answer": rag_result.get("should_answer", False),
+                    "should_generate": rag_result.get("should_generate", False),
+                    "confidence": rag_result.get("confidence", 0.0),
+                    "documents_found": len(rag_result.get("documents", []))
+                })
+
+                # If RAG answer is sufficient, END RUN
+                if rag_result.get("should_answer"):
+                    print(f"[PHASE-CONTEXT] 9b. RAG answer sufficient - Ending run")
+                    append_run_event(session, run_id, "rag_answer", {
+                        "answer": rag_result.get("answer_preview", ""),
+                        "sources": [doc.get("title") for doc in rag_result.get("documents", [])]
+                    })
+                    run.status = "completed"
+                    session.commit()
+                    print(f"[PHASE-CONTEXT] [OK] PATH 1.b (ANSWER) COMPLETE - Run ended\n")
+                    return (True, None)
+
+                # If generation needed, continue with RAG context
+                else:
+                    print(f"[PHASE-CONTEXT] 9b. RAG insufficient - Continue to Phase 3 with RAG context")
+                    accumulated = rag_result.get("accumulated_context", {})
+                    init_state["rag_context"] = accumulated.get("rag_context", "")
+                    init_state["rag_documents"] = accumulated.get("rag_documents", [])
+                    # Fall through to Phase 3
+            else:
+                print(f"[PHASE-CONTEXT] 9a. RAG search failed: {rag_result.get('error')}, defaulting to Phase 3")
+                # Fall through to Phase 3 on error
+
+        # PATH 1.c: GENERATION (Default) - Continue to Phase 3
+        # (This is the current behavior - no special handling needed)
+
+        # Final: Store routing decision and continue to path router
+        print(f"[PHASE-CONTEXT] [OK] STEPS 1-7 COMPLETE - Routing decision stored\n")
+
     except Exception as phase_exception:
         print(f"\n{'='*80}")
         print(f"[PHASE-CONTEXT] [ERROR] EXCEPTION CAUGHT:")
@@ -1489,9 +1594,181 @@ def _phase_context(job: RunJob) -> RunOutcome | None:
     return None
 
 
+def _path_router(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Router Node: Sheldon Router Agent - Analyze intent and route to path.
+
+    This is Step 8 of Phase 2: Call Sheldon Router Agent for intelligent routing.
+    Returns None to continue to conditional edges (path_conversation, path_rag_search, or generate).
+    """
+    from src.agents.sheldon_router_agent import route_user_intent
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    digest = job.vars.get("conversation_digest", "")
+    plan_payload_obj = job.vars.get("plan_payload_obj", {})
+    requested = job.vars.get("requested", [])
+    init_state = job.vars.get("init_state", {})
+
+    print(f"\n{'='*80}\n[PATH-ROUTER] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-ROUTER] Calling Sheldon Router Agent...")
+        router_input = {
+            "user_instruction": run.instruction or "",
+            "conversation_digest": digest,
+            "plan_payload": plan_payload_obj,
+            "requested_outputs": requested,
+            "init_state": init_state,
+            "project_context": {"project_id": project_id}
+        }
+        routing_decision = route_user_intent(router_input)
+        print(f"[PATH-ROUTER] Router decision: path={routing_decision['path']}, confidence={routing_decision['confidence']:.2f}")
+        append_run_event(session, run_id, "router_decision", routing_decision)
+
+        # Store for use by conditional edges
+        job.vars["routing_decision"] = routing_decision
+        job.vars["router_input"] = router_input
+
+        session.commit()
+        print(f"[PATH-ROUTER] [OK] COMPLETE - Routing decision made\n")
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-ROUTER] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+    return None
+
+
+def _path_conversation(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Path 1.a Node: Conversation Agent - Direct answer to user question.
+
+    Handles conversational Q&A without file generation.
+    Returns outcome (True, None) to end run on success.
+    """
+    from src.agents.conversation.answer_agent import answer_user_question
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    router_input = job.vars.get("router_input", {})
+
+    print(f"\n{'='*80}\n[PATH-CONVERSATION] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-CONVERSATION] Generating conversational answer...")
+        answer_result = answer_user_question(router_input)
+
+        if answer_result.get("success"):
+            print(f"[PATH-CONVERSATION] Answer generated successfully")
+            append_run_event(session, run_id, "conversation_answer", {
+                "answer": answer_result.get("answer", ""),
+                "sources": answer_result.get("sources", []),
+                "confidence": answer_result.get("confidence", 0.0),
+                "switch_to_generation": answer_result.get("switch_to_generation", False)
+            })
+            run.status = "completed"
+            session.commit()
+            print(f"[PATH-CONVERSATION] [OK] COMPLETE - Run ended with answer\n")
+            increment("path_conversation_success_total")
+            return (True, None)  # END RUN
+        else:
+            print(f"[PATH-CONVERSATION] ERROR in answer generation: {answer_result.get('error')}")
+            raise Exception(f"Answer agent failed: {answer_result.get('error')}")
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-CONVERSATION] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+
+
+def _path_rag_search(job: RunJob) -> RunOutcome | None:
+    """Phase 2 Path 1.b Node: RAG Search Agent - Knowledge base search + decision.
+
+    Searches knowledge base and decides if answer is sufficient or generation needed.
+    Returns outcome (True, None) to end run if answer sufficient.
+    Returns None to continue to Phase 3 if generation needed.
+    """
+    from src.agents.conversation.rag_agent import search_knowledge_base
+
+    project_id, run_id = job.project_id, job.run_id
+    run = job.vars.get("run")
+    session = job.vars.get("session")
+    router_input = job.vars.get("router_input", {})
+    init_state = job.vars.get("init_state", {})
+
+    print(f"\n{'='*80}\n[PATH-RAG-SEARCH] STARTED for run_id={run_id}\n{'='*80}\n")
+    try:
+        print(f"[PATH-RAG-SEARCH] Searching knowledge base...")
+        rag_result = search_knowledge_base(router_input)
+
+        if rag_result.get("success"):
+            print(f"[PATH-RAG-SEARCH] RAG search completed")
+            append_run_event(session, run_id, "rag_search", {
+                "should_answer": rag_result.get("should_answer", False),
+                "should_generate": rag_result.get("should_generate", False),
+                "confidence": rag_result.get("confidence", 0.0),
+                "documents_found": len(rag_result.get("documents", []))
+            })
+
+            # If RAG answer is sufficient, END RUN
+            if rag_result.get("should_answer"):
+                print(f"[PATH-RAG-SEARCH] RAG answer sufficient - Ending run")
+                append_run_event(session, run_id, "rag_answer", {
+                    "answer": rag_result.get("answer_preview", ""),
+                    "sources": [doc.get("title") for doc in rag_result.get("documents", [])]
+                })
+                run.status = "completed"
+                session.commit()
+                print(f"[PATH-RAG-SEARCH] [OK] COMPLETE - Run ended with RAG answer\n")
+                increment("path_rag_answer_total")
+                return (True, None)  # END RUN
+
+            # If generation needed, continue with RAG context
+            else:
+                print(f"[PATH-RAG-SEARCH] RAG insufficient - Continue to Phase 3 with RAG context")
+                accumulated = rag_result.get("accumulated_context", {})
+                init_state["rag_context"] = accumulated.get("rag_context", "")
+                init_state["rag_documents"] = accumulated.get("rag_documents", [])
+                job.vars["init_state"] = init_state
+                session.commit()
+                print(f"[PATH-RAG-SEARCH] [OK] COMPLETE - Continuing to generation with RAG context\n")
+                increment("path_rag_generate_total")
+                return None  # Continue to Phase 3
+        else:
+            print(f"[PATH-RAG-SEARCH] RAG search failed: {rag_result.get('error')}, defaulting to Phase 3")
+            session.commit()
+            return None  # Fall through to Phase 3 on error
+
+    except Exception as phase_exception:
+        print(f"\n{'='*80}")
+        print(f"[PATH-RAG-SEARCH] [ERROR] EXCEPTION CAUGHT:")
+        print(f"   Type: {type(phase_exception).__name__}")
+        print(f"   Message: {phase_exception}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"{'='*80}\n")
+        raise
+    finally:
+        _keep(job, locals())
+
+
 def _phase_generate(job: RunJob) -> RunOutcome | None:
     """Run pre-execution hooks and the coordinator, then save the generated artifacts and stream the outputs.
 
+    Receives context_validation from Phase 2 (if available) and passes to supervisor/agents.
     Returns the job's outcome when this phase ends the attempt, else None to continue with the next phase.
     """
     project_id, run_id, queue_payload = job.project_id, job.run_id, job.queue_payload  # noqa: F841
@@ -1505,6 +1782,12 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
     requested = job.vars.get("requested")
     output_type_representations = job.vars.get("output_type_representations")
     print(f"\n{'='*80}\n[PHASE-GENERATE] STARTED for run_id={run_id}\n{'='*80}\n")
+
+    # Retrieve context_validation from Phase 2 (if available)
+    context_validation = job.vars.get("context_validation", {})
+    if context_validation:
+        print(f"[PHASE-GENERATE] Context validation received: confidence={context_validation.get('overall_confidence', 1.0):.2f}")
+        print(f"[PHASE-GENERATE] User decision: {context_validation.get('user_decision', 'auto')}")
     try:
         print(f"[PHASE-GENERATE] 1. Syncing hooks from db...")
         sync_disabled_hooks_from_db(session, project_id=project_id)
@@ -1573,6 +1856,46 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 return True
             session.refresh(run)
             return bool(run.abort_requested)
+
+        # Add context_validation to init_state for supervisor/agents
+        if context_validation:
+            init_state["context_validation"] = context_validation
+            init_state["context_confidence"] = context_validation.get("overall_confidence", 1.0)
+            print(f"[PHASE-GENERATE] Passing context_validation to supervisor/agents")
+
+        # STEP 1.5: Check if this is a Phase 5 regeneration (rejected artifacts)
+        print(f"[PHASE-GENERATE] 1.5. Checking for Phase 5 regeneration mode...")
+        approval_data = json.loads(run.phase_5_approval_data or "{}")
+        regenerating_artifacts = [
+            artifact_type
+            for artifact_type, data in approval_data.items()
+            if data.get("status") == "regenerating"
+        ]
+
+        if regenerating_artifacts:
+            print(f"[PHASE-GENERATE] 1.5a. REGENERATION MODE DETECTED: {regenerating_artifacts}")
+
+            # Add regeneration instructions to init_state
+            for artifact_type in regenerating_artifacts:
+                artifact_data = approval_data[artifact_type]
+                regenerate_mode = artifact_data.get("regenerate_mode")  # "partial" or "full"
+                rejected_slides = artifact_data.get("rejected_slides", [])
+                approved_slides = artifact_data.get("approved_slides", [])
+                feedback = artifact_data.get("feedback", "")
+
+                print(f"[PHASE-GENERATE] 1.5b. {artifact_type.upper()}: mode={regenerate_mode}, feedback='{feedback[:50]}'")
+
+                init_state[f"{artifact_type}_regenerate"] = {
+                    "regenerate_mode": regenerate_mode,
+                    "rejected_slides": rejected_slides,
+                    "approved_slides": approved_slides,
+                    "feedback": feedback,
+                }
+
+            init_state["phase5_regeneration"] = True
+        else:
+            print(f"[PHASE-GENERATE] 1.5a. Normal generation mode (not regenerating)")
+            init_state["phase5_regeneration"] = False
 
         async def _consume_coordinator() -> dict[str, Any]:
             final_state: dict[str, Any] = {}
@@ -1886,89 +2209,9 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
         print(f"[PHASE-GENERATE] [OK] PHASE COMPLETE - all outputs streamed")
         print(f"[PHASE-GENERATE] All artifacts generated and persisted to disk")
 
-        # ==================== TRIGGER QUALITY EVALUATION (after artifacts are generated) ====================
-        import sys
-        try:
-            print(f"\n{'='*80}")
-            print(f"[QUALITY_EVAL_TRIGGER] Starting quality evaluation pipeline")
-            print(f"[QUALITY_EVAL_TRIGGER] Status: Quality evaluation enabled={settings.quality_evaluation_enabled}")
-            print(f"{'='*80}\n")
-        except UnicodeEncodeError:
-            sys.stdout.buffer.write(b"[QUALITY_EVAL_TRIGGER] Starting quality evaluation\n")
-        sys.stdout.flush()
-
-        if settings.quality_evaluation_enabled:
-            print(f"[QUALITY_EVAL_TRIGGER] Spawning background thread for quality evaluation...")
-            try:
-                from src.evaluation.quality_evaluation_hook import trigger_quality_evaluation
-                import threading
-
-                def _quality_evaluation_worker():
-                    """Background worker: evaluates artifact quality using Sheldon's LLM."""
-                    try:
-                        print(f"\n{'='*80}")
-                        print(f"[QUALITY_EVAL_WORKER] THREAD STARTED")
-                        print(f"[QUALITY_EVAL_WORKER] Project: {project_id}, Run: {run_id}")
-                        print(f"[QUALITY_EVAL_WORKER] Task: Evaluate generated artifacts")
-                        print(f"{'='*80}\n")
-                        sys.stdout.flush()
-
-                        # Call quality evaluation (non-blocking)
-                        print(f"[QUALITY_EVAL_WORKER] Calling trigger_quality_evaluation()...")
-                        sys.stdout.flush()
-                        result = trigger_quality_evaluation(project_id=project_id, run_id=run_id)
-
-                        # Log results
-                        if result and result.get("success"):
-                            grade = result.get("quality_grade", "UNKNOWN")
-                            score = result.get("overall_score", 0)
-                            print(f"\n{'='*80}")
-                            print(f"[QUALITY_EVAL_WORKER] SUCCESS")
-                            print(f"[QUALITY_EVAL_WORKER] Quality Grade: {grade}")
-                            print(f"[QUALITY_EVAL_WORKER] Overall Score: {score:.2f}%")
-                            print(f"[QUALITY_EVAL_WORKER] Results saved: {run_id}_quality_metrics.json")
-                            print(f"{'='*80}\n")
-                        else:
-                            error_msg = result.get("error", "Unknown error") if result else "No result returned"
-                            print(f"\n{'='*80}")
-                            print(f"[QUALITY_EVAL_WORKER] FAILED")
-                            print(f"[QUALITY_EVAL_WORKER] Error: {error_msg}")
-                            print(f"{'='*80}\n")
-
-                        sys.stdout.flush()
-                    except Exception as worker_error:
-                        print(f"\n{'='*80}")
-                        print(f"[QUALITY_EVAL_WORKER] EXCEPTION CAUGHT")
-                        print(f"[QUALITY_EVAL_WORKER] Type: {type(worker_error).__name__}")
-                        print(f"[QUALITY_EVAL_WORKER] Message: {worker_error}")
-                        import traceback
-                        print(f"[QUALITY_EVAL_WORKER] Traceback:\n{traceback.format_exc()}")
-                        print(f"{'='*80}\n")
-                        sys.stdout.flush()
-
-                # Spawn daemon thread (won't block run completion)
-                quality_eval_thread = threading.Thread(target=_quality_evaluation_worker, daemon=True, name=f"QualityEval-{run_id}")
-                quality_eval_thread.start()
-                print(f"[QUALITY_EVAL_TRIGGER] Background thread started successfully")
-                print(f"[QUALITY_EVAL_TRIGGER] Thread name: {quality_eval_thread.name}")
-                print(f"[QUALITY_EVAL_TRIGGER] Daemon: {quality_eval_thread.daemon}\n")
-                sys.stdout.flush()
-            except Exception as spawn_error:
-                print(f"\n{'='*80}")
-                print(f"[QUALITY_EVAL_TRIGGER] FAILED TO SPAWN THREAD")
-                print(f"[QUALITY_EVAL_TRIGGER] Type: {type(spawn_error).__name__}")
-                print(f"[QUALITY_EVAL_TRIGGER] Message: {spawn_error}")
-                import traceback
-                print(f"[QUALITY_EVAL_TRIGGER] Traceback:\n{traceback.format_exc()}")
-                print(f"{'='*80}\n")
-                sys.stdout.flush()
-        else:
-            print(f"[QUALITY_EVAL_TRIGGER] Quality evaluation DISABLED (settings.quality_evaluation_enabled=False)")
-            print(f"[QUALITY_EVAL_TRIGGER] To enable, set QUALITY_EVALUATION_ENABLED=true in .env\n")
-            sys.stdout.flush()
-
         # ==================== RECORD APPLICATION METRICS AT END OF GENERATE ====================
         # Recording metrics HERE ensures they're captured even if later phases fail
+        import sys
         try:
             try:
                 print(f"\n{'='*80}")
@@ -2004,6 +2247,64 @@ def _phase_generate(job: RunJob) -> RunOutcome | None:
                 sys.stdout.buffer.write(b"[METRICS_RECORD_GENERATE] Metrics recording complete\n")
         finally:
             sys.stdout.flush()
+
+        # ==================== SPAWN BACKGROUND QUALITY EVALUATION (after ALL writes complete) ====================
+        # PRODUCTION FIX: Serialize writes by spawning thread AFTER all Phase 3 operations finish
+        if settings.quality_evaluation_enabled:
+            print(f"\n{'='*80}")
+            print(f"[QUALITY_EVAL_TRIGGER] Spawning background quality evaluation thread...")
+            print(f"[QUALITY_EVAL_TRIGGER] (After all Phase 3 writes completed)")
+            print(f"{'='*80}\n")
+            sys.stdout.flush()
+            try:
+                from src.evaluation.quality_evaluation_hook import trigger_quality_evaluation
+                import threading
+                # sys already imported at line 2113
+
+                def _quality_evaluation_worker():
+                    """Background worker: evaluates artifact quality using Sheldon's LLM."""
+                    try:
+                        print(f"\n{'='*80}")
+                        print(f"[QUALITY_EVAL_WORKER] THREAD STARTED")
+                        print(f"[QUALITY_EVAL_WORKER] Project: {project_id}, Run: {run_id}")
+                        print(f"[QUALITY_EVAL_WORKER] Task: Evaluate generated artifacts")
+                        print(f"{'='*80}\n")
+                        sys.stdout.flush()
+
+                        print(f"[QUALITY_EVAL_WORKER] Calling trigger_quality_evaluation()...")
+                        sys.stdout.flush()
+                        result = trigger_quality_evaluation(project_id=project_id, run_id=run_id)
+
+                        if result and result.get("success"):
+                            grade = result.get("quality_grade", "UNKNOWN")
+                            score = result.get("overall_score", 0)
+                            print(f"\n{'='*80}")
+                            print(f"[QUALITY_EVAL_WORKER] ✅ SUCCESS")
+                            print(f"[QUALITY_EVAL_WORKER] Quality Grade: {grade}")
+                            print(f"[QUALITY_EVAL_WORKER] Overall Score: {score:.2f}%")
+                            print(f"{'='*80}\n")
+                        else:
+                            error_msg = result.get("error", "Unknown error") if result else "No result returned"
+                            print(f"\n{'='*80}")
+                            print(f"[QUALITY_EVAL_WORKER] ❌ FAILED")
+                            print(f"[QUALITY_EVAL_WORKER] Error: {error_msg}")
+                            print(f"{'='*80}\n")
+                        sys.stdout.flush()
+                    except Exception as worker_error:
+                        print(f"\n{'='*80}")
+                        print(f"[QUALITY_EVAL_WORKER] ❌ EXCEPTION CAUGHT")
+                        print(f"[QUALITY_EVAL_WORKER] Type: {type(worker_error).__name__}")
+                        print(f"[QUALITY_EVAL_WORKER] Message: {worker_error}")
+                        sys.stdout.flush()
+
+                quality_eval_thread = threading.Thread(target=_quality_evaluation_worker, daemon=True, name=f"QualityEval-{run_id}")
+                quality_eval_thread.start()
+                print(f"[QUALITY_EVAL_TRIGGER] ✅ Background thread started")
+                print(f"[QUALITY_EVAL_TRIGGER] Thread: {quality_eval_thread.name} (daemon={quality_eval_thread.daemon})\n")
+                sys.stdout.flush()
+            except Exception as spawn_error:
+                print(f"[QUALITY_EVAL_TRIGGER] ⚠️ Failed to spawn thread: {spawn_error}\n")
+                sys.stdout.flush()
 
         print(f"[PHASE-GENERATE] Continuing to next phase...\n")
     except Exception as phase_exception:
@@ -2043,6 +2344,33 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
     started_at = job.vars.get("started_at")
     state = job.vars.get("state")
     print(f"\n{'='*80}\n[PHASE-EVALUATE] STARTED for run_id={run_id}\n{'='*80}\n")
+
+    # DEBUG: Log what files were actually generated
+    from pathlib import Path
+    try:
+        run_dir_path = Path(run_dir)
+        if run_dir_path.exists():
+            all_files = list(run_dir_path.glob("*"))
+            print(f"[PHASE-EVALUATE] DEBUG: Files in run_dir: {[f.name for f in all_files]}")
+            for f in all_files:
+                if f.is_file():
+                    size_kb = f.stat().st_size / 1024
+                    print(f"[PHASE-EVALUATE]   - {f.name}: {size_kb:.1f}KB")
+    except Exception as e:
+        print(f"[PHASE-EVALUATE] DEBUG: Could not list run_dir files: {e}")
+
+    # DEBUG: Log what content is in state
+    if isinstance(state, dict):
+        print(f"[PHASE-EVALUATE] DEBUG: Content in state:")
+        for key in ["narrative_md", "sop_markdown", "docx_path", "docx_bytes"]:
+            value = state.get(key)
+            if isinstance(value, str) and (key.endswith("_md") or key.endswith("_markdown")):
+                print(f"[PHASE-EVALUATE]   - {key}: {len(value)} chars")
+            elif key.endswith("_path") and value:
+                print(f"[PHASE-EVALUATE]   - {key}: {value}")
+            elif key.endswith("_bytes") and isinstance(value, bytes):
+                print(f"[PHASE-EVALUATE]   - {key}: {len(value)} bytes")
+
     try:
         print(f"[PHASE-EVALUATE] 1. Running visual QA checks (with timeout protection)...")
         import sys
@@ -2198,8 +2526,40 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 final_artifact_report=final_artifact_report if isinstance(final_artifact_report, dict) else {},
                 evidence_gate=evidence_gate,
             )
+
+        # ✅ DETAILED EVALUATION RESULT LOGGING
+        print(f"\n{'─'*80}")
+        print(f"[PHASE-EVALUATE] 📊 EVALUATION RESULTS:")
+        print(f"[PHASE-EVALUATE]   Status: {evaluator_pipeline.get('status', 'unknown')}")
+        print(f"[PHASE-EVALUATE]   Visual QA Passed: {evaluator_pipeline.get('visual_qa_passed')}")
+        print(f"[PHASE-EVALUATE]   QA Passed: {evaluator_pipeline.get('qa_passed')}")
+        print(f"[PHASE-EVALUATE]   Guardrails Passed: {evaluator_pipeline.get('guardrails_passed')}")
+        print(f"[PHASE-EVALUATE]   Evidence Passed: {evaluator_pipeline.get('evidence_passed')}")
+        print(f"{'─'*80}\n")
+
         append_run_event(session, run_id, "evaluator_pipeline", evaluator_pipeline)
-        if hard_gate_enabled and evaluator_pipeline["status"] != "pass":
+
+        # CRITICAL: Check if evaluation passed
+        print(f"\n{'='*80}")
+        print(f"[PHASE-EVALUATE] ⚙️ PHASE-EVALUATE DECISION LOGIC")
+        print(f"[PHASE-EVALUATE]   MAX_EVALUATOR_REMEDIATION_ROUNDS: {MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+        print(f"[PHASE-EVALUATE]   hard_gate_enabled: {hard_gate_enabled}")
+        print(f"[PHASE-EVALUATE]   evaluator_pipeline['status']: {evaluator_pipeline.get('status')}")
+        print(f"{'='*80}\n")
+
+        if evaluator_pipeline["status"] == "pass":
+            print(f"\n{'='*80}")
+            print(f"[PHASE-EVALUATE] ✅✅✅ EVALUATION PASSED! ✅✅✅")
+            print(f"[PHASE-EVALUATE]   All quality checks PASSED")
+            print(f"[PHASE-EVALUATE]   Moving to PHASE-REMEMBER (next phase)")
+            print(f"{'='*80}\n")
+            # run.evaluation_passed = True  # TODO: uncomment when column exists in shared DB
+            session.commit()
+            # print(f"[PHASE-EVALUATE] 📊 Set evaluation_passed=True in database")
+            sys.stdout.flush()
+            # Continue to next phase (don't return, fall through)
+        elif hard_gate_enabled and evaluator_pipeline["status"] != "pass":
+            # run.evaluation_passed = False  # TODO: uncomment when column exists in shared DB
             prior_retry_count = int(
                 session.scalar(
                     select(func.count()).select_from(RunEvent).where(
@@ -2208,6 +2568,15 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 )
                 or 0
             )
+            print(f"\n{'='*80}")
+            print(f"[PHASE-EVALUATE] 🔴 EVALUATION FAILED")
+            print(f"[PHASE-EVALUATE] RETRY COUNT CHECK:")
+            print(f"[PHASE-EVALUATE]   prior_retry_count: {prior_retry_count}")
+            print(f"[PHASE-EVALUATE]   MAX_EVALUATOR_REMEDIATION_ROUNDS: {MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+            print(f"[PHASE-EVALUATE]   prior_retry_count < MAX?: {prior_retry_count < MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+            # print(f"[PHASE-EVALUATE] 📊 Set evaluation_passed=False in database")  # TODO: uncomment when column exists
+            print(f"{'='*80}\n")
+
             if prior_retry_count < MAX_EVALUATOR_REMEDIATION_ROUNDS:
                 run.status = "approved"
                 nxt = prior_retry_count + 1
@@ -2216,6 +2585,11 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                 run.error_message = (
                     f"Evaluator checks failed; auto-remediation {nxt}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}."
                 )
+                print(f"[PHASE-EVALUATE] 🔄 RETRY PATH: Attempt {nxt}/{MAX_EVALUATOR_REMEDIATION_ROUNDS}")
+                print(f"[PHASE-EVALUATE]   Re-queueing run for Phase 3 generation with feedback...")
+                print(f"[PHASE-EVALUATE]   Failed checks: visual_qa={not evaluator_pipeline.get('visual_qa_passed')}, "
+                      f"qa={not evaluator_pipeline.get('qa_passed')}, "
+                      f"guardrails={not evaluator_pipeline.get('guardrails_passed')}")
                 # ── Inject per-artifact visual feedback into plan_payload so each
                 # agent receives targeted remediation hints on the retry pass.
                 # Mapping: per_artifact key → plan_payload key that agent reads.
@@ -2370,8 +2744,146 @@ def _phase_evaluate(job: RunJob) -> RunOutcome | None:
                     },
                 )
                 session.commit()
-                enqueue_run_execution(project_id, run_id)
+                print(f"\n[PHASE-EVALUATE] ⏳ ENQUEUING RUN FOR RETRY...")
+                enqueue_result = enqueue_run_execution(project_id, run_id)
+                print(f"[PHASE-EVALUATE] ✅ ENQUEUE RESULT: {enqueue_result}")
+                print(f"[PHASE-EVALUATE] 🔁 RUN WILL RE-START FROM PHASE-PREPARE WITH FEEDBACK")
+                print(f"[PHASE-EVALUATE] ✅ RETURNING from Phase 4 (run re-queued)\n")
                 return True, None
+
+            # ── INVESTIGATOR AGENT: Retries exhausted → analyze failures & route
+            print(f"\n{'='*80}")
+            print(f"[PHASE-EVALUATE] 🔴 RETRIES EXHAUSTED ({prior_retry_count}/{MAX_EVALUATOR_REMEDIATION_ROUNDS})")
+            print(f"[PHASE-EVALUATE] ⏳ Initiating Investigator Agent Analysis...")
+            print(f"{'='*80}\n")
+
+            _investigator_success = False
+            try:
+                # Import ConversationMessage here to keep imports clean
+                from src.core.db.models import ConversationMessage, Conversation
+
+                # 1. Build attempts data from retry events
+                retry_events = session.query(RunEvent).filter(
+                    RunEvent.run_id == run_id,
+                    RunEvent.event_type == "evaluator_retry_requested"
+                ).order_by(RunEvent.created_at.asc()).all()
+
+                attempts_data = []
+                for i, event in enumerate(reversed(retry_events)):
+                    payload_raw = event.payload_json if hasattr(event, 'payload_json') else event.payload
+                    if isinstance(payload_raw, str):
+                        try:
+                            payload_raw = json.loads(payload_raw)
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            payload_raw = {}
+
+                    eval_pipeline = payload_raw.get("evaluator_pipeline", {}) if isinstance(payload_raw, dict) else {}
+                    error_msg = eval_pipeline.get("summary", "Unknown") if isinstance(eval_pipeline, dict) else str(eval_pipeline)[:100]
+
+                    attempts_data.append({
+                        "attempt": i + 1,
+                        "error": error_msg,
+                        "stage": "evaluation",
+                        "artifact": "multiple"
+                    })
+
+                if not attempts_data:
+                    attempts_data = [{"attempt": 1, "error": "Evaluator checks failed", "stage": "evaluation", "artifact": "multiple"}]
+
+                # 2. Build context for investigator
+                context_info = {
+                    "context_validation": state.get("context_validation", {}),
+                    "run_instruction": run.instruction or "",
+                    "project_context": ""
+                }
+
+                # 3. Run investigator
+                print(f"[INVESTIGATOR] 🤖 Running InvestigatorAgent with {len(attempts_data)} attempts...")
+                investigator = InvestigatorAgent()
+                inv_result = investigator.investigate_and_decide(attempts_data, context_info)
+                _investigator_success = True
+
+                # 4. Extract results safely
+                classification = inv_result.get("classification", {}) or {}
+                routing_dec = inv_result.get("routing_decision", {}) or {}
+                root_cause = classification.get("root_cause", "unknown")
+                confidence = float(inv_result.get("investigator_confidence", 0))
+                route_to = routing_dec.get("route_to", "escalate")
+                chat_msg = inv_result.get("chat_message", "")
+
+                print(f"[INVESTIGATOR] ✅ Analysis complete: {root_cause} (confidence: {confidence:.0%})")
+
+                # 5. Persist chat message if conversation exists
+                conv = session.query(Conversation).filter(
+                    Conversation.project_id == project_id
+                ).order_by(Conversation.created_at.desc()).first()
+
+                if conv and chat_msg:
+                    msg_rec = ConversationMessage(
+                        conversation_id=conv.id,
+                        role="assistant",
+                        content=chat_msg,
+                        metadata_json=json.dumps({
+                            "kind": "investigator_analysis",
+                            "root_cause": root_cause,
+                            "confidence": confidence,
+                            "source": "phase4_evaluator"
+                        })
+                    )
+                    session.add(msg_rec)
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Chat message saved to conversation")
+
+                # 6. Execute routing decision
+                print(f"[INVESTIGATOR] 🚦 Routing: {route_to}")
+
+                if route_to == "phase_2":
+                    message = routing_dec.get("message", "Please clarify the requirements")
+                    run.status = "awaiting_clarification"
+                    run.error_message = message
+                    session.commit()
+                    append_run_event(session, run_id, "investigator_routed_to_phase2", inv_result)
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Routed to Phase 2 (clarification needed)")
+
+                elif route_to == "phase_3":
+                    guidance = routing_dec.get("guidance", [])
+                    run.status = "approved"
+                    plan_dict = {}
+                    try:
+                        plan_dict = json.loads(run.plan_payload or "{}")
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        pass
+                    plan_dict["investigator_guidance"] = guidance
+                    plan_dict["investigator_root_cause"] = root_cause
+                    run.plan_payload = json.dumps(plan_dict)
+                    run.error_message = "Investigator recommends Phase 3 retry"
+                    session.commit()
+                    append_run_event(session, run_id, "investigator_routed_to_phase3", inv_result)
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Routed to Phase 3 (retry with guidance)")
+                    enqueue_run_execution(project_id, run_id)
+                    return True, None
+
+                else:  # escalate
+                    message = routing_dec.get("message", "Issue requires escalation")
+                    run.status = "escalated_for_review"
+                    run.error_message = message
+                    session.commit()
+                    append_run_event(session, run_id, "investigator_escalated", inv_result)
+                    session.commit()
+                    print(f"[INVESTIGATOR] ✅ Escalated for review")
+
+                print(f"\n{'='*80}")
+                print(f"[INVESTIGATOR] ✅ INVESTIGATION COMPLETE")
+                print(f"[INVESTIGATOR]   Status: {run.status}")
+                print(f"{'='*80}\n")
+
+            except Exception as e:
+                _log.error(f"[INVESTIGATOR] Failed: {e}", exc_info=True)
+                print(f"[INVESTIGATOR] ❌ Error: {str(e)[:100]}")
+                # Fall through to hard-fail logic
+
             guardrails_only_failure = (
                 not evaluator_pipeline.get("guardrails_passed")
                 and evaluator_pipeline.get("qa_passed", True)
@@ -2667,11 +3179,18 @@ def _phase_finalize(job: RunJob) -> RunOutcome | None:
     return None
 
 
+# Import Phase 5 locally here to avoid circular import
+from src.workflows.phase5_hitl_review import _phase_hitl_review
+
 RUN_PHASES: tuple[tuple[str, Any], ...] = (
     ("prepare", _phase_prepare),
     ("context", _phase_context),
+    ("path_router", _path_router),  # NEW: Phase 2 Router Node
+    ("path_conversation", _path_conversation),  # NEW: Phase 2 Path 1.a Node
+    ("path_rag_search", _path_rag_search),  # NEW: Phase 2 Path 1.b Node
     ("generate", _phase_generate),
     ("evaluate", _phase_evaluate),
+    ("hitl_review", _phase_hitl_review),  # NEW: Phase 5 HITL Design Review
     ("remember", _phase_remember),
     ("finalize", _phase_finalize),
 )

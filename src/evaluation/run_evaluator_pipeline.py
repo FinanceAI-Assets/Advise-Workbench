@@ -105,22 +105,54 @@ def build_evaluator_pipeline(
     if proposal_policy.get("active"):
         gateable_outputs |= set(proposal_policy.get("required_outputs") or [])
     has_gateable_outputs = bool(requested_set & gateable_outputs)
+
+    # DEBUG: Log each check status
+    print(f"\n[DEBUG-EVAL] ==================== EVALUATOR PIPELINE DEBUG ====================")
+    print(f"[DEBUG-EVAL] Requested outputs: {requested_outputs}")
+    print(f"[DEBUG-EVAL] Gateable outputs: {gateable_outputs}")
+    print(f"[DEBUG-EVAL] Has gateable outputs: {has_gateable_outputs}")
+
     qa_passed = True if not has_gateable_outputs else bool((qa_report or {}).get("passed"))
+    print(f"[DEBUG-EVAL] QA Check: passed={qa_passed}, report_status={qa_report.get('passed') if qa_report else 'N/A'}")
+    if qa_report and not qa_passed:
+        print(f"[DEBUG-EVAL]   → QA Report Details: {qa_report}")
+
     visual_status = str((visual_qa_report or {}).get("status") or "").lower()
     visual_passed = visual_status in set(proposal_policy.get("visual_pass_statuses") or {"pass", "warn", "skip"})
+    print(f"[DEBUG-EVAL] Visual QA Check: status={visual_status}, passed={visual_passed}, pass_statuses={proposal_policy.get('visual_pass_statuses', ['pass', 'warn', 'skip'])}")
+    if visual_qa_report and not visual_passed:
+        print(f"[DEBUG-EVAL]   → Visual QA Report Details: {visual_qa_report}")
+
     guardrail_passed = (
         True
         if not has_gateable_outputs
         else str((guardrail_report or {}).get("status") or "").lower() == "pass"
     )
+    print(f"[DEBUG-EVAL] Guardrail Check: passed={guardrail_passed}, status={guardrail_report.get('status') if guardrail_report else 'N/A'}")
+    if guardrail_report and not guardrail_passed:
+        print(f"[DEBUG-EVAL]   → Guardrail Report Details: {guardrail_report}")
+
     final_artifact_passed = True
     if isinstance(final_artifact_report, dict) and final_artifact_report:
         final_artifact_passed = bool(final_artifact_report.get("passed"))
+    print(f"[DEBUG-EVAL] Final Artifact Check: passed={final_artifact_passed}")
+    if final_artifact_report and not final_artifact_passed:
+        print(f"[DEBUG-EVAL]   → Final Artifact Report Details: {final_artifact_report}")
+
     # Evidence hard-fail is a run-level gate: fabricated numbers with client sources
     # present must not ship as review_ready.
     evidence_passed = True
     if isinstance(evidence_gate, dict) and evidence_gate:
         evidence_passed = bool(evidence_gate.get("passed", True))
+    print(f"[DEBUG-EVAL] Evidence Check: passed={evidence_passed}, gate={evidence_gate}")
+
+    print(f"[DEBUG-EVAL] =========== OVERALL RESULT ===========")
+    print(f"[DEBUG-EVAL] qa_passed={qa_passed}, visual_passed={visual_passed}, guardrail_passed={guardrail_passed}, final_artifact_passed={final_artifact_passed}, evidence_passed={evidence_passed}")
+
+    final_status = "pass" if (qa_passed and visual_passed and guardrail_passed and final_artifact_passed and evidence_passed) else "fail"
+    print(f"[DEBUG-EVAL] FINAL STATUS: {final_status}")
+    print(f"[DEBUG-EVAL] =====================================================================\n")
+
     return {
         "qa_passed": qa_passed,
         "visual_qa_passed": visual_passed,
@@ -135,15 +167,7 @@ def build_evaluator_pipeline(
         }
         if isinstance(evidence_gate, dict) and evidence_gate
         else None,
-        "status": "pass"
-        if (
-            qa_passed
-            and visual_passed
-            and guardrail_passed
-            and final_artifact_passed
-            and evidence_passed
-        )
-        else "fail",
+        "status": final_status,
         "quality_policy": proposal_policy,
     }
 

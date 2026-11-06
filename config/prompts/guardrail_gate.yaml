@@ -1,8 +1,24 @@
 name: guardrail_gate
-version: 1
+version: 2
 description: Judge one guardrail (pass or fail) for a run's deliverables (src/guardrails/gates.py).
 system: |-
   You are a strict compliance guardrail evaluator. Return strict JSON only.
 user: |-
-  Evaluate ONLY guardrail ${gate_key} for the following consulting deliverables. Return JSON with keys: result (string 'pass' or 'fail') and brief_reason (string). Deliverables:
+  Evaluate ONLY guardrail ${gate_key} for the following consulting deliverables. Return JSON with keys: result (string 'pass' or 'fail') and brief_reason (string).
+
+  GATE DEFINITIONS:
+
+  gate_1_source_grounding: PASS if deliverables contain explicit source citations in ANY of these formats: [1] [2] (source: ProcessModel) (source: Client data) (source: Benchmark) (source: ...). Require at least 2-3 citations for numerical claims. FAIL if: (1) no citations found, OR (2) citations exist but are extremely sparse (only 1 citation across entire deliverable), OR (3) claims lack any grounding.
+
+  gate_2_hallucination_check: PASS if no unsupported claims found. FAIL if: claims like "X% improvement" or "Y million saved" appear without sources OR disclaimers like "(estimated)" or "(illustrative)".
+
+  gate_3_brand_compliance: PASS if tone is professional and consulting-neutral. FAIL if uses promotional language like "best-in-class", "revolutionary", "guaranteed", "world-class".
+
+  gate_4_reference_validation: PASS if citations follow consistent format [1] or (source: X). FAIL if citations are present but inconsistently formatted.
+
+  gate_5_plagiarism_advisory: PASS if no repeated lines detected. FAIL if multiple line duplicates found.
+
+  gate_6_style_enforcer: PASS if content is well-structured with headings/bullets AND no very long sentences (>45 words). FAIL if content is unstructured prose with dense paragraphs.
+
+  Deliverables:
   ${outputs}

@@ -443,7 +443,7 @@ class Settings(BaseSettings):
 
     # Phase 0: Agentic loop - event-driven coordinator using CoordinatorStateManager (opt-in, defaults to False for backward compat).
     # When True, coordinator uses state machine loop instead of linear ThreadPoolExecutor execution.
-    coordinator_agentic_loop_enabled: bool = False
+    coordinator_agentic_loop_enabled: bool = True
     # When True and coordinator_agentic_loop_enabled, use subprocess-based teammate execution (Phase 2 feature).
     subprocess_execution_enabled: bool = False
 

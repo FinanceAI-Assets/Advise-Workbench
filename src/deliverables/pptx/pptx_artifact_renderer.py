@@ -46,7 +46,7 @@ CONTENT_W = SLIDE_W - (2 * MARGIN_H)
 CONTENT_H = SLIDE_H - (2 * MARGIN_V)
 
 # Typical element heights (inches)
-TITLE_H = 0.8
+TITLE_H = 1.2  # Increased to accommodate multi-line titles without truncation
 FOOTER_H = 0.5
 GUTTER = 0.15     # space between elements
 
@@ -475,6 +475,18 @@ class SlideComposer:
     def compose_title_slide(self, slide_dict: dict[str, Any]) -> None:
         """Compose a title/cover slide."""
         slide = add_slide_with_layout(self.prs, "title", title=str(slide_dict.get("title") or ""))
+        # Explicitly disable layout fill to prevent it from overriding our colors
+        try:
+            slide.background.fill.background()
+        except Exception:
+            pass
+
+        # Remove default layout placeholders (they show "Click to add text" or stale placeholders)
+        for shape in list(slide.shapes):
+            if shape.is_placeholder:
+                sp = shape.element
+                sp.getparent().remove(sp)
+
         slide.background.fill.solid()
         slide.background.fill.fore_color.rgb = self.colors["neutral_dark"]
 
@@ -486,6 +498,9 @@ class SlideComposer:
         backdrop.fill.solid()
         backdrop.fill.fore_color.rgb = self.colors["neutral_dark"]
         backdrop.line.fill.background()
+
+        # Ensure green accents are at the front (not covered by other elements)
+        # by adding them AFTER the backdrop
 
         left_strip = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(0.35), Inches(SLIDE_H)
@@ -534,9 +549,11 @@ class SlideComposer:
             subtitle_frame.word_wrap = True
             badges_y = 4.2
 
-        # Badges (if provided)
+        # Badges (if provided) - filter out stray placeholder/metadata labels like "DATE"
         badges = slide_dict.get("badges", [])
-        if badges:
+        # Clean up: remove placeholder text that will be in metadata band anyway
+        clean_badges = [b for b in badges if b and b.strip() not in ("DATE", "PROCESS OVERVIEW", "Process Overview", "●")]
+        if clean_badges:
             badges_box = slide.shapes.add_textbox(
                 Inches(MARGIN_H),
                 Inches(badges_y),
@@ -544,7 +561,7 @@ class SlideComposer:
                 Inches(0.6)
             )
             badges_frame = badges_box.text_frame
-            badges_frame.text = " • ".join(badges)
+            badges_frame.text = " • ".join(clean_badges)
             badges_frame.paragraphs[0].font.size = Pt(14)
             badges_frame.paragraphs[0].font.color.rgb = self.colors["text_inverse"]
             badges_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
@@ -552,6 +569,19 @@ class SlideComposer:
 
         # Cover metadata band (PREPARED FOR / DATE), if supplied.
         meta = slide_dict.get("metadata") or slide_dict.get("cover_meta")
+
+        # Add footer to cover slide (must come after metadata for proper layering)
+        footer_box = slide.shapes.add_textbox(
+            Inches(MARGIN_H),
+            Inches(SLIDE_H - MARGIN_V - 0.25),
+            Inches(CONTENT_W),
+            Inches(0.25)
+        )
+        footer_frame = footer_box.text_frame
+        footer_frame.text = f"{self.footer_text} | CONFIDENTIAL"
+        footer_frame.paragraphs[0].font.size = Pt(9)
+        footer_frame.paragraphs[0].font.color.rgb = self.colors["text_inverse"]
+        footer_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
         if isinstance(meta, list) and meta:
             parts = [
                 f"{item.get('label')}: {item.get('value')}"
@@ -641,8 +671,11 @@ class SlideComposer:
         handler = handlers.get(slide_type, self._compose_bullets)
         handler(slide, slide_dict, content_y, content_h)
 
-        # Footer
-        self._add_footer(slide, page_num, total_pages)
+        # Footer (special handling for section dividers which have dark background)
+        if slide_type == "section_divider":
+            self._add_footer_light(slide, page_num, total_pages)
+        else:
+            self._add_footer(slide, page_num, total_pages)
         set_slide_notes(
             slide,
             " ".join(
@@ -712,6 +745,20 @@ class SlideComposer:
         footer_frame.paragraphs[0].font.color.rgb = self.colors["neutral_dark"]
         footer_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
 
+    def _add_footer_light(self, slide: Any, page_num: int, total_pages: int) -> None:
+        """Add light-colored footer for dark backgrounds (section dividers)."""
+        footer_box = slide.shapes.add_textbox(
+            Inches(MARGIN_H),
+            Inches(SLIDE_H - MARGIN_V - 0.25),
+            Inches(CONTENT_W),
+            Inches(0.25)
+        )
+        footer_frame = footer_box.text_frame
+        footer_frame.text = f"CONFIDENTIAL · {self.footer_text} | {page_num} / {total_pages}"
+        footer_frame.paragraphs[0].font.size = Pt(9)
+        footer_frame.paragraphs[0].font.color.rgb = self.colors["text_inverse"]  # Light text for dark background
+        footer_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
+
     def _add_placeholder(self, slide: Any, y: float, h: float, text: str) -> None:
         """Centered placeholder text for slides whose content payload is empty."""
         box = slide.shapes.add_textbox(
@@ -726,35 +773,97 @@ class SlideComposer:
         tf.paragraphs[0].alignment = PP_ALIGN.CENTER
 
     def _compose_bullets(self, slide: Any, slide_dict: dict[str, Any], y: float, h: float) -> None:
-        """Compose bullet-point slide."""
+        """Compose bullet-point slide with numbered items and colored backgrounds for visual polish."""
         bullets = slide_dict.get("bullets", [])
         if not bullets:
             return
 
-        bullet_box = slide.shapes.add_textbox(
-            Inches(MARGIN_H + 0.2),
-            Inches(y),
-            Inches(CONTENT_W - 0.4),
-            Inches(h)
-        )
-        text_frame = bullet_box.text_frame
-        text_frame.word_wrap = True
-
         bullets = bullets[:5]  # cap at 5 for executive decks
-        # Scale font size: fewer bullets = more breathing room
-        font_pt = Pt(18) if len(bullets) <= 3 else (Pt(15) if len(bullets) == 4 else Pt(13))
-        for i, bullet in enumerate(bullets):
-            if i == 0:
-                p = text_frame.paragraphs[0]
-            else:
-                p = text_frame.add_paragraph()
 
-            p.text = f"• {bullet}"
-            p.font.size = font_pt
-            p.font.color.rgb = self.colors["text_primary"]
-            p.level = 0
-            p.space_before = Pt(8)
-            p.space_after = Pt(4)
+        # For numbered items: detect "1. Item" format OR alternating pure-number + text items
+        # Also apply design to bullets with (source:...) citations to get white panel + dark-green accents
+        is_numbered = any(str(b).strip()[0:2].endswith(".") for b in bullets if str(b).strip())
+        has_citations = any("(source:" in str(b).lower() for b in bullets)
+        is_alternating_numbers = all(
+            (str(bullets[i]).strip().isdigit() and not str(bullets[i+1]).strip().isdigit())
+            or (not str(bullets[i]).strip().isdigit() and i+1 < len(bullets) and str(bullets[i+1]).strip().isdigit())
+            for i in range(len(bullets)-1)
+        ) if len(bullets) > 1 else False
+
+        # Apply numbered styling if: has "1. " prefix, OR has citations, OR is alternating numbers
+        apply_numbered_styling = is_numbered or has_citations or is_alternating_numbers
+        if apply_numbered_styling:
+            logger.info(f"[DEBUG-RENDER] Slide bullets: applying numbered styling (is_numbered={is_numbered}, has_citations={has_citations}, is_alternating={is_alternating_numbers}), {len(bullets)} items")
+
+        if apply_numbered_styling:
+            # Numbered list with visual polish: colored circles + white panels
+            item_h = (h - (len(bullets) - 1) * 0.08) / len(bullets)
+            for i, bullet in enumerate(bullets):
+                y_pos = y + i * (item_h + 0.08)
+
+                # White background panel for item
+                panel = slide.shapes.add_shape(
+                    MSO_SHAPE.ROUNDED_RECTANGLE,
+                    Inches(MARGIN_H + 0.05),
+                    Inches(y_pos),
+                    Inches(CONTENT_W - 0.1),
+                    Inches(item_h)
+                )
+                panel.fill.solid()
+                panel.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)  # white panel
+                panel.line.color.rgb = self.colors["neutral_light"]
+                panel.line.width = 1
+
+                # Colored circle for number
+                num_circle = slide.shapes.add_shape(
+                    MSO_SHAPE.OVAL,
+                    Inches(MARGIN_H + 0.15),
+                    Inches(y_pos + 0.08),
+                    Inches(0.3),
+                    Inches(0.3)
+                )
+                num_circle.fill.solid()
+                num_circle.fill.fore_color.rgb = self.colors["accent_dark"]  # 5A8A00 dark green
+                num_circle.line.fill.background()
+
+                # Text with number colored white
+                text_box = slide.shapes.add_textbox(
+                    Inches(MARGIN_H + 0.6),
+                    Inches(y_pos + 0.05),
+                    Inches(CONTENT_W - 0.75),
+                    Inches(item_h - 0.1)
+                )
+                text_frame = text_box.text_frame
+                text_frame.text = str(bullet).strip()
+                text_frame.word_wrap = True
+                text_frame.vertical_anchor = 1  # top anchor
+                text_frame.paragraphs[0].font.size = Pt(12)
+                text_frame.paragraphs[0].font.color.rgb = self.colors["text_primary"]
+        else:
+            # Plain bullet list (no colored backgrounds)
+            bullet_box = slide.shapes.add_textbox(
+                Inches(MARGIN_H + 0.2),
+                Inches(y),
+                Inches(CONTENT_W - 0.4),
+                Inches(h)
+            )
+            text_frame = bullet_box.text_frame
+            text_frame.word_wrap = True
+
+            # Scale font size: fewer bullets = more breathing room
+            font_pt = Pt(18) if len(bullets) <= 3 else (Pt(15) if len(bullets) == 4 else Pt(13))
+            for i, bullet in enumerate(bullets):
+                if i == 0:
+                    p = text_frame.paragraphs[0]
+                else:
+                    p = text_frame.add_paragraph()
+
+                p.text = f"• {bullet}"
+                p.font.size = font_pt
+                p.font.color.rgb = self.colors["text_primary"]
+                p.level = 0
+                p.space_before = Pt(8)
+                p.space_after = Pt(4)
 
         # Optional source/footnote band (light-green) anchored at the bottom of the content area.
         footer_note = str(slide_dict.get("footer_note", "")).strip()
@@ -854,7 +963,7 @@ class SlideComposer:
                 desc_frame.word_wrap = True
 
     def _compose_column_cards(self, slide: Any, slide_dict: dict[str, Any], y: float, h: float) -> None:
-        """Compose 2–4 column card layout."""
+        """Compose 2–4 column card layout with balanced text heights."""
         cards = slide_dict.get("column_cards", [])
         if not cards:
             self._add_placeholder(slide, y, h, "Content pending")
@@ -882,7 +991,7 @@ class SlideComposer:
             shape.line.color.rgb = self.colors["accent_dark"] if accent_token not in _DARK_FILLS else bg_color
 
             # Heading
-            heading = str(card.get("heading", ""))
+            heading = str(card.get("heading", "")).strip()
             heading_box = slide.shapes.add_textbox(
                 Inches(x + 0.15),
                 Inches(y + 0.15),
@@ -898,8 +1007,30 @@ class SlideComposer:
             )
             heading_frame.word_wrap = True
 
-            # Body
-            body = str(card.get("body", ""))
+            # Body - aggressive trim for 3-column layouts to max 2 lines (~90 chars)
+            # This prevents "Operational Efficiency" from having 60 words while others have 25
+            body = str(card.get("body", "")).strip()
+            # Remove embedded line breaks first
+            body = " ".join(body.split())
+            # Trim 3-column layouts to maintain visual balance - max 2 lines / ~90 chars
+            if len(cards) == 3 and len(body) > 90:
+                # Keep first ~80 chars or complete first sentence whichever comes first
+                sentences = body.split(".")
+                if sentences:
+                    first_sentence = sentences[0].strip()
+                    if len(first_sentence) <= 80:
+                        body = first_sentence + "."
+                    else:
+                        # Truncate at 80 chars and find last space for clean break
+                        body = first_sentence[:80]
+                        last_space = body.rfind(" ")
+                        if last_space > 40:
+                            body = body[:last_space] + "."
+                        else:
+                            body = body[:80] + "."
+                else:
+                    body = body[:80]
+
             body_box = slide.shapes.add_textbox(
                 Inches(x + 0.15),
                 Inches(y + 0.6),
@@ -1303,9 +1434,8 @@ class SlideComposer:
                 desc_frame.word_wrap = True
 
     def _compose_section_divider(self, slide: Any, slide_dict: dict[str, Any], y: float, h: float) -> None:
-        """Compose section divider (title-only, dark background)."""
-        # Override background, plus a full-bleed dark rectangle shape so the dark
-        # fill is detectable on the slide's shapes (not just the slide background).
+        """Compose section divider (title-only, dark background with brand green accent)."""
+        # Override background with dark backdrop
         slide.background.fill.solid()
         slide.background.fill.fore_color.rgb = self.colors["neutral_dark"]
         backdrop = slide.shapes.add_shape(
@@ -1314,6 +1444,19 @@ class SlideComposer:
         backdrop.fill.solid()
         backdrop.fill.fore_color.rgb = self.colors["neutral_dark"]
         backdrop.line.fill.background()
+
+        # Add prominent brand green accent bar on left
+        accent_bar = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(0),
+            Inches(SLIDE_H * 0.28),
+            Inches(0.08),
+            Inches(SLIDE_H * 0.38),
+        )
+        accent_bar.fill.solid()
+        accent_bar.fill.fore_color.rgb = self.colors["primary"]  # Brand green
+        accent_bar.line.fill.background()
+
         # Hero ribbon with gradient and a diamond accent.
         ribbon = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
@@ -1333,7 +1476,7 @@ class SlideComposer:
             Inches(0.35),
         )
         diamond.fill.solid()
-        diamond.fill.fore_color.rgb = self.colors["accent_light"]
+        diamond.fill.fore_color.rgb = self.colors["primary"]  # Use brand green instead of accent_light
         diamond.line.fill.background()
 
         # Large title
@@ -1487,6 +1630,7 @@ def _render_pptx_with_artifact_tool_impl(
         # Compose slides
         client_name = _resolve_client_name(payload)
         total_slides = len(pptx_slides)
+        logger.info(f"[DEBUG-RENDER] Starting PPTX composition: {total_slides} slides total")
         for idx, slide_dict in enumerate(pptx_slides[:MAX_RENDERED_SLIDES]):
             if not isinstance(slide_dict, dict):
                 errors.append(f"Slide {idx + 1}: Invalid slide data structure")
@@ -1494,6 +1638,22 @@ def _render_pptx_with_artifact_tool_impl(
             slide_dict = _normalize_slide_content(slide_dict)
 
             slide_type = str(slide_dict.get("slide_type", "")).lower().strip()
+            logger.info(f"[DEBUG-RENDER] Slide {idx + 1}: type={slide_type}, title='{slide_dict.get('title', '')[:50]}'")
+
+            # Log content before rendering
+            if slide_type == "bullets" and slide_dict.get("bullets"):
+                for i, b in enumerate(slide_dict.get("bullets", [])):
+                    logger.info(f"[DEBUG-RENDER]   Bullet {i + 1}: '{str(b)[:80]}'")
+            elif slide_type == "stat_cards" and slide_dict.get("stat_cards"):
+                for i, card in enumerate(slide_dict.get("stat_cards", [])):
+                    desc = str(card.get("description", ""))[:60]
+                    logger.info(f"[DEBUG-RENDER]   Card {i + 1}: '{card.get('label', '')}' - '{desc}'")
+            elif slide_type == "column_cards" and slide_dict.get("column_cards"):
+                for i, card in enumerate(slide_dict.get("column_cards", [])):
+                    logger.info(f"[DEBUG-RENDER]   Col {i + 1}: {card.get('heading', '')} - '{str(card.get('body', ''))[:50]}'")
+            elif slide_type == "process_flow" and slide_dict.get("process_flow"):
+                for i, step in enumerate(slide_dict.get("process_flow", {}).get("steps", [])):
+                    logger.info(f"[DEBUG-RENDER]   Step {i + 1}: {step.get('label', '')} - '{str(step.get('description', ''))[:50]}'")
             if not slide_type:
                 # Legacy payloads omit slide_type and carry a content dict (e.g. `layout` +
                 # `table`/`chart`). Infer the renderer from whichever content key is present.
@@ -1555,6 +1715,7 @@ def _render_pptx_with_artifact_tool_impl(
                 if slide_type == "title":
                     _enrich_title_slide(slide_dict, client_name)
                     composer.compose_title_slide(slide_dict)
+                    logger.info(f"[DEBUG-RENDER] Slide {idx + 1} (title) composed successfully")
                 else:
                     composer.compose_content_slide(
                         slide_dict,
@@ -1562,8 +1723,10 @@ def _render_pptx_with_artifact_tool_impl(
                         idx + 1,
                         total_slides
                     )
+                    logger.info(f"[DEBUG-RENDER] Slide {idx + 1} ({slide_type}) composed successfully")
             except Exception as e:
                 errors.append(f"Slide {idx + 1} ({slide_type}): {str(e)}")
+                logger.error(f"[DEBUG-RENDER] ERROR composing Slide {idx + 1} ({slide_type}): {e}")
                 logger.warning("Failed to compose slide %d: %s", idx + 1, e)
 
         # Document properties — without this the deck ships python-pptx template
@@ -1584,7 +1747,11 @@ def _render_pptx_with_artifact_tool_impl(
 
         tidy_presentation(prs)
         prs.save(str(output_path))
-        logger.info("PPTX rendered: %s", output_path)
+        logger.info(f"[DEBUG-RENDER] PPTX rendered successfully: {output_path}")
+        if errors:
+            logger.warning(f"[DEBUG-RENDER] Rendering completed with {len(errors)} error(s): {errors[:3]}")
+        else:
+            logger.info("[DEBUG-RENDER] Rendering completed with no errors")
 
         try:
             from src.deliverables.artifact_integrity import write_pptx_integrity_manifest
@@ -1594,7 +1761,11 @@ def _render_pptx_with_artifact_tool_impl(
             logger.warning("Failed to write PPTX integrity manifest: %s", exc)
 
         # Run QA validation
+        logger.info("[DEBUG-RENDER] Running QA validation on rendered PPTX...")
         qa_report = validate_pptx_against_slides(output_path, pptx_slides)
+        logger.info(f"[DEBUG-RENDER] QA Report status: {qa_report.get('status', 'unknown')}")
+        if qa_report.get("issues"):
+            logger.warning(f"[DEBUG-RENDER] QA Issues found: {qa_report.get('issues', [])[:3]}")
 
         # Merge editorial composer fit_report into qa_report.
         if _editorial_active and hasattr(composer, "fit_report") and composer.fit_report:
