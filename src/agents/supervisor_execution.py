@@ -29,6 +29,7 @@ from src.core.config import settings
 from src.core.run_control import abort_scope as _coordinator_abort_scope
 from src.core.run_control import poll_abort as _coordinator_poll_abort
 from src.core.state import AdviseWorkbenchState
+from src.llm.context_budget import plan_from_settings
 from src.core.db.models import MemoryEvent, MemoryItem, ProjectMemoryProfile, UserProjectPreference
 from src.core.observability.langfuse_tracing import langfuse_span
 from src.memory.long_term.memory_context import merge_long_term_items_into_profile
@@ -727,14 +728,27 @@ class CoordinatorExecution:
         use_v2 = _coordinator_module.settings.memory_compaction_v1_enabled
         if use_v2:
             increment("coordinator_context_assemble_v2_total")
-            context = self.context_engine.assemble_v2(
-                project_id,
-                redacted,
-                run_memory_events=memory_events,
-                project_profile=profile_payload,
-                lp_snippets=lp_snippets,
-                char_cap=_coordinator_module.settings.memory_compaction_char_cap,
-            )
+            # Workstream A: use token budget plan if available, fall back to char_cap
+            try:
+                plan = plan_from_settings(settings)
+                context = self.context_engine.assemble_v2(
+                    project_id,
+                    redacted,
+                    run_memory_events=memory_events,
+                    project_profile=profile_payload,
+                    lp_snippets=lp_snippets,
+                    plan=plan,
+                )
+            except Exception:
+                # Fallback to char_cap if plan creation fails (e.g., in tests without LLM_PROVIDER)
+                context = self.context_engine.assemble_v2(
+                    project_id,
+                    redacted,
+                    run_memory_events=memory_events,
+                    project_profile=profile_payload,
+                    lp_snippets=lp_snippets,
+                    char_cap=_coordinator_module.settings.memory_compaction_char_cap,
+                )
             state["compaction_snapshot"] = context.metadata or {}
             state["memory_summary"] = {
                 "non_negotiables": profile_payload.get("non_negotiables", []),
@@ -1266,14 +1280,27 @@ class CoordinatorExecution:
             use_v2 = _coordinator_module.settings.memory_compaction_v1_enabled
             if use_v2:
                 increment("coordinator_context_assemble_v2_total")
-                context = self.context_engine.assemble_v2(
-                    project_id,
-                    redacted,
-                    run_memory_events=memory_events,
-                    project_profile=profile_payload,
-                    lp_snippets=lp_snippets,
-                    char_cap=_coordinator_module.settings.memory_compaction_char_cap,
-                )
+                # Workstream A: use token budget plan if available, fall back to char_cap
+                try:
+                    plan = plan_from_settings(settings)
+                    context = self.context_engine.assemble_v2(
+                        project_id,
+                        redacted,
+                        run_memory_events=memory_events,
+                        project_profile=profile_payload,
+                        lp_snippets=lp_snippets,
+                        plan=plan,
+                    )
+                except Exception:
+                    # Fallback to char_cap if plan creation fails (e.g., in tests without LLM_PROVIDER)
+                    context = self.context_engine.assemble_v2(
+                        project_id,
+                        redacted,
+                        run_memory_events=memory_events,
+                        project_profile=profile_payload,
+                        lp_snippets=lp_snippets,
+                        char_cap=_coordinator_module.settings.memory_compaction_char_cap,
+                    )
                 state["compaction_snapshot"] = context.metadata or {}
                 state["memory_summary"] = {
                     "non_negotiables": profile_payload.get("non_negotiables", []),

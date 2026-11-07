@@ -181,6 +181,30 @@ def test_library_shows_approved_practices_and_saves_per_user() -> None:
     assert client.get("/api/library/lp-missing", headers=headers).status_code == 404
 
 
+def test_library_search_lists_every_match_and_a_category_narrows_it() -> None:
+    client = TestClient(fastapi_app)
+    headers = _login(client, _email("reader"))
+    word = uuid.uuid4().hex[:8]
+    with session_scope() as db:
+        for pid, category in ((f"lp-{word}a", "Operating model"), (f"lp-{word}b", "Operating model"), (f"lp-{word}c", "Procurement")):
+            db.add(LpPractice(id=pid, title=f"Playbook {word}", description="Method.", category=category,
+                              maturity="Managed", version_label="v1.0", status="Approved", owner="Maya Patel"))
+
+    everything = client.get(f"/api/library?q={word}", headers=headers).json()
+    assert everything["matchingCount"] == 3
+    counts = {c["label"]: c["count"] for c in everything["categories"]}
+    assert counts["All practices"] == 3 and counts["Operating model"] == 2 and counts["Procurement"] == 1
+
+    narrowed = client.get(f"/api/library?q={word}&category=procurement", headers=headers).json()
+    assert [c["id"] for c in narrowed["cards"]] == [f"lp-{word}c"]
+    # The counts still say what each category would list, whichever is open.
+    assert {c["label"]: c["count"] for c in narrowed["categories"]} == counts
+
+    no_match = client.get(f"/api/library?q={word}-absent", headers=headers).json()
+    assert no_match["cards"] == [] and no_match["totalPractices"] >= 3
+    assert {c["label"]: c["count"] for c in no_match["categories"]}["Procurement"] == 0
+
+
 def test_ask_the_library_answers_from_the_approved_catalog() -> None:
     client = TestClient(fastapi_app)
     headers = _login(client, _email("reader"))
@@ -198,6 +222,26 @@ def test_ask_the_library_answers_from_the_approved_catalog() -> None:
     docs = client.post("/api/library/ask", json={"question": f"docuemement name for {approved}"}, headers=headers).json()
     assert docs["answer"].startswith("No uploaded source documents") and [p["id"] for p in docs["practices"]] == [approved]
     assert client.post("/api/library/ask", json={"question": ""}, headers=headers).status_code == 422
+
+
+def test_asking_selected_sources_is_honest_when_they_cannot_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.memory.knowledge.leading_practices import leading_practice_library_service as service
+
+    client = TestClient(fastapi_app)
+    headers = _login(client, _email("reader"))
+    approved = _practice()
+    body = {"question": "Summarize this", "practiceIds": [approved]}
+
+    monkeypatch.setattr(service, "answer", lambda *a, **k: {"answer": "Nothing on this.", "sources": []})
+    empty = client.post("/api/library/ask", json=body, headers=headers).json()
+    assert "no searchable content" in empty["answer"] and "match your question" not in empty["answer"]
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(service, "answer", unavailable)
+    down = client.post("/api/library/ask", json=body, headers=headers).json()
+    assert "unavailable" in down["answer"] and "no searchable content" not in down["answer"]
 
 
 def test_practice_added_to_engagement_counts_as_a_source_and_is_searchable() -> None:
@@ -290,7 +334,7 @@ def test_admin_routes_reviews_and_manages_retention_but_cannot_bypass_gates() ->
     assert export.status_code == 200 and rid in export.text
 
 
-def test_practice_cannot_be_published_before_independent_approval() -> None:
+def test_admin_approves_a_practice_by_publishing_it_unless_changes_were_requested() -> None:
     client = TestClient(fastapi_app)
     admin_email = _email("admin")
     admin = _login(client, admin_email)
@@ -298,13 +342,15 @@ def test_practice_cannot_be_published_before_independent_approval() -> None:
     practice = _practice("Quality review")
     with session_scope() as db:
         db.add(Review(id=practice.upper(), title="Ownership playbook", artifact_type="practice", version_label="v1.0",
-                      state="Quality review"))
+                      state="Changes requested"))
     reason = {"reason": "Release for the autumn catalogue"}
 
     assert client.post(f"/api/admin/library/{practice}/publish", json=reason, headers=admin).status_code == 409
     with session_scope() as db:
-        db.scalar(select(Review).where(Review.id == practice.upper())).state = "Approved"
+        db.scalar(select(Review).where(Review.id == practice.upper())).state = "Quality review"
     assert client.post(f"/api/admin/library/{practice}/publish", json=reason, headers=admin).json()["status"] == "Approved"
+    with session_scope() as db:
+        assert db.scalar(select(Review).where(Review.id == practice.upper())).state == "Approved"
 
 
 def test_correction_request_blocks_the_candidate_and_returns_its_id() -> None:

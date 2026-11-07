@@ -19,6 +19,13 @@ from sqlalchemy.orm import Session
 
 from src.core.db.models import RunTask, SwarmMessage, SwarmTeam, SwarmTeammate
 from src.core.observability.metrics import increment
+from src.llm import gateway
+from src.llm.claude import (
+    _extract_first_json_object,
+    claude_generate,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -359,7 +366,8 @@ def ensure_teammate_workspace_dirs(*, session: Session, project_id: str, run_id:
     mates = list_teammates(session, run_id=run_id)
     if not mates:
         return
-    if bool(getattr(settings, "swarm_git_worktrees_enabled", False)):
+    # Git worktrees need a real repository on disk, which the store-backed workspace does not have.
+    if bool(getattr(settings, "swarm_git_worktrees_enabled", False)) and settings.workspace_backend != "db_s3":
         _maybe_create_git_worktrees(project_id=project_id, run_id=run_id, teammates=mates)
         return
     for m in mates:
@@ -422,8 +430,12 @@ def _maybe_create_git_worktrees(
 
 
 def ensure_path_within_teammate_workspace(project_id: str, run_id: str, teammate_id: str, candidate: str | Path) -> Path:
+    from src.core.workspace_store import WsPath
+
     root = teammate_workspace_dir(project_id, run_id, teammate_id).resolve()
-    path = Path(candidate).resolve()
+    if isinstance(root, WsPath) and isinstance(candidate, str):
+        candidate = root / candidate  # a relative name inside the store-backed teammate folder
+    path = (candidate if isinstance(candidate, (Path, WsPath)) else Path(candidate)).resolve()
     try:
         path.relative_to(root)
     except ValueError as exc:
@@ -454,10 +466,17 @@ def lead_plan_with_optional_llm(
 ) -> LeadPlanResult:
     """Deterministic pipeline plus optional LLM `extra_tasks` merged on top (DAG-validated)."""
     from src.core.config import settings
-    from src.llm.claude import _extract_first_json_object, claude_generate, is_claude_enabled
+    # [DEPRECATED: Hardcoded imports] Use gateway for provider-agnostic call
+    # from src.llm.claude import _extract_first_json_object, claude_generate, is_claude_enabled
 
     base = deterministic_lead_task_graph(wanted=wanted, milestone_labels=milestone_labels)
-    if not bool(getattr(settings, "swarm_llm_lead_enabled", False)) or not is_claude_enabled():
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # from src.llm.claude import _extract_first_json_object, claude_generate, is_claude_enabled
+    # [DEPRECATED: Old check - kept for reference]
+    # if not bool(getattr(settings, "swarm_llm_lead_enabled", False)) or not is_claude_enabled():
+    #     return base
+    # [NEW: Gateway-based provider-agnostic check]
+    if not bool(getattr(settings, "swarm_llm_lead_enabled", False)) or not gateway.is_enabled():
         return base
 
     existing_ids = {str(t.get("id") or "").strip() for t in base.tasks if str(t.get("id") or "").strip()}
@@ -473,12 +492,23 @@ def lead_plan_with_optional_llm(
         f"existing_task_ids: {sorted(existing_ids)}\n"
         f"wanted_outputs: {wanted}\n"
     )
+    # [NEW: Gateway-based provider-agnostic imports]
+    # from src.llm import gateway  [moved to module level]
+    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+    
     try:
-        text = claude_generate(
-            system="You output only valid minified JSON for task orchestration.",
-            user=prompt,
+        # [DEPRECATED: Old claude_generate call]
+        # text = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
             max_tokens=min(8192, int(getattr(settings, "subagent_tool_max_tokens", 8192) or 8192)),
+            system="You output only valid minified JSON for task orchestration.",
+            messages=[{"role": "user", "content": prompt}],
         )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
         obj = _extract_first_json_object(text)
         extras_raw = obj.get("extra_tasks") if isinstance(obj, dict) else None
         if not isinstance(extras_raw, list):

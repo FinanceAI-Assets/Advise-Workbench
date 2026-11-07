@@ -1,6 +1,5 @@
 "use client";
 
-import { Paperclip } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
@@ -55,7 +54,6 @@ export function ConversationComposer({
       />
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--surface-border)] pt-3">
         <div className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
-          <Paperclip size={16} aria-hidden />
           <span className="rounded-md bg-[var(--surface-muted)] px-2 py-1 text-xs font-medium text-[var(--text-default)]">
             {skillLabel}
           </span>

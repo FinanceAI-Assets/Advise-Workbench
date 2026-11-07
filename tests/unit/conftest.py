@@ -1,13 +1,10 @@
-"""Use in-memory SQLite for tests (StaticPool in session.py shares one DB across threads)."""
+"""Unit test defaults. tests/conftest.py selects in-memory SQLite (StaticPool in session.py shares one DB across threads)."""
 
 import os
+import time
 
 import pytest
 
-# src/app/main.py loads the repo `.env` with override=True; without this flag a developer's `.env` would replace the
-# in-memory database below with the real (shared) one as soon as a test imports the app.
-os.environ["ADVISE_WORKBENCH_SKIP_DOTENV"] = "1"
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-chars-long-ok!")
 # Prevent optional localhost Redis from connecting during tests (draw.io collab fan-out / timing).
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
@@ -30,6 +27,68 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(redis.Redis, "from_url", classmethod(lambda cls, *a, **k: client))
     yield client
     client.flushall()
+
+
+class _MemoryWorkspaceStore:
+    """In-memory stand-in for the db_s3 store, so tests never write to the shared services."""
+
+    def __init__(self) -> None:
+        self._files: dict[tuple[str, str], tuple[bytes, float]] = {}
+
+    def read_bytes(self, project_id, rel):
+        hit = self._files.get((project_id, rel))
+        return hit[0] if hit else None
+
+    def write_bytes(self, project_id, rel, data):
+        self._files[(project_id, rel)] = (bytes(data), time.time())
+
+    def exists(self, project_id, rel):
+        return (project_id, rel) in self._files
+
+    def list_files(self, project_id):
+        return sorted(rel for pid, rel in self._files if pid == project_id)
+
+    def delete(self, project_id, rel):
+        self._files.pop((project_id, rel), None)
+
+    def info(self, project_id, rel):
+        hit = self._files.get((project_id, rel))
+        return (len(hit[0]), hit[1]) if hit else None
+
+    def projects(self):
+        return sorted({pid for pid, _ in self._files})
+
+
+@pytest.fixture(autouse=True)
+def _workspace_backend_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test with the fs backend, or with AW_TEST_WORKSPACE=db to use the store path."""
+    import src.core.workspace_store as ws
+    from src.core.config import settings
+
+    # .env may select db_s3 for the running app; tests choose their backend here, not from .env.
+    if os.getenv("AW_TEST_WORKSPACE", "fs") != "db":
+        monkeypatch.setattr(settings, "workspace_backend", "fs")
+        return
+    store = _MemoryWorkspaceStore()
+    monkeypatch.setattr(settings, "workspace_backend", "db_s3")
+    monkeypatch.setattr(ws, "get_store", lambda: store)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_llm_layer(monkeypatch: pytest.MonkeyPatch):
+    """Fresh provider instances and circuit breakers per test, and no retry back-off sleeps
+    (tests that exercise retries set LLM_MAX_RETRIES themselves)."""
+    from src.core.config import settings
+    from src.llm.factory import ProviderRegistry
+    from src.llm.middleware.resilience import reset_breakers
+
+    monkeypatch.setattr(settings, "llm_max_retries", 0)
+    monkeypatch.setattr(settings, "llm_fallback_provider", "")
+    ProviderRegistry.clear()
+    reset_breakers()
+    yield
+    ProviderRegistry.clear()
+    reset_breakers()
 
 
 @pytest.fixture(autouse=True)

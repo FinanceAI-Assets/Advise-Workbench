@@ -84,7 +84,10 @@ class SchemaAnalyzer:
                 if md_file.name in ("index.md", "log.md", "SCHEMA.md", "maintenance.log"):
                     continue
 
-                content = md_file.read_text(encoding="utf-8")
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
                 category_match = re.search(r"^category:\s*([^\n]+)", content, re.MULTILINE)
 
                 if category_match:
@@ -128,7 +131,10 @@ class SchemaAnalyzer:
                 if md_file.name in ("index.md", "log.md", "SCHEMA.md", "maintenance.log"):
                     continue
 
-                content = md_file.read_text(encoding="utf-8")
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    content = md_file.read_text(encoding="latin-1", errors="ignore")
 
                 # Find all [[...]] links and extract surrounding context
                 for match in re.finditer(r"\[\[([^\]]+)\]\]", content):
@@ -215,7 +221,10 @@ class SchemaAnalyzer:
                 for page_id in cluster:
                     page_file = self.wiki_dir / f"{page_id}.md"
                     if page_file.exists():
-                        content = page_file.read_text(encoding="utf-8")
+                        try:
+                            content = page_file.read_text(encoding="utf-8")
+                        except UnicodeDecodeError:
+                            content = page_file.read_text(encoding="latin-1", errors="ignore")
                         if "category: synthesis" in content or "semantic_type: synthesis" in content:
                             has_synthesis = True
                             break
@@ -226,9 +235,13 @@ class SchemaAnalyzer:
                     for page_id in list(cluster)[:3]:
                         page_file = self.wiki_dir / f"{page_id}.md"
                         if page_file.exists():
+                            try:
+                                page_content = page_file.read_text(encoding="utf-8")
+                            except UnicodeDecodeError:
+                                page_content = page_file.read_text(encoding="latin-1", errors="ignore")
                             title_match = re.search(
                                 r"^title:\s*['\"]?([^'\"\\n]+)",
-                                page_file.read_text(encoding="utf-8"),
+                                page_content,
                                 re.MULTILINE
                             )
                             if title_match:

@@ -6,6 +6,7 @@ from src.agents.base_agent import AgentContext, AgentOutput
 from src.prompts.prompt_hygiene import context_excerpt_block, process_model_json_block
 from src.guardrails.policy import PROPOSAL_SKILL_ID, proposal_prompt_contract
 from src.agents.specialists import _shared
+from src.llm import gateway
 from src.agents.specialists._shared import (
     _build_system_from_skill,
     _deliverable_type_for_skill,
@@ -124,7 +125,21 @@ def run_pdf_agent(ctx: AgentContext) -> AgentOutput:
                                           temperature=sb.temperature, max_rounds=sb.max_rounds)
         if not md:
             try:
-                md = _shared.claude_generate(system=sb.system, user=user, temperature=sb.temperature, max_tokens=1800)
+                # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+                # md = _shared.claude_generate(system=sb.system, user=user, temperature=sb.temperature, max_tokens=1800)
+                
+                # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+                # gateway imported at module level (line ~15)
+                from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+                msg = gateway.create_message(
+                    model=gateway.model_for("default"),
+                    max_tokens=1800,
+                    temperature=sb.temperature,
+                    system=sb.system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                _record_message_usage(msg)
+                md = _extract_final_text_from_message(msg)
             except Exception:
                 md = None
         if isinstance(md, str) and md.strip():

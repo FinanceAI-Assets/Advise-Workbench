@@ -5,12 +5,15 @@ import { Skeleton } from "@/components/ui/Skeleton";
 /** Standard workbench page layout: breadcrumb, title row with actions, and content. The shell adds the footer. */
 export function PageFrame({
   breadcrumb,
+  back,
   title,
   subtitle,
   actions,
   children,
 }: {
   breadcrumb: ReactNode;
+  // A BackButton, shown beside the title on screens below the side nav's top level.
+  back?: ReactNode;
   title: string;
   subtitle?: ReactNode;
   actions?: ReactNode;
@@ -22,9 +25,12 @@ export function PageFrame({
         {breadcrumb}
       </nav>
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="admin-page-title text-2xl font-semibold text-[var(--text-default)]">{title}</h1>
-          {subtitle ? <p className="admin-page-subtitle mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p> : null}
+        <div className="flex min-w-0 items-start gap-3">
+          {back}
+          <div className="min-w-0">
+            <h1 className="admin-page-title text-2xl font-semibold text-[var(--text-default)]">{title}</h1>
+            {subtitle ? <p className="admin-page-subtitle mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p> : null}
+          </div>
         </div>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </header>

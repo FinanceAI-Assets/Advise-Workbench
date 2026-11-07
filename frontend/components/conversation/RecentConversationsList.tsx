@@ -21,7 +21,7 @@ export function RecentConversationsList({
               disabled={item.active || !onSelect}
               onClick={() => onSelect?.(item.id)}
               className={cn(
-                "w-full truncate px-0 py-1 text-left text-sm disabled:opacity-100",
+                "block w-full truncate px-0 py-1 text-left text-sm disabled:opacity-100",
                 item.active
                   ? "font-semibold text-[var(--text-default)]"
                   : "text-[var(--text-muted)] hover:text-[var(--text-default)]"

@@ -8,11 +8,16 @@ from typing import Any
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.core.env_files import dotenv_ignored
+
 logger = logging.getLogger(__name__)
 
 
 def _get_env_files() -> list[str]:
     """Calculate .env file paths relative to this config.py file."""
+    if dotenv_ignored():
+        return []
+
     repo_root = Path(__file__).resolve().parents[2]  # src/core/config.py -> repo root
 
     env_files = [str(repo_root / ".env")]
@@ -53,6 +58,13 @@ class Settings(BaseSettings):
     # When False, Redis must be reachable or CacheService startup fails (avoids split-brain cache across API replicas).
     cache_allow_memory_fallback: bool = True
     workspace_root: str = "./workspace"
+    # fs: project files in workspace_root (default). db_s3: text in Postgres workspace_files, binaries in S3.
+    workspace_backend: str = "fs"
+    s3_endpoint_url: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_bucket: str = ""
+    s3_ca_file: str = ""
     redis_url: str = "redis://localhost:6379/0"
     # Shared connection pool for SSE pub/sub. Each active SSE stream borrows one
     # pubsub connection; size to >= peak concurrent streams expected.
@@ -175,6 +187,8 @@ class Settings(BaseSettings):
     auth_allow_self_signup: bool = False
     # Comma-separated email domains that may sign in. Empty allows any domain.
     auth_allowed_email_domains: str = "deloitte.com"
+    # Lets POST /api/auth/bootstrap-admin create an administrator without a token. Empty disables the route.
+    admin_bootstrap_secret: str = ""
     # Microsoft Entra ID (OIDC) sign-in. Disabled until a client ID and secret are configured.
     microsoft_sso_client_id: str = ""
     microsoft_sso_client_secret: str = ""
@@ -217,13 +231,57 @@ class Settings(BaseSettings):
     openobserve_stream: str = "advise_workbench"
     openobserve_metrics_interval_sec: int = 15
 
-    # Model provider. Empty values fall back to config/model_config.yaml (see src/llm/config.py).
-    llm_provider: str = ""  # anthropic | claude_cli | openai_compatible
+    # Model provider (src/llm/config.py resolves these; see .env.example for one block per provider).
+    # LLM_PROVIDER: claude_cli | anthropic | openai | openai_compatible | azure_openai | bedrock, or an
+    # OpenAI-compatible preset: groq | openrouter | mistral | deepseek | together | xai | ollama | lmstudio | litellm.
+    # The generic LLM_* values override the provider-specific ones below, so all keys can sit in .env at
+    # once and switching provider is a one-line change.
+    llm_provider: str = ""
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
     llm_planning_model: str = ""
     llm_critique_model: str = ""
+    llm_timeout_sec: float = 180.0  # default per-request timeout when the caller passes none
+    llm_max_retries: int = 3  # retries for rate limits, timeouts and 5xx (not for bad requests or auth)
+    llm_circuit_breaker_failures: int | None = None  # None -> anthropic_circuit_breaker_failures
+    llm_circuit_breaker_reset_sec: int | None = None  # None -> anthropic_circuit_breaker_reset_sec
+    llm_fallback_provider: str = ""  # optional second provider used when the primary is unavailable
+    llm_fallback_model: str = ""
+    llm_required: bool = False  # true: refuse to start when the provider config is invalid (production)
+
+    anthropic_model: str = ""  # falls back to anthropic_claude_model
+    claude_cli_path: str = "claude"
+    claude_cli_model: str = ""  # empty -> the CLI's own default model
+    claude_cli_timeout_sec: float = 600.0
+    claude_cli_tools_enabled: bool = True  # expose the app's tools to the CLI over a loopback MCP server
+
+    openai_api_key: str = ""
+    openai_base_url: str = ""
+    openai_model: str = ""
+    groq_api_key: str = ""
+    openrouter_api_key: str = ""
+    mistral_api_key: str = ""
+    deepseek_api_key: str = ""
+    together_api_key: str = ""
+    xai_api_key: str = ""
+    litellm_api_key: str = ""
+    openai_compat_supports_tools: bool = True
+    openai_compat_supports_vision: bool = True
+    openai_compat_max_tokens_param: str = "auto"  # auto | max_tokens | max_completion_tokens
+
+    azure_openai_endpoint: str = ""  # https://<resource>.openai.azure.com
+    azure_openai_api_key: str = ""
+    azure_openai_api_version: str = "2024-10-21"  # empty -> the v1 API (/openai/v1, model in the body)
+    azure_openai_deployment: str = ""
+
+    aws_region: str = ""
+    aws_profile: str = ""
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_session_token: str = ""
+    bedrock_model: str = ""  # e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    bedrock_anthropic_tools_enabled: bool = False  # bash / text-editor betas, only for models that support them
 
     anthropic_api_key: str = ""
     anthropic_claude_model: str = "claude-haiku-4-5"
@@ -234,9 +292,15 @@ class Settings(BaseSettings):
     coordinator_llm_planning_enabled: bool = True
     anthropic_thinking_budget_tokens: int = 8000
     anthropic_coordinator_plan_max_tokens: int = 8192
-    # Anthropic pricing ($/MTok) — update when rates change or override via env
-    llm_price_input_per_mtok: float = 3.00
-    llm_price_output_per_mtok: float = 15.00
+    # Anthropic pricing ($/MTok) — Workstream F: per-model pricing support
+    # Workstream F: model-specific prices as JSON override
+    llm_model_prices_json: str = ""  # {"claude-opus-4-8": [3.00, 15.00], "claude-haiku-4-5": [1.00, 5.00]}
+    # Old hardcoded prices (kept for reference):
+    # llm_price_input_per_mtok: float = 3.00
+    # llm_price_output_per_mtok: float = 15.00
+    # Legacy global fallback (used if model price not found):
+    llm_price_input_per_mtok: float = 3.00  # Fallback when no model-specific price
+    llm_price_output_per_mtok: float = 15.00  # Fallback when no model-specific price
     llm_price_cache_read_per_mtok: float = 0.30
     llm_price_cache_creation_per_mtok: float = 3.75
     # Token budget & compression settings
@@ -245,10 +309,22 @@ class Settings(BaseSettings):
     prompt_compression_enabled: bool = True
     prompt_compression_strategy: str = "aggressive"  # "conservative" or "aggressive"
     prompt_compression_log_verbose: bool = True
-    # Per-call budget limits (in tokens)
+    # Per-call budget limits (in tokens) — Workstream B2: now enforced via check_budget
     subagent_max_prompt_tokens: int = 6000  # max prompt tokens for subagent calls
     coordinator_max_prompt_tokens: int = 12000  # max prompt tokens for coordinator planning
     proposal_max_prompt_tokens: int = 8000  # max prompt tokens for proposal generation
+    # Workstream C: per-agent context token limits (replacing char-based slices)
+    subagent_context_tokens_xlsx: int = 1700  # ~6000 chars / 3.5
+    subagent_context_tokens_narrative: int = 1150  # ~4000 chars / 3.5
+    subagent_context_tokens_docx: int = 1150  # ~4000 chars / 3.5
+    subagent_context_tokens_pptx: int = 1000  # ~3500 chars / 3.5
+    subagent_context_tokens_pdf: int = 1000  # ~3500 chars / 3.5
+    # Old char-based limits (kept for reference, Workstream C converts to tokens):
+    # subagent_context_chars_xlsx: int = 6000
+    # subagent_context_chars_narrative: int = 4000
+    # subagent_context_chars_docx: int = 4000
+    # subagent_context_chars_pptx: int = 3500
+    # subagent_context_chars_pdf: int = 3500
     # Cowork-style context: conversation digest + planner retrieval excerpt caps.
     conversation_digest_max_chars: int = 12000
     conversation_digest_message_limit: int = 45
@@ -260,6 +336,19 @@ class Settings(BaseSettings):
     conversation_digest_exclude_stale_sources: bool = True
     subagent_conversation_digest_max_chars: int = 3500
     coordinator_planning_context_chars: int = 7000
+    # Conversation summary trigger configuration for inline generation
+    conversation_summary_trigger_interval: int = Field(
+        default=6,
+        ge=1,
+        le=100,
+        description="Message count interval for triggering conversation summary generation (e.g., 6 = trigger at 6, 12, 18... messages)"
+    )
+    conversation_summary_recent_exclude_count: int = Field(
+        default=6,
+        ge=0,
+        le=50,
+        description="Number of recent messages to exclude from summary (kept verbatim in recent context)"
+    )
     # Optional extended thinking for narrative subagent (extra cost when enabled).
     subagent_narrative_thinking_enabled: bool = False
     anthropic_subagent_thinking_budget_tokens: int = 8000
@@ -396,7 +485,16 @@ class Settings(BaseSettings):
     memory_v2_retrieval_enabled: bool = True
     # When True, coordinator uses assemble_v2 so MemoryItem, MemoryEvent, and ProjectMemoryProfile feed assembled_context.
     memory_compaction_v1_enabled: bool = True
+    # DEPRECATED (Workstream A): kept for backward compat, use memory_context_token_budget instead
     memory_compaction_char_cap: int = 32000
+    # Token-aware context budget (per-model allocation)
+    memory_context_token_budget: int = 32000  # total budget for memory pool
+    memory_context_output_reserve_tokens: int = 4096  # reserve for model output
+    memory_context_system_reserve_tokens: int = 4000  # min system prompt tokens
+    memory_context_share_memory: float = 0.40  # fraction for memory sections
+    memory_context_share_retrieved: float = 0.40  # fraction for retrieved chunks
+    memory_context_share_history: float = 0.20  # fraction for run history (WhatChanged)
+    memory_token_count_exact: bool = True  # use Anthropic count_tokens API when available
     # Block MemoryItem rows with consent_state != allowed from context and memory_items tool (DPDP-aware).
     memory_respect_consent_in_context: bool = True
     # When True, MemoryItem rows with principal_id set require a matching Consent Ledger grant (latest row).
@@ -626,6 +724,8 @@ class Settings(BaseSettings):
                 "For local development run `make dev.secret` or: "
                 "python -c \"import secrets; print(secrets.token_urlsafe(32))\" and add JWT_SECRET to .env"
             )
+        if 0 < len(self.admin_bootstrap_secret.strip()) < 32:
+            raise ValueError("ADMIN_BOOTSTRAP_SECRET must be at least 32 characters, or unset to disable the route")
         if not (self.database_url or "").strip():
             raise ValueError("DATABASE_URL must not be empty")
         if self.run_queue_backend not in {"local", "redis"}:
@@ -686,6 +786,26 @@ def log_memory_config_warnings() -> None:
             "MEMORY_COMPACTION_V1_ENABLED is true but MEMORY_V2_RETRIEVAL_ENABLED is false: "
             "MemoryItem rows from the Memory page are not merged into assembled_context; "
             "memory events and project profile still apply."
+        )
+
+    # Validate memory token budget
+    if settings.anthropic_max_tokens_per_run > 0 and settings.memory_context_token_budget > settings.anthropic_max_tokens_per_run:
+        log.warning(
+            f"MEMORY_CONTEXT_TOKEN_BUDGET ({settings.memory_context_token_budget}) exceeds "
+            f"ANTHROPIC_MAX_TOKENS_PER_RUN ({settings.anthropic_max_tokens_per_run}); "
+            "memory pool may be constrained by the per-run limit."
+        )
+
+    # Validate share sum
+    share_sum = (
+        settings.memory_context_share_memory +
+        settings.memory_context_share_retrieved +
+        settings.memory_context_share_history
+    )
+    if abs(share_sum - 1.0) > 0.01:
+        log.warning(
+            f"MEMORY_CONTEXT_SHARE_* settings sum to {share_sum:.2f}, not 1.0; "
+            "shares will be normalized but may not match intent."
         )
 
 

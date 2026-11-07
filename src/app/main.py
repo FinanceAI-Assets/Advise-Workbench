@@ -15,13 +15,13 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
+from src.core.env_files import dotenv_ignored
 from src.core.exceptions import AdviseWorkbenchHTTPException
 
 _repo_root = Path(__file__).resolve().parents[2]
 # Repo-root `.env` wins over variables already in the environment so RUN_QUEUE_BACKEND / DATABASE_URL match what you edit there.
-# The test suites set ADVISE_WORKBENCH_SKIP_DOTENV (tests/*/conftest.py): importing the app must never point them at
-# the real (shared) database and services from a developer's `.env`.
-if not os.environ.get("ADVISE_WORKBENCH_SKIP_DOTENV"):
+# Tests skip it: it names shared databases and services (see tests/conftest.py).
+if not dotenv_ignored():
     load_dotenv(_repo_root / ".env", override=True)
 
 # All app-level imports MUST follow the load_dotenv() call above so that
@@ -47,7 +47,8 @@ from src.deliverables.xlsx.deliverable_xlsx import XLSXDeliverable
 from src.core.middleware import request_timing_middleware
 from src.core.rate_limit import limiter
 from src.core.request_context import get_correlation_id
-from src.core.db.session import engine, init_db
+from src.core.db.session import engine, init_db, SessionLocal
+from src.llm.startup import shutdown_llm, validate_llm_on_startup
 from src.tools.mcp.registry import shutdown_mcp_servers, startup_mcp_servers
 from src.core.observability.metrics import prometheus_text
 from src.core.observability.metrics import snapshot as observability_snapshot
@@ -62,6 +63,10 @@ from src.workflows.orchestrator import (
     start_execution_worker,
 )
 from src.extensions.scheduler.scheduled_tasks import start_scheduler_worker
+from src.workflows.workers.conversation_idle_worker import (
+    start_idle_detection_worker,
+    stop_idle_detection_worker,
+)
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -111,6 +116,7 @@ async def lifespan(_app: FastAPI):
     )
     log_document_pipeline_config("backend")
     init_otel_if_enabled()
+    validate_llm_on_startup()
     init_db()
     if settings.enable_deliverable_registry:
         DeliverableRegistry.register("pptx", PPTXDeliverable())
@@ -123,9 +129,33 @@ async def lifespan(_app: FastAPI):
     reconcile_stalled_approved_runs_on_startup()
     if settings.scheduler_enabled:
         start_scheduler_worker()
+    # NEW: Crash recovery - reconcile orphaned summaries from previous crashes
+    try:
+        import asyncio
+        from src.workflows.conversation_summary_worker import reconcile_orphaned_summaries
+
+        db = SessionLocal()
+        try:
+            logger = logging.getLogger(__name__)
+            result = asyncio.run(reconcile_orphaned_summaries(db))
+            recovered = result.get("orphaned_summaries_recovered", 0)
+            if recovered > 0:
+                logger.info(f"[STARTUP] Crash recovery complete: {recovered} orphaned summaries restored from JSON files")
+        finally:
+            db.close()
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[STARTUP] Crash recovery skipped: {e}")
+    # END NEW
+    # NEW: Start conversation idle detection worker (Phase 2: Idle Detection & Session Management)
+    start_idle_detection_worker()
     yield
+    # NEW: Stop conversation idle detection worker (Phase 2: Idle Detection & Session Management)
+    stop_idle_detection_worker(timeout_sec=5)
+    # END NEW
     drain_execution_worker(timeout_sec=settings.run_drain_timeout_sec)
     await shutdown_mcp_servers()
+    shutdown_llm()
     flush_telemetry()
 
 

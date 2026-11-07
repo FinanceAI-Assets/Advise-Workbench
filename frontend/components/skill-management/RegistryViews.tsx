@@ -17,6 +17,7 @@ import {
   TabLinks,
 } from "@/components/skill-management/SkillParts";
 import { Button } from "@/components/ui/Button";
+import { BackButton } from "@/components/workbench/BackButton";
 import { PageFrame } from "@/components/workbench/PageFrame";
 import { useSkillManagement } from "@/hooks/useSkillManagement";
 import { candidateGate, passedCount, type Skill, totalCount } from "@/lib/skillManagement";
@@ -28,6 +29,7 @@ function RegistryFrame({ active, crumb, title, subtitle, children }: { active: "
   const candidates = skills.filter((s) => s.candidate).length;
   return (
     <PageFrame
+      back={active === "candidates" ? <BackButton href={SKILLS_HOME} label="Back to published skills" /> : undefined}
       breadcrumb={`Admin console / Skills management / ${crumb}`}
       title={title}
       subtitle={subtitle}

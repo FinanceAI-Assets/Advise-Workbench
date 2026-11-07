@@ -14,6 +14,14 @@ from collections.abc import Iterable
 
 from src.deliverables.deliverable_utils import humanize_wiki_links
 from src.core.state import DecisionBranch, ProcessModel, ProcessStep
+from src.llm import gateway
+from src.llm.claude import (
+    _extract_first_json_object,
+    claude_generate_json,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # is_claude_enabled,
+)
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
 logger = logging.getLogger(__name__)
 
@@ -183,11 +191,18 @@ def _llm_structure(text: str, ctx: str) -> ProcessModel | None:
     """LLM structuring pass: separate verb-led steps from entities; fail-open to None."""
     try:
         from src.core.config import settings
-        from src.llm.claude import claude_generate_json, is_claude_enabled
+    # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate_json, is_claude_enabled
     except Exception as exc:
         logger.warning("%s: suppressed error: %s", '_llm_structure', exc)
         return None
-    if not is_claude_enabled() or not getattr(settings, "process_extraction_llm_enabled", True):
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled()
+    # from src.llm.claude import claude_generate_json, is_claude_enabled
+    # [DEPRECATED: Old check - kept for reference]
+    # if not is_claude_enabled() or not getattr(settings, "process_extraction_llm_enabled", True):
+    #     return None
+    # [NEW: Gateway-based provider-agnostic check]
+    if not gateway.is_enabled() or not getattr(settings, "process_extraction_llm_enabled", True):
         return None
     system = (
         "You extract a structured BUSINESS process from messy notes/context for a consulting "
@@ -206,7 +221,25 @@ def _llm_structure(text: str, ctx: str) -> ProcessModel | None:
     )
     user = f"Instruction:\n{text[:3000]}\n\nAssembled context:\n{ctx[:4000]}"
     try:
-        payload = claude_generate_json(system=system, user=user, temperature=0.2, max_tokens=2000)
+        # [DEPRECATED: Old claude_generate_json call]
+        # payload = claude_generate_json(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=2000,
+            temperature=0.2,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = _extract_first_json_object(text)
     except Exception as exc:  # noqa: BLE001 — fail-open onto the heuristic
         logger.warning("LLM process structuring failed: %s", exc)
         return None

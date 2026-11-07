@@ -7,7 +7,12 @@ from openpyxl import load_workbook
 from pptx import Presentation
 
 from src.core.config import settings
-from src.core.storage import save_run_artifacts
+from src.core.storage import save_run_artifacts, workspace_path
+
+
+def _stored(project: str, run: str, name: str):
+    """Where a run's output lives: a folder under tmp_path in fs mode, the store in db_s3 mode."""
+    return workspace_path(project) / "runs" / run / name
 
 
 def test_xlsx_cells_contract_writes_formulas_and_styles(tmp_path) -> None:
@@ -26,10 +31,10 @@ def test_xlsx_cells_contract_writes_formulas_and_styles(tmp_path) -> None:
             ],
         }
         save_run_artifacts("p_xlsx", "r_xlsx", payload)
-        out = Path(tmp_path) / "p_xlsx" / "runs" / "r_xlsx" / "output.xlsx"
+        out = _stored("p_xlsx", "r_xlsx", "output.xlsx")
         assert out.exists()
 
-        wb = load_workbook(out, data_only=False)
+        wb = load_workbook(BytesIO(out.read_bytes()), data_only=False)
         ws = wb["Finance"]
         assert ws["A1"].value == "Revenue"
         assert ws["A1"].font.bold is True
@@ -75,10 +80,10 @@ def test_pptx_slides_contract_renders_table_and_chart(tmp_path) -> None:
             ],
         }
         save_run_artifacts("p_pptx", "r_pptx", payload)
-        out = Path(tmp_path) / "p_pptx" / "runs" / "r_pptx" / "output.pptx"
+        out = _stored("p_pptx", "r_pptx", "output.pptx")
         assert out.exists()
 
-        prs = Presentation(str(out))
+        prs = Presentation(BytesIO(out.read_bytes()))
         assert len(prs.slides) == 2
         first_shapes = list(prs.slides[0].shapes)
         second_shapes = list(prs.slides[1].shapes)
@@ -87,7 +92,7 @@ def test_pptx_slides_contract_renders_table_and_chart(tmp_path) -> None:
 
         # Editable-chart contract: the chart must ship with an embedded xlsx
         # workbook so PowerPoint's "Edit Data" opens Excel with real cells.
-        with zipfile.ZipFile(out) as pkg:
+        with zipfile.ZipFile(BytesIO(out.read_bytes())) as pkg:
             embed_names = [n for n in pkg.namelist() if n.startswith("ppt/embeddings/") and n.endswith(".xlsx")]
             assert embed_names, "expected an embedded .xlsx workbook for the chart, found none"
             wb_bytes = pkg.read(embed_names[0])
@@ -121,10 +126,10 @@ def test_docx_markdown_contract_renders_lists_and_tables(tmp_path) -> None:
             "process_model": {"process_name": "Finance Transformation"},
         }
         save_run_artifacts("p_docx", "r_docx", payload)
-        out = Path(tmp_path) / "p_docx" / "runs" / "r_docx" / "output.docx"
+        out = _stored("p_docx", "r_docx", "output.docx")
         assert out.exists()
 
-        doc = Document(str(out))
+        doc = Document(BytesIO(out.read_bytes()))
         texts = [p.text for p in doc.paragraphs if p.text.strip()]
         assert any("Finance Transformation" in t for t in texts)
         assert any("Executive Summary" in t for t in texts)

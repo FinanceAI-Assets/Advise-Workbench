@@ -634,7 +634,13 @@ These variables control how **Memory page** rows (`MemoryItem`), **memory events
 |---|---|---|
 | `MEMORY_COMPACTION_V1_ENABLED` | `true` | Coordinator uses `assemble_v2` so memory events + profile + (when v2 retrieval is on) memory items shape context. |
 | `MEMORY_V2_RETRIEVAL_ENABLED` | `true` | Loads recent `MemoryItem` rows into context (merged as `long_term_items`). If `false`, memory events and `ProjectMemoryProfile` still apply, but **not** Memory page items. |
-| `MEMORY_COMPACTION_CHAR_CAP` | `32000` | Character budget for the assembled v2 bundle. |
+| `MEMORY_CONTEXT_TOKEN_BUDGET` | `32000` | Token budget for the assembled v2 bundle (per-model allocation). Divided across system, memory, retrieved, and history sections. |
+| `MEMORY_CONTEXT_OUTPUT_RESERVE_TOKENS` | `4096` | Tokens reserved for model output. |
+| `MEMORY_CONTEXT_SYSTEM_RESERVE_TOKENS` | `4000` | Minimum tokens for system prompt. |
+| `MEMORY_CONTEXT_SHARE_MEMORY` | `0.40` | Fraction of context budget for memory sections (ObjectiveNow, NonNegotiables, KnownFailures). |
+| `MEMORY_CONTEXT_SHARE_RETRIEVED` | `0.40` | Fraction of context budget for retrieved chunks (Evidence). |
+| `MEMORY_CONTEXT_SHARE_HISTORY` | `0.20` | Fraction of context budget for run history (WhatChanged). |
+| `MEMORY_TOKEN_COUNT_EXACT` | `true` | Use Anthropic `count_tokens` API for exact counting when available; falls back to estimation. |
 | `MEMORY_RESPECT_CONSENT_IN_CONTEXT` | `true` | Skips `MemoryItem` rows whose `consent_state` is not empty/`allowed` in context and in the `memory_items` tool. |
 | `MEMORY_ENFORCE_CONSENT_LEDGER` | `false` | When `true`, rows with `principal_id` set require a **granted** latest [`ConsentLedger`](src/app/api/dpdp.py) row for that principal (`project_id` + `principal_id`). Counter: `memory_items_ledger_blocked_total`. |
 | `MEMORY_BATCH_CREATE_ENABLED` | `true` | Enables `POST /api/memory/{pid}/batch` for confirmed multi-adds. |

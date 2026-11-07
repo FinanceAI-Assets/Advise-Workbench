@@ -11,6 +11,7 @@ import logging
 import re
 from typing import Any
 
+from src.core.workspace_store import as_path
 from src.memory.documents.source_chunks import (
     chunk_text,
     citation_label,
@@ -441,7 +442,7 @@ def load_source_registry(payload: dict[str, Any], run_dir: Any | None = None) ->
         from pathlib import Path
         import json as _json
 
-        path = Path(run_dir) / "compaction_snapshot.json"
+        path = as_path(run_dir) / "compaction_snapshot.json"
         if path.is_file():
             try:
                 data = _json.loads(path.read_text(encoding="utf-8"))

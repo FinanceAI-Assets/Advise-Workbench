@@ -4,10 +4,10 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import perf_counter
 
-from fastapi import Depends, HTTPException
+from fastapi import BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Any
 from sqlalchemy import delete, select
@@ -28,15 +28,20 @@ from src.core.tz import IST
 from src.core.db.models import (
     Conversation,
     ConversationMessage,
+    ConversationSummary,
+    EngagementMeta,
     ProjectMemoryProfile,
     Run,
     User,
 )
-from src.core.db.session import get_db
+from src.core.db.session import get_db, SessionLocal
 from src.app.api.projects._engagement_context import engagement_brief_text, engagement_discovery
 from src.agents.conversation import rag_agent, sheldon_router_agent
 from src.workflows.conversation_graph import run_turn
 from src.workflows.task_router.conversation_router import fallback_decision, route_turn
+# NEW: Phase 3 - State Synchronization & API Integration
+from src.extensions.conversation_session import EngagementSessionRegistry
+from src.core.tz import ist_now
 from src.memory.short_term.conversation_state import ConversationState, load_state, save_state, stamp_router
 from src.memory.long_term.memory_event_service import (
     get_aggregated_profile,
@@ -53,6 +58,10 @@ from src.guardrails.policy import (
     is_finance_proposal_intent,
 )
 from src.memory.retrieval import TieredContextEngine
+from src.query import service
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 from src.workflows.orchestrator import append_memory_event, append_run_event, enqueue_run_execution
 from src.extensions.swarm.swarm import persist_instruction_broadcast_swarm_event_payload
 
@@ -120,6 +129,179 @@ from src.app.api.projects._schemas import (  # noqa: F401
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+def _record_activity_sync(project_id: str) -> None:
+	"""Sync wrapper for recording engagement activity.
+
+	Called from background tasks to avoid event loop issues in sync routes.
+	Updates both in-memory registry and database engagement_meta.
+	"""
+	try:
+		import asyncio
+		loop = asyncio.new_event_loop()
+		asyncio.set_event_loop(loop)
+		try:
+			loop.run_until_complete(EngagementSessionRegistry.record_activity(project_id))
+		finally:
+			loop.close()
+
+		# Also update database last_activity_at for idle detection
+		db = SessionLocal()
+		try:
+			engagement = db.query(EngagementMeta).filter(
+				EngagementMeta.project_id == project_id
+			).first()
+			if engagement:
+				engagement.last_activity_at = ist_now()
+				db.commit()
+				_LOG.debug(f"Updated last_activity_at for project {project_id}")
+			else:
+				_LOG.warning(f"No engagement found for project {project_id}")
+		except Exception as db_e:
+			db.rollback()
+			_LOG.error(f"Failed to update last_activity_at in DB: {db_e}", exc_info=True)
+		finally:
+			db.close()
+	except Exception as e:
+		_LOG.error(f"Failed to record activity: {e}", exc_info=True)
+
+
+def _start_session_sync(project_id: str, idle_timeout: int = 120) -> None:
+	"""Sync wrapper for starting engagement session.
+
+	Called from background tasks to avoid event loop issues in sync routes.
+	Updates both in-memory registry and database engagement_meta.
+	"""
+	try:
+		import asyncio
+		loop = asyncio.new_event_loop()
+		asyncio.set_event_loop(loop)
+		try:
+			loop.run_until_complete(EngagementSessionRegistry.start_session(project_id, idle_timeout))
+		finally:
+			loop.close()
+
+		# Also update database last_activity_at when session starts
+		db = SessionLocal()
+		try:
+			engagement = db.query(EngagementMeta).filter(
+				EngagementMeta.project_id == project_id
+			).first()
+			if engagement:
+				engagement.last_activity_at = ist_now()
+				db.commit()
+				_LOG.debug(f"Updated last_activity_at for project {project_id}")
+		except Exception as db_e:
+			db.rollback()
+			_LOG.error(f"Failed to update last_activity_at in DB: {db_e}", exc_info=True)
+		finally:
+			db.close()
+	except Exception as e:
+		_LOG.error(f"Failed to start engagement session: {e}", exc_info=True)
+
+
+async def _handle_fsm_state_transition_to_done(
+	db: Session,
+	project_id: str,
+	user_id: str,
+	new_state: str
+) -> None:
+	"""Detect and handle FSM state transition to 'done'.
+
+	When conversation FSM transitions to 'done' state, trigger summary generation.
+	This captures completions driven by natural FSM progression (not just explicit
+	completion endpoint or deliverable finalization).
+
+	Args:
+		db: Database session
+		project_id: Project/engagement ID
+		user_id: User ID
+		new_state: The new state being transitioned to
+	"""
+	if new_state != "done":
+		return  # Only handle transitions to "done" state
+
+	try:
+		_LOG.info(f"[FSM State Transition] Detected transition to 'done' state for {project_id}")
+
+		# Generate summary with fsm_done trigger
+		from src.workflows.conversation_summary_worker import _generate_engagement_summary, _upsert_conversation_summary
+
+		summary = await _generate_engagement_summary(
+			db,
+			project_id,
+			trigger="engagement_completed",  # Use same trigger as explicit completion
+			idle_duration_sec=0
+		)
+
+		if summary:
+			# STEP 1: Save to JSON file FIRST (source of truth)
+			json_saved = False
+			try:
+				from src.memory.short_term.conversation_state import load_state, save_state
+
+				conv = db.query(Conversation).filter(
+					Conversation.project_id == project_id,
+					Conversation.user_id == user_id
+				).order_by(Conversation.created_at.desc()).first()
+
+				if conv:
+					conv_state = load_state(conv)
+					conv_state.conversation_summary = summary.summary_text
+					save_state(conv, conv_state)
+					json_saved = True
+
+					_LOG.info(f"[FSM State Transition] Saved summary to JSON for {project_id}")
+			except Exception as json_e:
+				_LOG.error(f"[FSM State Transition] Failed to save to JSON: {json_e}", exc_info=True)
+
+			# STEP 2: Save to database SECOND - only if JSON save succeeded
+			if json_saved:
+				try:
+					await _upsert_conversation_summary(db, summary)
+					_LOG.info(f"[FSM State Transition] Saved summary to database for {project_id}")
+				except Exception as db_e:
+					_LOG.error(f"[FSM State Transition] Failed to save to database: {db_e}", exc_info=True)
+
+	except Exception as e:
+		_LOG.error(f"[FSM State Transition] Error handling done state for {project_id}: {e}", exc_info=True)
+
+
+# Track previous state to detect transitions (for FSM state change detection)
+_previous_state_cache: dict[str, str] = {}
+
+
+async def save_state_with_fsm_check(
+	conv: Conversation,
+	state: ConversationState,
+	db: Session,
+	user_id: str
+) -> None:
+	"""Wrapper around save_state that detects FSM transitions to 'done' state.
+
+	When conversation state transitions from any state to 'done', this triggers
+	summary generation to capture engagement completion driven by FSM progression.
+
+	Args:
+		conv: Conversation object
+		state: ConversationState to save
+		db: Database session
+		user_id: User ID for summary generation
+	"""
+	old_state = _previous_state_cache.get(conv.project_id, "unknown")
+	new_state = state.state
+
+	# Save state to JSON file
+	save_state(conv, state)
+
+	# Detect transition to "done" and trigger summary if it's a real transition
+	if old_state != new_state and new_state == "done":
+		_LOG.info(f"[FSM Transition] {conv.project_id}: {old_state} → {new_state}")
+		await _handle_fsm_state_transition_to_done(db, conv.project_id, user_id, new_state)
+
+	# Update cache for next time
+	_previous_state_cache[conv.project_id] = new_state
 
 
 def _generate_and_execute_plan(
@@ -502,7 +684,8 @@ def _propose_discovery_questions(
     wiki_prefilled_slots: list[str] | None = None,
     conv_slots: dict | None = None,
 ) -> dict:
-    from src.llm.claude import claude_generate_json
+    # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate_json
 
     prior_context = "\n".join(
         f"{m.get('role', 'user')}: {str(m.get('content') or '').strip()}"
@@ -529,7 +712,13 @@ def _propose_discovery_questions(
         questions = [slot_questions[s] for s in normalized_missing]
     if normalized_missing:
         try:
-            payload = claude_generate_json(
+            # [NEW: Gateway-based provider-agnostic call with JSON extraction - Supports all LLM providers]
+            # All imports at module level: json, gateway, _extract_first_json_object,
+            # _record_message_usage, _extract_final_text_from_message
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
+                max_tokens=300,
+                temperature=0.2,
                 system=(
                     "Generate concise discovery questions for a consulting proposal kickoff. "
                     + (known_context + "\n" if known_context else "")
@@ -539,15 +728,22 @@ def _propose_discovery_questions(
                     )
                     + "Ask ONLY for listed missing_slots. Return JSON: {\"questions\": [\"...\", ...]}."
                 ),
-                user=(
-                    f"Instruction:\n{instruction}\n\n"
-                    f"Missing slots: {normalized_missing}\n\n"
-                    f"Recent context:\n{prior_context}\n\n"
-                    + (f"Wiki context excerpt:\n{str(wiki_context)[:2500]}" if wiki_context else "")
-                ),
-                temperature=0.2,
-                max_tokens=300,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Instruction:\n{instruction}\n\n"
+                        f"Missing slots: {normalized_missing}\n\n"
+                        f"Recent context:\n{prior_context}\n\n"
+                        + (f"Wiki context excerpt:\n{str(wiki_context)[:2500]}" if wiki_context else "")
+                    )
+                }],
             )
+            _record_message_usage(msg)
+            text = _extract_final_text_from_message(msg)
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = _extract_first_json_object(text)
             raw_q = payload.get("questions") if isinstance(payload, dict) else None
             if isinstance(raw_q, list):
                 questions = [str(q).strip() for q in raw_q if str(q).strip()][: max(1, len(normalized_missing))]
@@ -559,7 +755,8 @@ def _propose_discovery_questions(
 
     # Build a contextual, grounded message rather than the generic "3 quick inputs" template.
     # Reference what's already captured so Sheldon sounds like a colleague, not a form.
-    from src.llm.claude import claude_generate as _cg
+    # [DEPRECATED: Hardcoded claude_generate as _cg] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate as _cg
 
     known_bits: list[str] = []
     _client = known_slots.get("client") if isinstance(known_slots.get("client"), dict) else {}
@@ -576,7 +773,25 @@ def _propose_discovery_questions(
     known_summary = "; ".join(known_bits) if known_bits else ""
 
     try:
-        message = _cg(
+        # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        # ORIGINAL (BROKEN): user=(...) parameter was being ignored by all providers
+        # user=(
+        #     f"User said: {instruction}\n\n"
+        #     f"Still need (ask for ONE, the most important): {questions}\n\n"
+        #     f"Recent context:\n{prior_context}"
+        # ),
+
+        # FIX: Use messages=[...] format - works with Anthropic, Ollama, Groq, and all OpenAI-compatible providers
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            # ORIGINAL: max_tokens=200 (too low for extended reasoning)
+            # max_tokens=200,
+            # COMMENTED: max_tokens=1000 (hits Groq rate limits)
+            # max_tokens=1000,
+            max_tokens=400,  # NEW: Balanced for Ollama local + Groq free tier
+            temperature=0.4,
             system=(
                 "You are Sheldon, a consulting copilot. Be a thoughtful colleague, not a form.\n"
                 "Acknowledge what the user just shared (do NOT re-ask anything already captured).\n"
@@ -584,15 +799,25 @@ def _propose_discovery_questions(
                 "Keep it to 2-3 sentences. No numbered lists. One emoji max.\n"
                 + (f"Already established: {known_summary}\n" if known_summary else "")
             ),
-            user=(
-                f"User said: {instruction}\n\n"
-                f"Still need (ask for ONE, the most important): {questions}\n\n"
-                f"Recent context:\n{prior_context}"
-            ),
-            temperature=0.4,
-            max_tokens=200,
-        ).strip()
-    except Exception:
+            # NEW: Use messages=[...] instead of user=(...) - compatible with all providers
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"User said: {instruction}\n\n"
+                        f"Still need (ask for ONE, the most important): {questions}\n\n"
+                        f"Recent context:\n{prior_context}"
+                    )
+                }
+            ],
+        )
+        message = _extract_final_text_from_message(msg).strip()
+    except Exception as exc:
+        _LOG.error(
+            f"Discovery questions LLM call failed in _propose_discovery_questions: "
+            f"{exc.__class__.__name__}: {exc}",
+            exc_info=True
+        )
         q_count = len(questions)
         lead = "One more thing" if q_count == 1 else f"{q_count} things still needed"
         message = f"{lead}:\n- " + "\n- ".join(questions)
@@ -663,7 +888,9 @@ def _persist_conversational_response(
     router_intent: str | None = None,
     router_confidence: float | None = None,
     project_id: str | None = None,
-    history_summary: str = "",
+    # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+    # history_summary: str = "",
+    conversation_summary: str = "",  # [NEW: Unified summary context (rolling inline + session idle)]
 ) -> dict:
     """Generate a natural, colleague-like conversational response grounded in captured context.
 
@@ -671,7 +898,8 @@ def _persist_conversational_response(
     so responses reference actual facts (e.g. client name, audience, win themes) rather than
     asking for information the user has already supplied.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
 
     recent_context = "\n".join(
         f"{m.get('role', 'user').upper()}: {str(m.get('content') or '')[:600]}"
@@ -686,6 +914,10 @@ def _persist_conversational_response(
     unsurfaced_refs = [x for x in wiki_refs if x not in already_surfaced_refs]
     routed_intent = str(router_intent or "").strip().lower()
     routed_confidence = float(router_confidence or 0.0)
+    
+    # [NEW: Gateway-based provider-agnostic imports for conversational response generation]
+    # gateway imported at module level (line 55)
+    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
     known_bits: list[str] = []
     client = slots.get("client") if isinstance(slots.get("client"), dict) else {}
@@ -756,9 +988,16 @@ def _persist_conversational_response(
                 if ref not in wiki_refs:
                     wiki_refs.append(ref)
             unsurfaced_refs = [x for x in wiki_refs if x not in already_surfaced_refs]
+    # [DEPRECATED: Using history_summary removed - consolidated into conversation_summary]
+    # summary_block = (
+    #     f"Conversation summary (prior turns):\n{history_summary}\n\n"
+    #     if history_summary.strip()
+    #     else ""
+    # )
+    # [NEW: Updated to use unified conversation_summary instead]
     summary_block = (
-        f"Conversation summary (prior turns):\n{history_summary}\n\n"
-        if history_summary.strip()
+        f"Conversation summary (prior turns):\n{conversation_summary}\n\n"
+        if conversation_summary.strip()
         else ""
     )
     user_prompt = (
@@ -773,13 +1012,26 @@ def _persist_conversational_response(
     )
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
-            temperature=0.4,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+
+        # [NEW: Gateway-based provider-agnostic call]
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
             max_tokens=400,
-        ).strip()
-    except Exception:
+            temperature=0.4,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg)
+        response_text = _extract_final_text_from_message(msg).strip()
+    except Exception as exc:
+        # NEW: Log the actual error so we can diagnose why fallback is being used
+        _LOG.error(
+            f"Conversational response LLM call failed: "
+            f"{exc.__class__.__name__}: {exc}",
+            exc_info=True
+        )
         response_text = _grounded_conversational_fallback(slots=slots, missing_slots=missing_slots)
 
     msg = ConversationMessage(
@@ -808,7 +1060,16 @@ def _persist_rag_response(db: Session, conv: Conversation, pid: str, user: User,
     if history and history[-1].get("role") == "user" and str(history[-1].get("content") or "").strip() == content:
         history = history[:-1]  # the question itself, already stored
     try:
-        reply = rag_agent.answer(db, user_id=user.id, question=content, engagement_id=pid, history=history)
+        practice_ids = service.engagement_practice_ids(db, pid)
+        reply = rag_agent.answer(
+            db,
+            user_id=user.id,
+            question=content,
+            engagement_id=pid,
+            include_library=bool(practice_ids),
+            practice_ids=practice_ids or None,
+            history=history,
+        )
     except Exception:
         _LOG.exception("[SHELDON] project=%s rag_agent could not answer (search unavailable)", pid)
         reply = rag_agent.unavailable_reply(pid)
@@ -844,7 +1105,12 @@ def _persist_acknowledgment_response(
     Grounds the reply in captured slots and project context so responses
     remain coherent mid-conversation rather than generic.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
+    
+    # [NEW: Gateway-based provider-agnostic imports for acknowledgment responses]
+    # gateway imported at module level (line 55)
+    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
     recent_context = "\n".join(
         f"{m.get('role', 'user').upper()}: {str(m.get('content') or '')[:400]}"
@@ -900,12 +1166,21 @@ User's acknowledgment: {user_message}
 Respond briefly, referencing the captured context above."""
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=150,
             temperature=0.4,
-            max_tokens=150
-        ).strip()
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg)
+        response_text = _extract_final_text_from_message(msg).strip()
     except Exception:
         response_text = "Great! What would you like to tackle next? 🎯"
 
@@ -932,25 +1207,40 @@ def _update_conversation_summary(
     conv: "Conversation",
     state: "ConversationState",
     messages: list[dict],
+    db: Session | None = None,
 ) -> bool:
     """Generate and store a rolling summary of older conversation turns.
 
-    Triggers at 10 messages (first summary) and refreshes at every 10th message
-    thereafter (20, 30, …). Summarizes everything except the last 6 messages so
+    Triggers at 6 messages (first summary) and refreshes at every 6th message
+    thereafter (12, 18, …). Summarizes everything except the last 6 messages so
     the normal recent-history window remains verbatim.
+
+    Changed from 10-message to 6-message intervals for fresher context in routing decisions.
+
+    Also persists the summary to the database conversation_summaries table if db session provided.
 
     Returns True if the summary was updated; caller must call save_state() afterward.
     Non-blocking: failures are swallowed and return False.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
 
     n = len(messages)
-    if n < 10:
+    # [DEPRECATED: Original 10-message minimum trigger]
+    # if n < 10:
+    #     return False
+    # [NEW: Configurable message minimum trigger for fresher context]
+    if n < settings.conversation_summary_trigger_interval:
         return False
-    if state.history_summary and n % 10 != 0:
+    # [DEPRECATED: Original 10-message interval trigger]
+    # if state.history_summary and n % 10 != 0:
+    #     return False
+    # [NEW: Configurable message interval trigger - generates summary more frequently]
+    # [CHANGED: Use conversation_summary instead of history_summary (consolidated field)]
+    if state.conversation_summary and n % settings.conversation_summary_trigger_interval != 0:
         return False
 
-    messages_to_summarize = messages[:-6]
+    messages_to_summarize = messages[:-settings.conversation_summary_recent_exclude_count] if settings.conversation_summary_recent_exclude_count > 0 else messages
     if not messages_to_summarize:
         return False
 
@@ -972,20 +1262,128 @@ def _update_conversation_summary(
     user = f"Conversation transcript to summarize:\n\n{transcript}\n\nSummary:"
 
     try:
-        summary = claude_generate(
-            system=system,
-            user=user,
-            temperature=0.2,
+        # [DEPRECATED: Old claude_generate call]
+        # summary = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
             max_tokens=300,
-        ).strip()
+            temperature=0.2,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        _record_message_usage(msg)
+        summary = _extract_final_text_from_message(msg).strip()
     except Exception:
         return False
 
     if not summary:
         return False
 
-    state.history_summary = summary
+    # [CHANGED: Use conversation_summary instead of history_summary (consolidated field)]
+    # [DEPRECATED: state.history_summary = summary]
+    state.conversation_summary = summary
+
+    # NEW: Persist rolling summary to database for durability and API accessibility
+    if db is not None:
+        try:
+            _save_rolling_summary_to_db(
+                db=db,
+                project_id=conv.project_id,
+                summary_text=summary,
+                state=state,
+                message_count=n,
+            )
+        except Exception as e:
+            logger.error(f"Failed to save rolling summary to DB for project {conv.project_id}: {e}")
+            # Don't fail the response if DB save fails - JSON save is primary
+
     return True
+
+
+def _save_rolling_summary_to_db(
+    db: Session,
+    project_id: str,
+    summary_text: str,
+    state: ConversationState,
+    message_count: int = 0,
+) -> None:
+    """
+    Save rolling conversation summary to database conversation_summaries table.
+
+    Updates existing record (one per engagement) or creates new if doesn't exist.
+    Each rolling summary (at 6, 12, 18... messages) updates the same record,
+    preserving created_at but updating updated_at timestamp.
+
+    Args:
+        db: Database session
+        project_id: Project/engagement ID
+        summary_text: Generated summary (2-4 lines)
+        state: Current conversation state (for snapshot)
+        message_count: Total message count at time of summary generation (for metadata)
+
+    Raises:
+        Exception: Database operation failures are raised to caller for logging
+    """
+    try:
+        # Check if summary already exists for this engagement
+        existing = db.query(ConversationSummary).filter_by(
+            project_id=project_id
+        ).first()
+
+        state_snapshot = state.to_dict()
+        current_time = ist_now()
+
+        # Prepare all fields following the pattern from conversation_summary_worker.py
+        state_snapshot_json = json.dumps(state_snapshot)
+        summary_metadata = {
+            "message_count": message_count,
+            "generated_at": current_time.isoformat(),
+            "trigger_type": "rolling_summary"
+        }
+        summary_metadata_json = json.dumps(summary_metadata)
+        discovery_slots_snapshot = json.dumps({})
+        decision_answers_snapshot = json.dumps({})
+        conversation_fsm_state = state.state if state else "unknown"
+        expires_at = current_time + timedelta(days=30)
+
+        if existing:
+            # UPDATE: rolling summary overwrites previous values but keeps created_at
+            existing.summary_text = summary_text
+            existing.state_snapshot_json = state_snapshot_json
+            existing.summary_metadata_json = summary_metadata_json
+            existing.discovery_slots_snapshot = discovery_slots_snapshot
+            existing.decision_answers_snapshot = decision_answers_snapshot
+            existing.conversation_fsm_state = conversation_fsm_state
+            existing.summary_trigger = "rolling_summary"
+            existing.updated_at = current_time
+            existing.expires_at = expires_at
+        else:
+            # CREATE: first rolling summary for this engagement
+            new_summary = ConversationSummary(
+                id=f"summary_{project_id}",
+                project_id=project_id,
+                summary_text=summary_text,
+                state_snapshot_json=state_snapshot_json,
+                summary_metadata_json=summary_metadata_json,
+                discovery_slots_snapshot=discovery_slots_snapshot,
+                decision_answers_snapshot=decision_answers_snapshot,
+                conversation_fsm_state=conversation_fsm_state,
+                summary_trigger="rolling_summary",
+                created_at=current_time,
+                updated_at=current_time,
+                expires_at=expires_at,
+            )
+            db.add(new_summary)
+
+        db.commit()
+    except Exception as e:
+        logger.error(f"Error saving rolling summary to DB for project {project_id}: {e}")
+        db.rollback()
+        raise
 
 
 def _extract_user_name(email: str) -> str:
@@ -1115,7 +1513,12 @@ def _persist_contextual_response(db: Session, conv: Conversation, user_message: 
     Instead of generating a plan, provide a direct answer to the user's question
     using the conversation history for context.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
+    
+    # [NEW: Gateway-based provider-agnostic imports for contextual responses]
+    # gateway imported at module level (line 55)
+    from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
     system_prompt = """You are Sheldon, a helpful execution partner in an active project discussion.
 The user has asked a follow-up question about previous context in the conversation.
@@ -1138,12 +1541,19 @@ User's follow-up question: {user_message}
 Provide a direct, contextual response to their question based on what was just discussed."""
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        msg_resp = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=300,
             temperature=0.6,
-            max_tokens=300
-        ).strip()
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg_resp)
+        response_text = _extract_final_text_from_message(msg_resp).strip()
     except Exception:
         # Fallback response
         response_text = (
@@ -1176,7 +1586,8 @@ def _persist_out_of_scope_message(db: Session, conv: Conversation, user_request:
     Creates a funny yet professional message saying we don't support this yet,
     but they can log feedback for future features.
     """
-    from src.llm.claude import claude_generate
+    # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate
 
     system_prompt = """You are Sheldon, a helpful and witty digital teammate.
 A user has asked for something outside your current capabilities.
@@ -1199,12 +1610,21 @@ Examples of great tone:
     user_prompt = f"User request: {user_request}\n\nGenerate a short, witty response acknowledging this request is out of scope (no quotes, just the message):"
 
     try:
-        response_text = claude_generate(
-            system=system_prompt,
-            user=user_prompt,
+        # [DEPRECATED: Old claude_generate call]
+        # response_text = claude_generate(...)
+        
+        # [NEW: Gateway-based provider-agnostic call]
+        # gateway imported at module level (line 55)
+        from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=200,
             temperature=0.7,
-            max_tokens=200
-        ).strip()
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        _record_message_usage(msg)
+        response_text = _extract_final_text_from_message(msg).strip()
     except Exception:
         # Fallback if LLM unavailable
         response_text = (
@@ -1529,7 +1949,7 @@ def _persist_assistant_plan_message(
     }
 
 
-def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: User | None = None) -> Conversation:
+def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: User | None = None, background_tasks: BackgroundTasks | None = None) -> Conversation:
     conv = db.scalar(
         select(Conversation)
         .where(Conversation.project_id == pid, Conversation.user_id == user_id)
@@ -1537,6 +1957,25 @@ def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: Us
         .limit(1)
     )
     if conv:
+        # NEW: Phase 3 - Check if engagement is resuming from summary and restore state
+        summary = db.query(ConversationSummary).filter(
+            ConversationSummary.project_id == pid
+        ).first()
+
+        if summary and not summary.restored_at:
+            # RESTORE from summary
+            try:
+                state_dict = json.loads(summary.state_snapshot_json)
+                conv_state = ConversationState.from_dict(state_dict)
+                # Save restored state to JSON file
+                save_state(conv, conv_state)
+                # Mark as restored
+                summary.restored_at = ist_now()
+                db.commit()
+                _LOG.info(f"Restored engagement {pid} from summary {summary.id}")
+            except Exception as e:
+                _LOG.error(f"Failed to restore state from summary: {e}")
+        # END NEW
         return conv
 
     # Create new conversation with greeting
@@ -1566,6 +2005,30 @@ def _get_or_create_conversation(db: Session, *, pid: str, user_id: str, user: Us
     db.add(greeting_msg)
     db.commit()
     db.refresh(conv)
+
+    # NEW: Phase 1 + Phase 4 - Ensure engagement metadata exists and start session
+    try:
+        engagement = db.query(EngagementMeta).filter(
+            EngagementMeta.project_id == pid
+        ).first()
+        if not engagement:
+            engagement = EngagementMeta(
+                id=f"em_{uuid.uuid4().hex[:10]}",
+                project_id=pid,
+                idle_timeout_seconds=120,
+                enable_idle_detection=True,
+            )
+            db.add(engagement)
+            db.commit()
+            _LOG.debug(f"Created engagement metadata for project {pid}")
+
+        idle_timeout = engagement.idle_timeout_seconds if engagement else 120
+        if background_tasks:
+            background_tasks.add_task(_start_session_sync, pid, idle_timeout)
+    except Exception as e:
+        _LOG.debug(f"Failed to start engagement session: {e}")
+    # END NEW
+
     return conv
 
 
@@ -1610,6 +2073,7 @@ def get_project_conversation(
 def post_project_conversation_message(
     pid: str,
     body: ConversationMessageRequest,
+    background_tasks: BackgroundTasks,
     background: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -1620,7 +2084,7 @@ def post_project_conversation_message(
 
         return start_turn(pid, body, user, db)
     try:
-        return _post_project_conversation_message_impl(pid, body, user, db)
+        return _post_project_conversation_message_impl(pid, body, user, db, background_tasks=background_tasks)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1794,7 +2258,9 @@ def _handle_collaborative_building(
             router_intent=decision.intent,
             router_confidence=decision.confidence,
             project_id=pid,
-            history_summary=state.history_summary,
+            # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+            # history_summary=state.history_summary,
+            conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
         )
 
     # ── 3. Handle slide agreement / modification ─────────────────────────────
@@ -2011,20 +2477,59 @@ def _post_project_conversation_message_impl(
     user: User,
     db: Session,
     on_phase: Callable[[str], None] | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> dict:
     from src.app.api.projects._conversation_usage import live_key, record_turn_usage
     from src.llm.run_budget import capture_usage, project_token_context
+
+    # NEW: Phase 1 - Record activity for idle detection using background tasks
+    if background_tasks:
+        background_tasks.add_task(_record_activity_sync, pid)
+    # END NEW
 
     with project_token_context(pid), capture_usage(live_key(pid, user.id)) as usage:
         response = _post_project_conversation_message_inner(pid, body, user, db, on_phase=on_phase)
     # Add this reply's tokens to the conversation's total. Tracking must never fail the reply itself.
     try:
-        conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
+        conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user, background_tasks=background_tasks)
         record_turn_usage(db, conversation_id=conv.id, project_id=pid, usage=usage.snapshot())
         db.commit()
     except Exception as exc:
         db.rollback()
         _LOG.warning("conversation usage not recorded for project %s: %s", pid, exc)
+
+    # NEW: Phase 3 - Persist conversation state after every message
+    try:
+        conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
+        state = load_state(conv)
+        old_state = _previous_state_cache.get(pid, "unknown")
+        new_state = state.state
+
+        save_state(conv, state)
+
+        # CHANGED: Trigger process completion summary when FSM transitions to "done"
+        if old_state != new_state and new_state == "done":
+            _LOG.info(f"[FSM Transition] Detected transition to 'done': {pid} ({old_state} → {new_state})")
+            # Run FSM transition handler asynchronously in background
+            import asyncio
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        _handle_fsm_state_transition_to_done(db, pid, user.id, new_state)
+                    )
+                finally:
+                    loop.close()
+            except Exception as fsm_e:
+                _LOG.error(f"Failed to handle FSM transition for {pid}: {fsm_e}", exc_info=True)
+
+        # Update cache for next time
+        _previous_state_cache[pid] = new_state
+    except Exception as e:
+        _LOG.debug(f"Failed to persist conversation state: {e}")
+    # END NEW
+
     return response
 
 
@@ -2078,7 +2583,7 @@ def _turn_receive(turn: Turn) -> dict | None:
             prior_messages = _serialize_messages(db, conv.id)
             prior_plan_meta = _latest_assistant_plan_metadata(prior_messages)
             state = load_state(conv)
-            summary_updated = _update_conversation_summary(conv, state, prior_messages)
+            summary_updated = _update_conversation_summary(conv, state, prior_messages, db=db)
 
             # Fast-paths only apply to fresh conversations with no established context.
             # Once an assistant has responded or state has advanced, short messages like
@@ -2300,7 +2805,10 @@ def _turn_route(turn: Turn) -> dict | None:
             recent_messages=prior_messages,
             project_context=project_context,
             available_output_types=available_output_types,
-            history_summary=state.history_summary,
+            # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+            # history_summary=state.history_summary,
+            # [CHANGED: Use unified conversation_summary instead]
+            conversation_summary=state.conversation_summary,
             memory_profile=memory_profile,
         )
 
@@ -2519,7 +3027,9 @@ def _turn_respond(turn: Turn) -> dict | None:
                     router_intent=decision.intent,
                     router_confidence=decision.confidence,
                     project_id=pid,
-                    history_summary=state.history_summary,
+                    # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+                    # history_summary=state.history_summary,
+                    conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
                 )
 
         # ── Collaborative building flow ───────────────────────────────────────────────
@@ -2572,7 +3082,9 @@ def _turn_respond(turn: Turn) -> dict | None:
                 router_intent=decision.intent,
                 router_confidence=decision.confidence,
                 project_id=pid,
-                history_summary=state.history_summary,
+                # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+                # history_summary=state.history_summary,
+                conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
             )
 
         if not template_ids:
@@ -2597,7 +3109,9 @@ def _turn_respond(turn: Turn) -> dict | None:
                 router_intent=decision.intent,
                 router_confidence=decision.confidence,
                 project_id=pid,
-                history_summary=state.history_summary,
+                # [DEPRECATED: history_summary parameter removed - consolidated into conversation_summary]
+                # history_summary=state.history_summary,
+                conversation_summary=state.conversation_summary,  # [NEW: Unified summary]
             )
 
         with checkpoint_scope(
@@ -3068,6 +3582,10 @@ def post_project_conversation_decisions(
     if background:
         from src.app.api.projects.conversation_turns import start_background
 
+        # Record activity for idle detection before background processing
+        _start_session_sync(pid)
+        _record_activity_sync(pid)
+
         return start_background(pid, user, db, lambda session, who, _on_phase: post_project_conversation_decisions(pid, body, False, who, session))
     require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
     conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
@@ -3210,6 +3728,10 @@ def post_project_conversation_outline(
     if background:
         from src.app.api.projects.conversation_turns import start_background
 
+        # Record activity for idle detection before background processing
+        _start_session_sync(pid)
+        _record_activity_sync(pid)
+
         return start_background(pid, user, db, lambda session, who, _on_phase: post_project_conversation_outline(pid, body, False, who, session))
     require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
     conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
@@ -3301,6 +3823,85 @@ def post_project_conversation_outline(
         "discovery": updated_discovery,
         "messages": _serialize_messages(db, conv.id),
     }
+
+
+@router.post("/{pid}/conversation/close")
+def close_engagement_session(
+    pid: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+	"""Close engagement session and generate summary on user navigation away.
+
+	Called when user navigates away from engagement (to engagement menu).
+	Generates summary if there's meaningful activity, updates conversation_summaries table.
+	"""
+	require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
+
+	# Close session and get metadata
+	session_meta = {}
+	try:
+		import asyncio
+		loop = asyncio.new_event_loop()
+		asyncio.set_event_loop(loop)
+		try:
+			session_meta = loop.run_until_complete(EngagementSessionRegistry.close_session(pid))
+		finally:
+			loop.close()
+	except Exception as e:
+		_LOG.debug(f"Failed to close session: {e}")
+
+	# Generate and save summary
+	idle_duration = session_meta.get("idle_duration_sec", 0)
+	try:
+		conv = db.query(Conversation).filter(
+			Conversation.project_id == pid,
+			Conversation.user_id == user.id
+		).order_by(Conversation.updated_at.desc()).first()
+
+		if conv:
+			# Generate summary for user navigation
+			from src.workflows.conversation_summary_worker import (
+				_generate_engagement_summary,
+				_upsert_conversation_summary,
+			)
+
+			loop = asyncio.new_event_loop()
+			asyncio.set_event_loop(loop)
+			try:
+				summary = loop.run_until_complete(
+					_generate_engagement_summary(db, pid, "user_navigation_away", idle_duration)
+				)
+				if summary:
+					# STEP 1: Save to JSON file FIRST (source of truth)
+					json_saved = False
+					try:
+						from src.memory.short_term.conversation_state import load_state, save_state
+						conv_state = load_state(conv)
+						conv_state.conversation_summary = summary.summary_text
+						save_state(conv, conv_state)
+						json_saved = True
+						_LOG.debug(f"[1/2] Saved conversation_summary to JSON file for {pid} (user_navigation_away)")
+					except Exception as json_e:
+						_LOG.error(f"[1/2] Failed to save summary to JSON file: {json_e}")
+
+					# STEP 2: Save to database SECOND (persistent storage)
+					if json_saved:
+						loop.run_until_complete(_upsert_conversation_summary(db, summary))
+						_LOG.debug(f"[2/2] Saved summary to database for {pid} (user_navigation_away)")
+						_LOG.info(f"Generated summary for engagement {pid} on user navigation away - JSON→DB sequence complete")
+					else:
+						_LOG.error(f"Skipping database save because JSON save failed for {pid}")
+			finally:
+				loop.close()
+	except Exception as e:
+		_LOG.debug(f"Failed to generate summary on close: {e}")
+
+	return {
+		"session_closed": True,
+		"idle_duration_seconds": idle_duration,
+		"summary_generated": session_meta.get("session_state") == "user_closed",
+	}
 
 
 @router.delete("/{pid}/conversation")
@@ -3435,3 +4036,142 @@ def confirm_project_conversation_plan(
     }
 
 
+# NEW: Process Completion endpoint - Mark engagement as complete
+@router.post("/{pid}/conversation/complete")
+async def mark_conversation_complete(
+    pid: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Mark conversation/engagement as complete and generate final summary.
+
+    Triggers when user explicitly marks engagement as complete (e.g., clicks "Done" button).
+    Generates and saves engagement summary with trigger="engagement_completed".
+    Saves to JSON file FIRST (source of truth), then database.
+    """
+    require_project_role(pid, {"Owner", "Editor"}, user, db)
+
+    try:
+        _LOG.info(f"[Explicit Completion] User {user.id} marked engagement {pid} as complete")
+
+        # Generate summary with completion trigger
+        from src.workflows.conversation_summary_worker import _generate_engagement_summary, _upsert_conversation_summary
+
+        summary = await _generate_engagement_summary(
+            db,
+            pid,
+            trigger="engagement_completed",
+            idle_duration_sec=0
+        )
+
+        if summary:
+            # STEP 1: Save to JSON file FIRST (source of truth)
+            json_saved = False
+            try:
+                from src.memory.short_term.conversation_state import load_state, save_state
+
+                conv = _get_or_create_conversation(db, pid=pid, user_id=user.id, user=user)
+
+                if conv:
+                    conv_state = load_state(conv)
+                    conv_state.conversation_summary = summary.summary_text
+                    save_state(conv, conv_state)
+                    json_saved = True
+
+                    _LOG.info(f"[Explicit Completion] Saved summary to JSON for {pid}")
+            except Exception as json_e:
+                _LOG.error(f"[Explicit Completion] Failed to save to JSON: {json_e}", exc_info=True)
+
+            # STEP 2: Save to database SECOND - only if JSON save succeeded
+            if json_saved:
+                try:
+                    await _upsert_conversation_summary(db, summary)
+                    _LOG.info(f"[Explicit Completion] Saved summary to database for {pid}")
+                except Exception as db_e:
+                    _LOG.error(f"[Explicit Completion] Failed to save to database: {db_e}", exc_info=True)
+
+        return {
+            "status": "completed",
+            "project_id": pid,
+            "summary_generated": summary is not None,
+            "message": "Engagement marked as complete. Summary generated and saved."
+        }
+
+    except Exception as e:
+        _LOG.error(f"[Explicit Completion] Error marking completion for {pid}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=_detail("completion_error", f"Failed to mark engagement as complete: {str(e)}")
+        )
+
+
+# NEW: Phase 3 - Close engagement session endpoint
+@router.post("/{pid}/close-engagement-session")
+def close_engagement_session(
+    pid: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Close engagement session (user navigates away from engagement).
+
+    Triggers summary generation if idle > 5 minutes.
+    """
+    require_project_role(pid, {"Owner", "Editor", "Viewer"}, user, db)
+
+    import asyncio
+    from src.workflows.conversation_summary_worker import (
+        _generate_engagement_summary,
+        _upsert_conversation_summary,
+    )
+
+    async def close_and_summarize():
+        session_meta = await EngagementSessionRegistry.close_session(pid)
+
+        # Trigger summary if idle > 5 minutes
+        if session_meta.get("idle_duration_sec", 0) > 300:
+            try:
+                summary = await _generate_engagement_summary(
+                    db, pid, "session_closed", session_meta.get("idle_duration_sec", 0)
+                )
+                if summary:
+                    # STEP 1: Save to JSON file FIRST (source of truth)
+                    json_saved = False
+                    try:
+                        from src.memory.short_term.conversation_state import load_state, save_state
+                        conversation = db.query(Conversation).filter(
+                            Conversation.project_id == pid
+                        ).order_by(Conversation.updated_at.desc()).first()
+
+                        if conversation:
+                            conv_state = load_state(conversation)
+                            conv_state.conversation_summary = summary.summary_text
+                            save_state(conversation, conv_state)
+                            json_saved = True
+                            _LOG.debug(f"[1/2] Saved conversation_summary to JSON file for {pid} (session_closed)")
+                    except Exception as json_e:
+                        _LOG.error(f"[1/2] Failed to save summary to JSON file on session close: {json_e}")
+
+                    # STEP 2: Save to database SECOND (persistent storage)
+                    if json_saved:
+                        try:
+                            from src.workflows.conversation_summary_worker import _upsert_conversation_summary
+                            await _upsert_conversation_summary(db, summary)
+                            _LOG.debug(f"[2/2] Saved summary to database for {pid} (session_closed)")
+                            return {"status": "closed_with_summary", "idle_duration_sec": session_meta.get("idle_duration_sec")}
+                        except Exception as db_e:
+                            _LOG.error(f"[2/2] Failed to save summary to database on session close: {db_e}")
+                    else:
+                        _LOG.error(f"Skipping database save because JSON save failed for {pid}")
+            except Exception as e:
+                _LOG.error(f"Failed to generate summary on session close: {e}")
+
+        return {"status": "closed"}
+
+    try:
+        result = asyncio.run(close_and_summarize())
+    except Exception as e:
+        _LOG.error(f"Error closing engagement session: {e}")
+        result = {"status": "error", "error": str(e)}
+
+    return result
+# END NEW

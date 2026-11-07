@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useSkillRunsQuery } from "@/hooks/useWorkbench";
 
@@ -23,6 +24,7 @@ export default function SkillRunHistoryPage() {
 
   return (
     <PageFrame
+      back={<BackButton href="/skills" label="Back to skills" />}
       breadcrumb={
         <>
           User workspace / <Link href="/skills">Skills</Link> / Skill run history

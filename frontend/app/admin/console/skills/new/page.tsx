@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
+import { BackButton } from "@/components/workbench/BackButton";
 import { PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useSkillManagement } from "@/hooks/useSkillManagement";
 import { CATEGORIES, type DefinitionDraft, draftFrom, emptyDraft, nextVersion, PEOPLE, validateDraft } from "@/lib/skillManagement";
@@ -51,6 +52,7 @@ function DefineSkill() {
 
   return (
     <PageFrame
+      back={<BackButton href={base ? `${SKILLS_HOME}/${base.id}` : SKILLS_HOME} label={base ? "Back to skill" : "Back to the skill registry"} />}
       breadcrumb={`Admin console / Skills management / ${base ? `${base.name} / New candidate` : "New skill"}`}
       title={title}
       subtitle="Create an evidence contract, test behavior and require independent approval before publishing."

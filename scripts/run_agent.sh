@@ -169,8 +169,9 @@ else
   done
 fi
 
-section "Shared services (public links in .env)"
-# link_state HTTP-code -> up | down. 000 = no connection; 502/504/52x = a dead tunnel or unreachable origin.
+section "Shared services (local addresses in .env)"
+SHARED_LOG="$RUN_DIR/infra/shared-services.txt"; mkdir -p "$RUN_DIR/infra"; : > "$SHARED_LOG"   # captured each run, shown after the prechecks
+# link_state HTTP-code -> up | down. 000 = no connection; 502/504/52x = a dead proxy or unreachable origin.
 link_state() { case "$1" in 000|502|504|52[0-9]) echo down ;; *) echo up ;; esac; }
 # Team settings that travel with `git pull`: when .env.example carries an active "team-shared-services" block,
 # its managed keys are brought into .env (with --fix) or reported (without). The personal settings (collection prefix,
@@ -191,9 +192,13 @@ if [ "$(env_get TEAM_SYNC)" != false ] && [ -f "$ENV_FILE" ] && grep -q '^# >>> 
         env_append "$k=$(example_get "$k")"
       done
       fixed "updated $n shared-service setting(s) in .env from the team block in .env.example:$TEAM_DIFF"
+      printf 'team settings: UPDATED %s key(s) in .env from .env.example:%s\n' "$n" "$TEAM_DIFF" >> "$SHARED_LOG"
     else
       warn "$n shared-service setting(s) in .env differ from the team's current values in .env.example:$TEAM_DIFF" "run with --fix to update .env (personal settings are kept; TEAM_SYNC=false opts out)"
+      printf 'team settings: %s key(s) DIFFER from .env.example, run with --fix to update:%s\n' "$n" "$TEAM_DIFF" >> "$SHARED_LOG"
     fi
+  else
+    echo "team settings: in sync with .env.example" >> "$SHARED_LOG"
   fi
 fi
 SHARED_REQUIRED="$(env_get SHARED_SERVICES_REQUIRED)"
@@ -205,10 +210,10 @@ check_link() { # label ENV_VAR path need200(1|0)
   SHARED_SEEN=$((SHARED_SEEN + 1))
   code="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' "${url%/}$3" 2>/dev/null)"
   state="$(link_state "$code")"
+  printf '%-18s HTTP %-4s %-5s %s\n' "$1" "$code" "$state" "${url%/}" >> "$SHARED_LOG"
   if [ "$state" = up ] && { [ "$4" = 0 ] || [ "$code" = 200 ]; }; then pass "$1 answers (HTTP $code) at ${url%/}"
   else
-    hint="check the link and its key in .env"
-    case "$url" in *trycloudflare.com*) hint="quick-tunnel links change when the tunnels restart: ask the service owner for the current advise-workbench-team.env" ;; esac
+    hint="check the address, the shared server's port and its key in .env"
     if [ "$SHARED_REQUIRED" = true ]; then fail "$1 link does not answer (HTTP $code): ${url%/}" "$hint"
     else warn "$1 link does not answer (HTTP $code): ${url%/}" "$hint"; fi
   fi
@@ -258,9 +263,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 section "Model access"
-# Provider: LLM_PROVIDER in .env, else `provider:` in config/model_config.yaml, else anthropic.
+# Provider: LLM_PROVIDER in .env (see .env.example for every option), else anthropic.
 PROVIDER="$(env_get LLM_PROVIDER)"
-[ -z "$PROVIDER" ] && PROVIDER="$(sed -n 's/^provider:[[:space:]]*\([a-z_]*\).*/\1/p' "$ROOT/config/model_config.yaml" 2>/dev/null | head -n 1)"
 PROVIDER="${PROVIDER:-anthropic}"
 BASE_URL="$(env_get ANTHROPIC_BASE_URL)"
 API_KEY="$(env_get ANTHROPIC_API_KEY)"
@@ -285,13 +289,6 @@ case "$PROVIDER" in
     USES_CLI=1
     pass "provider claude_cli: the backend calls the Claude Code CLI directly (no bridge, no API key)"
     check_claude_cli ;;
-  openai_compatible)
-    LLM_MODEL_SET="$(env_get LLM_MODEL)"
-    [ -z "$LLM_MODEL_SET" ] && LLM_MODEL_SET="$(awk '/^models:/{f=1;next} f&&/^[^ ]/{f=0} f&&/default:/{gsub(/.*default:[[:space:]]*|"|#.*/,""); print; exit}' "$ROOT/config/model_config.yaml" 2>/dev/null | tr -d '[:space:]')"
-    if [ -n "$LLM_MODEL_SET" ]; then pass "provider openai_compatible, model $LLM_MODEL_SET"
-    else fail "provider openai_compatible needs a model" "set LLM_MODEL in .env or models.default in config/model_config.yaml"; fi
-    if [ -n "$(env_get LLM_API_KEY)" ] || [ -n "$(env_get LLM_BASE_URL)" ]; then pass "LLM_API_KEY or LLM_BASE_URL is set (not validated here)"
-    else fail "provider openai_compatible needs LLM_API_KEY (or LLM_BASE_URL for a local server)" "add it to .env"; fi ;;
   anthropic)
     if [ "$BRIDGE_MODE" = 1 ]; then
       USES_CLI=1
@@ -305,7 +302,15 @@ case "$PROVIDER" in
     else
       fail "no model access configured" "set a real ANTHROPIC_API_KEY, or LLM_PROVIDER=claude_cli to use the signed-in Claude Code CLI, or see docs/04-development/model-providers.md"
     fi ;;
-  *) fail "unknown LLM_PROVIDER '$PROVIDER'" "use anthropic, claude_cli or openai_compatible" ;;
+  *)
+    # openai, azure_openai, bedrock and the OpenAI-compatible presets: the app's own validator decides.
+    if [ -x "$VPY" ]; then
+      if REPORT="$(cd "$ROOT" && "$VPY" -m src.llm check 2>/dev/null)"; then
+        pass "provider $PROVIDER is configured ($(printf '%s' "$REPORT" | sed -n 's/^models: *//p'))"
+      else
+        fail "provider $PROVIDER is not ready: $(printf '%s' "$REPORT" | sed -n 's/^status: *//p')" "fix .env as described in .env.example, then run: make llm.check"
+      fi
+    else warn "provider $PROVIDER is checked once .venv exists" "run with --fix, then: make llm.check"; fi ;;
 esac
 
 if [ "$USES_CLI" = 1 ]; then
@@ -425,6 +430,33 @@ fi
 
 section "Ports"
 BRIDGE_UP=0; BACKEND_UP=0; FRONTEND_UP=0
+
+kill_tree() { # stop a process and everything it started
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
+    # Git Bash cannot see native Windows grandchildren (uvicorn's reloader, node's workers): end the whole tree.
+    winpid="$(ps 2>/dev/null | awk -v p="$1" '$1 == p {print $4}')"
+    [ -n "$winpid" ] && taskkill //PID "$winpid" //T //F >/dev/null 2>&1 ;;
+  esac
+  if command -v pgrep >/dev/null 2>&1; then kids="$(pgrep -P "$1" 2>/dev/null)"
+  else kids="$(ps -A -o pid=,ppid= 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"
+       [ -n "$kids" ] || kids="$(ps 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"; fi   # Git Bash: plain ps
+  for child in $kids; do kill_tree "$child"; done
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) kill -f "$1" 2>/dev/null ;; *) kill "$1" 2>/dev/null ;; esac
+}
+# Stop the worker, backend and frontend that the previous run recorded in .run/*.pid, so this run starts them fresh.
+stop_previous() {
+  for name in worker backend frontend; do
+    f="$RUN_DIR/$name.pid"; [ -f "$f" ] || continue
+    pid="$(tr -d '\r\n ' < "$f")"
+    if [ -n "$pid" ]; then kill_tree "$pid"; printf '  STOP  previous %s (pid %s)\n' "$name" "$pid"; fi
+    rm -f "$f"
+  done
+  for _ in $(seq 15); do   # wait up to 15 s for the ports to be released
+    [ -z "$(port_owner "$BACKEND_PORT")" ] && [ -z "$(port_owner "$FRONTEND_PORT")" ] && break
+    sleep 1
+  done
+}
+[ "$CHECK_ONLY" = 1 ] || stop_previous
 check_port() { # name port health-url ; echoes up | free | busy:<owner>
   if http_ok "$3"; then echo up; return; fi
   owner="$(port_owner "$2")"
@@ -464,6 +496,8 @@ elif [ "$OO_ENABLED" = "true" ]; then
           else OO_UP=1; warn "OPENOBSERVE_ENABLED=true but OpenObserve is not installed; starting without it" "./scripts/openobserve.sh setup, or set OPENOBSERVE_ENABLED=false"; fi ;;
     *) OO_UP=1; warn "port $OO_PORT is used by ${S#busy:}; starting without OpenObserve" "stop that process or change OPENOBSERVE_URL" ;; esac
 fi
+OO_START_LOCAL=0
+[ "$OO_ENABLED" = "true" ] && [ "$OO_REMOTE" = 0 ] && [ "$OO_UP" = 0 ] && OO_START_LOCAL=1
 
 section "Optional tools"
 [ "$OO_ENABLED" = "true" ] || warn "OpenObserve monitoring is off: no traces, metrics or logs are collected" "./scripts/openobserve.sh setup"
@@ -476,6 +510,7 @@ if command -v tesseract >/dev/null 2>&1 || [ -f "/c/Program Files/Tesseract-OCR/
 else warn "Tesseract not installed: scanned PDFs cannot be read" "$(hint tesseract)"; fi
 
 printf '\nPrechecks: %d passed, %d warnings, %d failed\n' "$PASS_N" "$WARN_N" "$FAIL_N"
+printf '\nShared services (captured in %s):\n' "$SHARED_LOG"; sed 's/^/  /' "$SHARED_LOG"
 if [ "$FAIL_N" -gt 0 ]; then
   echo "Fix the FAIL items above and run again (--fix repairs the ones marked 'run with --fix')."
   abort_prechecks 1
@@ -487,18 +522,6 @@ mkdir -p "$RUN_DIR"
 STARTED_PIDS=""
 TAIL_PIDS=""
 
-kill_tree() { # stop a process and everything it started
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
-    # Git Bash cannot see native Windows grandchildren (uvicorn's reloader, node's workers): end the whole tree.
-    winpid="$(ps 2>/dev/null | awk -v p="$1" '$1 == p {print $4}')"
-    [ -n "$winpid" ] && taskkill //PID "$winpid" //T //F >/dev/null 2>&1 ;;
-  esac
-  if command -v pgrep >/dev/null 2>&1; then kids="$(pgrep -P "$1" 2>/dev/null)"
-  else kids="$(ps -A -o pid=,ppid= 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"
-       [ -n "$kids" ] || kids="$(ps 2>/dev/null | awk -v p="$1" '$2 == p {print $1}')"; fi   # Git Bash: plain ps
-  for child in $kids; do kill_tree "$child"; done
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) kill -f "$1" 2>/dev/null ;; *) kill "$1" 2>/dev/null ;; esac
-}
 cleanup() {
   trap - INT TERM EXIT
   printf '\nStopping...\n'

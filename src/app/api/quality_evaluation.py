@@ -69,8 +69,7 @@ async def get_quality_metrics(
             )
 
         # Load and return metrics
-        with open(metrics_path, "r", encoding="utf-8") as f:
-            report = json.load(f)
+        report = json.loads(metrics_path.read_text(encoding="utf-8"))
 
         summary = report.get("summary", {})
 

@@ -8,7 +8,11 @@ from typing import Any
 
 from src.agents.base_agent import AgentContext
 from src.core.config import settings
-from src.llm.claude import claude_generate_json
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+    # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+    # from src.llm.claude import claude_generate_json
 
 _LOG = logging.getLogger(__name__)
 
@@ -190,13 +194,25 @@ def critique_slides(
                 "with at most 4 prescriptive fixes. Titles:\n"
                 + json.dumps(titles[:12], ensure_ascii=False)
             )
-            obj = claude_generate_json(
-                system="You critique executive-deck slide titles. JSON only.",
-                user=user,
-                model=critique_model(),
+            # [DEPRECATED: Old claude_generate_json call]
+            # obj = claude_generate_json(...)
+            
+            # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+            # All imports at module level: json, gateway, _extract_first_json_object,
+            # _record_message_usage, _extract_final_text_from_message
+            msg = gateway.create_message(
+                model=gateway.model_for(critique_model()),
                 temperature=0.1,
                 max_tokens=600,
+                system="You critique executive-deck slide titles. JSON only.",
+                messages=[{"role": "user", "content": user}],
             )
+            _record_message_usage(msg)
+            text = _extract_final_text_from_message(msg)
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                obj = _extract_first_json_object(text)
             for h in (obj.get("hints") if isinstance(obj, dict) else []) or []:
                 if isinstance(h, dict) and h.get("instruction"):
                     hints.append({
@@ -242,9 +258,25 @@ def targeted_slide_rewrite(
         + json.dumps(payload, ensure_ascii=False)
     )
     try:
-        obj = claude_generate_json(
-            system=_SLIDE_REPAIR_SYSTEM, user=user, temperature=0.2, max_tokens=4096
+        # [DEPRECATED: Old claude_generate_json call]
+        # obj = claude_generate_json(...)
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=4096,
+            temperature=0.2,
+            system=_SLIDE_REPAIR_SYSTEM,
+            messages=[{"role": "user", "content": user}],
         )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            obj = _extract_first_json_object(text)
     except Exception as exc:  # noqa: BLE001 — repair is best-effort
         _LOG.warning("targeted slide rewrite skipped: %s", exc)
         return slide_dicts

@@ -6,6 +6,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +374,9 @@ class NarrativeCoherenceRule(QualityRule):
             return []
         max_issues = max(1, int(getattr(settings, "narrative_llm_critique_max_issues", 4) or 4))
         try:
-            from src.llm.claude import claude_generate_json
+            # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+            # from src.llm.claude import claude_generate_json
+            pass
         except Exception:
             return []
         snippet = (text or "").strip()
@@ -393,11 +398,21 @@ class NarrativeCoherenceRule(QualityRule):
             f"{snippet}"
         )
         try:
-            response = claude_generate_json(
-                system=system_prompt,
-                user=user_prompt,
+            # [NEW: Gateway-based provider-agnostic call with JSON extraction]
+            # All imports at module level: json, gateway, _extract_first_json_object,
+            # _record_message_usage, _extract_final_text_from_message
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
                 max_tokens=400,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
             )
+            _record_message_usage(msg)
+            text = _extract_final_text_from_message(msg)
+            try:
+                response = json.loads(text)
+            except json.JSONDecodeError:
+                response = _extract_first_json_object(text)
         except Exception as exc:
             logger.debug("narrative_llm_critique_blend: LLM call failed (%s)", exc)
             return []

@@ -1,0 +1,335 @@
+================================================================================
+DATABASE TOOLS & UTILITIES INDEX
+================================================================================
+
+OVERVIEW
+--------
+This directory contains comprehensive database inspection, query, and export
+tools for the Advise Workbench application. All tools are Python scripts that
+work with the SQLite database (advise_workbench.db).
+
+================================================================================
+AVAILABLE SCRIPTS
+================================================================================
+
+1. quick_db_stats.py
+   ✓ PURPOSE: Quick overview of database statistics
+   ✓ SPEED: < 1 second (fastest)
+   ✓ OUTPUT: Bar chart with record counts per table
+   ✓ BEST FOR: Daily checks, CI/CD monitoring
+   ✓ COMMAND: python quick_db_stats.py
+
+2. check_all_db_records.py
+   ✓ PURPOSE: Comprehensive audit of all database records
+   ✓ SPEED: < 2 seconds
+   ✓ OUTPUT: Detailed information organized by table
+   ✓ BEST FOR: Full inspection, verification, debugging
+   ✓ COMMAND: python check_all_db_records.py
+
+3. db_sql_queries.py
+   ✓ PURPOSE: 16 pre-built SQL queries with joins
+   ✓ SPEED: < 2 seconds
+   ✓ OUTPUT: Query results in tabular format
+   ✓ BEST FOR: Relationships, specific lookups, analysis
+   ✓ COMMAND: python db_sql_queries.py
+
+4. db_export_utility.py
+   ✓ PURPOSE: Export records to CSV and JSON formats
+   ✓ SPEED: < 3 seconds
+   ✓ OUTPUT: Files in db_exports/ directory
+   ✓ BEST FOR: Backup, external analysis, sharing
+   ✓ COMMAND: python db_export_utility.py
+
+5. quick_check_db.py
+   ✓ PURPOSE: Check conversation summaries specifically
+   ✓ SPEED: < 1 second
+   ✓ OUTPUT: Conversation summary details
+   ✓ BEST FOR: Idle detection monitoring
+   ✓ COMMAND: python quick_check_db.py
+
+================================================================================
+DOCUMENTATION FILES
+================================================================================
+
+DATABASE_TOOLS_README.md
+├─ Quick reference guide
+├─ What's in your database right now
+├─ Use cases and commands
+├─ File locations and schema
+└─ Quick start instructions
+
+DATABASE_COMMANDS_GUIDE.md
+├─ Comprehensive SQL reference
+├─ Database schema documentation
+├─ Custom query examples
+├─ Performance tips
+└─ Troubleshooting guide
+
+DATABASE_TOOLS_INDEX.txt
+└─ This file - index of all tools
+
+================================================================================
+QUICK START COMMANDS
+================================================================================
+
+# CHECK EVERYTHING
+python quick_db_stats.py
+python check_all_db_records.py
+python db_sql_queries.py
+
+# EXPORT DATA
+python db_export_utility.py
+ls db_exports/
+
+# SPECIFIC CHECKS
+python quick_check_db.py          # Conversation summaries
+python db_sql_queries.py | grep ACTIVITY   # Activity log
+python db_sql_queries.py | grep CONVERSATION   # Conversation details
+
+================================================================================
+CURRENT DATABASE STATE
+================================================================================
+
+Users                    1
+Projects                 2
+Engagements              2
+Conversations            1
+Conversation Messages    9
+Activity Events          2
+Total Records           20
+
+Conversation Summaries   0 (awaiting idle trigger)
+Runs                     0
+Memory Items             0
+Wiki Pages               0
+Reviews                  0
+
+================================================================================
+KEY RECORDS
+================================================================================
+
+USER
+  ID: u_cdca680ce9
+  Email: prgupta19@deloitte.com
+  Role: user
+  Created: 2026-11-03 17:12:36
+
+PROJECTS
+  1. sfasdfa (p_c780c605fa)
+  2. TestingDBIntegrations (p_7dcb9fac3d)
+
+CONVERSATION
+  Title: Creative Studio
+  Project: TestingDBIntegrations
+  Messages: 9
+  Last Activity: 2026-11-03 17:30:40
+
+================================================================================
+DATABASE FILES & LOCATIONS
+================================================================================
+
+Database               advise_workbench.db (root)
+Export Directory       db_exports/
+Models                 src/core/db/models.py
+Session                src/core/db/session.py
+Migrations             migrations/versions/
+Configuration          .env (root)
+
+================================================================================
+COMMON USE CASES
+================================================================================
+
+TASK: Check if database has records
+SOLUTION: python quick_db_stats.py
+
+TASK: See conversation history
+SOLUTION: python check_all_db_records.py | grep -A 20 "CONVERSATION"
+
+TASK: Verify idle detection is enabled
+SOLUTION: python db_sql_queries.py | grep -A 10 "ENGAGEMENT"
+
+TASK: Export all data for analysis
+SOLUTION: python db_export_utility.py && open db_exports/
+
+TASK: Find specific project information
+SOLUTION: python db_sql_queries.py | grep "PROJECTS"
+
+TASK: Check activity audit trail
+SOLUTION: python db_sql_queries.py | grep -A 10 "ACTIVITY LOG"
+
+TASK: Get user and project relationships
+SOLUTION: python db_sql_queries.py | grep -A 5 "PROJECT MEMBERS"
+
+TASK: Monitor conversation summaries
+SOLUTION: python quick_check_db.py
+
+================================================================================
+EXPORT OUTPUTS
+================================================================================
+
+CSV Files (data analysis)
+  ✓ users.csv
+  ✓ projects.csv
+  ✓ conversations.csv
+  ✓ conversation_messages.csv
+  ✓ engagement_meta.csv
+  ✓ memberships.csv
+  ✓ activity_events.csv
+
+JSON Files (structured data)
+  ✓ users.json
+  ✓ projects.json
+  ✓ conversations.json
+  ✓ conversation_messages.json
+  ✓ engagement_meta.json
+  ✓ memberships.json
+  ✓ activity_events.json
+  ✓ export_summary.json (metadata)
+
+All saved to: db_exports/
+
+================================================================================
+DATABASE TABLES (37 TOTAL)
+================================================================================
+
+CORE TABLES
+✓ users
+✓ projects
+✓ memberships
+✓ engagement_meta
+
+CONVERSATION TABLES
+✓ conversations
+✓ conversation_messages
+✓ conversation_turns
+✓ conversation_summaries
+
+EXECUTION TABLES
+✓ runs
+✓ run_tasks
+✓ run_events
+
+MEMORY & KNOWLEDGE
+✓ memory_items
+✓ memory_events
+✓ project_memory_profiles
+✓ wiki_pages
+✓ wiki_logs
+✓ wiki_indexes
+
+WORKBENCH FEATURES
+✓ reviews
+✓ review_comments
+✓ activity_events
+✓ notifications
+✓ scheduled_tasks
+✓ scheduled_task_runs
+✓ workbench_records
+
+ORGANIZATION & PERMISSIONS
+✓ project_brands
+✓ user_project_preferences
+✓ hook_executions
+✓ hook_controls
+✓ consent_ledger
+✓ dpdp_rights_requests
+
+ADVANCED FEATURES
+✓ swarm_teams
+✓ swarm_teammates
+✓ swarm_messages
+✓ lp_practices
+✓ saved_practices
+✓ refresh_tokens
+
+================================================================================
+IDLE DETECTION INFO
+================================================================================
+
+CURRENT SETTINGS
+  Timeout: 600 seconds (10 minutes)
+  Enabled: Yes (for all projects)
+  Status: Active
+
+HOW TO TRIGGER SUMMARY
+  1. Send message in conversation
+  2. Wait 10 minutes of inactivity
+  3. OR call: POST /{project_id}/close-engagement-session
+
+WHAT GETS RECORDED
+  ✓ conversation_summaries table entry
+  ✓ Conversation state snapshot
+  ✓ Discovered information
+  ✓ Recorded decisions
+  ✓ FSM state
+  ✓ Trigger type (idle_10min or session_closed)
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Problem: "Migration not applied yet"
+Solution: alembic upgrade head
+
+Problem: Database is locked
+Solution: Check for running processes, kill if necessary
+
+Problem: Export folder not found
+Solution: mkdir db_exports && python db_export_utility.py
+
+Problem: Script errors
+Solution: Check .env file has valid JWT_SECRET (≥16 chars)
+
+Problem: No data showing up
+Solution: Run check_all_db_records.py first to verify records exist
+
+================================================================================
+SUPPORT & DOCUMENTATION
+================================================================================
+
+Detailed Guides
+  • DATABASE_TOOLS_README.md - Quick reference
+  • DATABASE_COMMANDS_GUIDE.md - Complete SQL guide
+  • CLAUDE.md - Project setup and architecture
+
+Source Code
+  • src/core/db/models.py - Table definitions
+  • src/core/db/session.py - Database session
+  • src/app/main.py - FastAPI application
+
+Configuration
+  • .env - Environment variables
+  • migrations/ - Database schema migrations
+
+================================================================================
+QUICK REFERENCE COMMANDS
+================================================================================
+
+Daily Use
+  python quick_db_stats.py
+
+Full Audit
+  python check_all_db_records.py
+
+Custom Queries
+  python db_sql_queries.py
+
+Export Data
+  python db_export_utility.py
+  ls -la db_exports/
+
+Monitor Conversations
+  python quick_check_db.py
+
+Backup Database
+  cp advise_workbench.db advise_workbench.db.backup
+
+Apply Migrations
+  alembic upgrade head
+
+================================================================================
+END OF INDEX
+================================================================================
+Generated: 2026-11-03
+Last Updated: Database checked successfully
+Status: All tools operational

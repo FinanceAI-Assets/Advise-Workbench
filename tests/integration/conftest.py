@@ -4,9 +4,6 @@ import os
 
 import pytest
 
-# Keep src/app/main.py from loading the repo `.env` (override=True) over the test database below.
-os.environ["ADVISE_WORKBENCH_SKIP_DOTENV"] = "1"
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-chars-long-ok!")
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
 # Leading Practice search must not load the embedding model (seconds, and a network call) inside a test.

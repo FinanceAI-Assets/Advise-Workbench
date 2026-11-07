@@ -28,9 +28,12 @@ Edit `.env`:
 |---|---|
 | `JWT_SECRET` | Any random string of 16+ characters. `./scripts/run_agent.sh --fix` generates one |
 | `AUTH_ALLOW_SELF_SIGNUP` | `true` (already set in `.env.example`), so the first sign-in can create your user. Use `false` on shared deployments |
-| Anthropic API | `ANTHROPIC_API_KEY=<your key>` |
-| Claude Code subscription | `LLM_PROVIDER=claude_cli` |
-| OpenAI-style service | `LLM_PROVIDER=openai_compatible`, `LLM_MODEL=<model>`, `LLM_API_KEY=<key>`, and `LLM_BASE_URL=<address>` unless it is OpenAI itself |
+| Claude Code subscription | `LLM_PROVIDER=claude_cli` (agent tools work through a local MCP bridge) |
+| Anthropic API | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=<your key>` |
+| OpenAI | `LLM_PROVIDER=openai`, `OPENAI_API_KEY=<key>`, `OPENAI_MODEL=<model>` |
+| Azure OpenAI | `LLM_PROVIDER=azure_openai`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` |
+| AWS Bedrock (Claude) | `LLM_PROVIDER=bedrock`, `AWS_REGION`, `BEDROCK_MODEL`, plus AWS credentials or `AWS_PROFILE` |
+| Groq, OpenRouter, Mistral, DeepSeek, Together, xAI, LiteLLM, Ollama, LM Studio, other OpenAI-style servers | `LLM_PROVIDER=<name>`, `LLM_MODEL=<model>`, and the service's key; see [model-providers.md](04-development/model-providers.md) |
 | Claude Code via the bridge (older setup, still works) | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` and `ANTHROPIC_API_KEY=not-used-cli-bridge` (a placeholder; the app requires the field to be non-empty) |
 | Either Claude Code setup, recommended | `RUN_STUCK_TIMEOUT_SEC=1800` and `ANTHROPIC_MAX_TOKENS_PER_RUN=0`. `--fix` adds both |
 
@@ -156,26 +159,46 @@ make seed.demo.clear        # removes only what the seed created
 
 Sign-in is limited to the domains in `AUTH_ALLOWED_EMAIL_DOMAINS` (default `deloitte.com`); the demo accounts are created on the first of them. They are fictional, so load them only into a local or demonstration database.
 
-Platform access uses the `users.role` column: `user` or `admin`.
+Platform access uses the `users.role` column: `user` or `admin`. An `admin` can switch between
+the Admin console and the user workspace; a `user` has the user workspace only. This applies in
+every environment, including development.
 
-For local development only, `ADVISE_WORKBENCH_ENV=development` allows any authenticated
-user to open and exercise the Admin console so the screens can be developed without
-promoting every test account. This override is disabled automatically in staging and
-production, where the `admin` role is required.
 Run the migration after upgrading:
 
 ```bash
 alembic upgrade head
 ```
 
-New accounts are created as users; they cannot self-select administrator access. An existing
-administrator can manage roles through the admin-only API:
+Accounts that sign themselves up are created as users; they cannot self-select administrator
+access. An existing administrator can create accounts and manage roles through the admin-only API:
 
 ```text
 GET   /api/admin/users
+POST  /api/admin/users
+      {"email": "...", "password": "<12+ characters>", "role": "user" | "admin",
+       "full_name": "...", "job_title": "..."}
 PATCH /api/admin/users/{user_id}/role
       {"role": "user" | "admin"}
 ```
 
-To bootstrap an administrator locally, set `is_admin` on its row in `users` (or set
-`role` to `admin`). The seed refuses to run when `ADVISE_WORKBENCH_ENV` is `production`.
+To create the first administrator, or promote an existing account, run this on the server:
+
+```bash
+python -m scripts.create_admin --email admin@deloitte.com --name "Admin Name"
+```
+
+A new account's password comes from `ADMIN_PASSWORD` or a prompt.
+
+To do the same over HTTP without a token, set `ADMIN_BOOTSTRAP_SECRET` (32+ characters) and restart:
+
+```text
+POST /api/auth/bootstrap-admin
+     X-Admin-Bootstrap-Secret: <secret>
+     {"email": "...", "password": "<12+ characters>", "full_name": "...", "job_title": "..."}
+```
+
+The route returns 404 while the secret is unset, and it never changes an existing account. Anyone
+holding the secret can create administrators, so remove it and restart once you are done.
+
+The demo seed refuses to run
+when `ADVISE_WORKBENCH_ENV` is `production`.

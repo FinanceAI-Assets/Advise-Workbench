@@ -1,0 +1,2 @@
+id,email,hashed_password,created_at,full_name,job_title,is_admin,role
+u_cdca680ce9,prgupta19@deloitte.com,$2b$12$sGN8EHs2bE1U8hlxY2/U..8sucQ5QmWCTwjOwZkRMZP4vb3f3Yet.,2026-11-03 17:12:36.366217,,,False,user

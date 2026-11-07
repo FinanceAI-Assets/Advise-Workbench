@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Share2, UserPlus } from "lucide-react";
+import { BookOpen, MessagesSquare } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -8,7 +8,6 @@ import { useEffect, useState } from "react";
 import {
   DeliverablesStrip,
   EngagementBriefCard,
-  EngagementStepper,
   EngagementTabs,
   type EngagementTabKey,
   EvidenceReadinessPanel,
@@ -24,22 +23,21 @@ import {
   SourcesSection,
   TeamSection,
 } from "@/components/engagements/EngagementSections";
-import { DeliverablesOverview } from "@/components/deliverables";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { BackButton } from "@/components/workbench/BackButton";
 import { useEngagementDetailQuery } from "@/hooks/useEngagements";
 import { useAuth } from "@/lib/auth-context";
 
+// Workflow views without a tab of their own; each highlights the tab it belongs to.
 type StepView = "brief" | "draft" | "review" | "export";
 
-// Stepper step -> the view it opens. "Sources" shares the Sources tab.
-const STEP_VIEW: Record<string, EngagementTabKey | StepView> = {
-  brief: "brief",
-  sources: "sources",
-  draft: "draft",
-  review: "review",
-  export: "export",
+const STEP_TAB: Record<StepView, EngagementTabKey> = {
+  brief: "overview",
+  draft: "overview",
+  review: "overview",
+  export: "overview",
 };
 
 export default function EngagementDetailPage() {
@@ -56,7 +54,7 @@ export default function EngagementDetailPage() {
     setHydrated(true);
     // Deep links such as ?tab=sources open that view.
     const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested && ["sources", "deliverables", "team", "activity", "brief", "draft", "review", "export"].includes(requested)) {
+    if (requested && ["sources", "team", "activity", "brief", "draft", "review", "export"].includes(requested)) {
       setTab(requested as EngagementTabKey | StepView);
     }
   }, []);
@@ -106,9 +104,8 @@ export default function EngagementDetailPage() {
 
   const tabs = [
     { key: "overview" as const, label: "Overview" },
-    { key: "sources" as const, label: "Sources", count: data.tabCounts.sources },
-    { key: "deliverables" as const, label: "Deliverables", count: data.tabCounts.deliverables },
-    { key: "team" as const, label: "Team", count: data.tabCounts.team },
+    { key: "sources" as const, label: "Sources" },
+    { key: "team" as const, label: "Access" },
     { key: "activity" as const, label: "Activity" },
   ];
 
@@ -122,45 +119,46 @@ export default function EngagementDetailPage() {
       </nav>
 
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--text-default)]">{data.name}</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
-            {data.subtitle} · {data.dateRange} · Engagement lead: {data.lead}
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          {tab === "overview" ? (
+            <BackButton href="/engagements" label="Back to engagements" />
+          ) : (
+            <BackButton onClick={() => setTab("overview")} label="Back to overview" />
+          )}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold text-[var(--text-default)]">{data.name}</h1>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              {data.subtitle} · {data.dateRange} · Engagement lead: {data.lead}
+            </p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button variant="secondary" type="button" className="flex items-center gap-2" onClick={() => setTab("team")}>
-            <UserPlus size={16} aria-hidden />
-            Manage access
-          </Button>
-          <Button
-            variant="secondary"
-            type="button"
-            className="flex items-center gap-2"
-            onClick={() => router.push(`/engagements/${id}/deliverables`)}
-          >
-            <FileText size={16} aria-hidden />
-            View deliverables
-          </Button>
+          <Link href="/library" className="!no-underline">
+            <Button type="button" variant="secondary" className="flex items-center gap-2">
+              <BookOpen size={16} aria-hidden />
+              Browse the library
+            </Button>
+          </Link>
           <Button type="button" className="flex items-center gap-2" onClick={() => router.push(`/engagements/${id}/conversation`)}>
-            <Share2 size={16} aria-hidden />
+            <MessagesSquare size={16} aria-hidden />
             Open conversation
           </Button>
         </div>
       </header>
 
-      <EngagementStepper steps={data.steps} onSelect={(stepId) => setTab(STEP_VIEW[stepId] ?? "overview")} />
-
-      <EngagementTabs
-        tabs={tabs}
-        active={tab as EngagementTabKey}
-        onChange={setTab}
-      />
+      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+        <EngagementTabs
+          large
+          tabs={tabs}
+          active={tab in STEP_TAB ? STEP_TAB[tab as StepView] : (tab as EngagementTabKey)}
+          onChange={setTab}
+        />
+      </div>
 
       {tab === "overview" ? (
         <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
           <div className="space-y-4">
-            <EngagementBriefCard brief={data.brief} />
+            <EngagementBriefCard brief={data.brief} onEdit={() => setTab("brief")} />
             <MilestonesTable milestones={data.milestones} />
           </div>
           <div className="space-y-4">
@@ -175,7 +173,6 @@ export default function EngagementDetailPage() {
         </section>
       ) : null}
       {tab === "sources" ? <SourcesSection id={id} detail={data} /> : null}
-      {tab === "deliverables" ? <DeliverablesOverview id={id} detail={data} /> : null}
       {tab === "team" ? <TeamSection id={id} detail={data} /> : null}
       {tab === "activity" ? <ActivitySection id={id} /> : null}
       {tab === "brief" ? <BriefSection id={id} detail={data} onContinue={() => setTab("sources")} /> : null}

@@ -11,6 +11,7 @@ from src.guardrails.policy import PROPOSAL_SKILL_ID, proposal_prompt_contract
 from src.agents.repair.docx_critique_repair import _critique_and_repair_docx
 from src.agents.repair.pptx_critique_repair import _load_run_storyline
 from src.agents.specialists import _shared
+from src.llm import gateway
 from src.agents.specialists._shared import (
     _append_archetype_prompt,
     _append_conversation_digest_block,
@@ -200,7 +201,21 @@ def run_docx_agent(ctx: AgentContext) -> AgentOutput:
                                           temperature=sb.temperature, max_rounds=sb.max_rounds)
         if not md:
             try:
-                md = _shared.claude_generate(system=sb.system, user=user, temperature=sb.temperature, max_tokens=2200)
+                # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+                # md = _shared.claude_generate(system=sb.system, user=user, temperature=sb.temperature, max_tokens=2200)
+                
+                # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+                # gateway imported at module level (line ~22)
+                from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+                msg = gateway.create_message(
+                    model=gateway.model_for("default"),
+                    max_tokens=2200,
+                    temperature=sb.temperature,
+                    system=sb.system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                _record_message_usage(msg)
+                md = _extract_final_text_from_message(msg)
             except Exception:
                 md = None
         if isinstance(md, str) and md.strip():

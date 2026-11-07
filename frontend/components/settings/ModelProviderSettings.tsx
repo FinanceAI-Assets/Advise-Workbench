@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
+import { BackButton } from "@/components/workbench/BackButton";
 import { ErrorNote, PageFrame, PageSkeleton } from "@/components/workbench/PageFrame";
 import { useAuth } from "@/lib/auth-context";
 
@@ -44,6 +45,7 @@ export function ModelProviderSettings({ adminWorkspace }: { adminWorkspace: bool
 
   return (
     <PageFrame
+      back={adminWorkspace ? undefined : <BackButton />}
       breadcrumb={breadcrumb}
       title={title}
       subtitle={

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
@@ -10,9 +9,7 @@ import { ErrorNote } from "@/components/workbench/PageFrame";
 import { useAdminAction } from "@/hooks/useAdminConsole";
 import type { LibraryQualityGatesDetail } from "@/types/api";
 
-const LINK_CLASS = "text-sm font-medium text-[var(--accent-green-dark)] underline-offset-2 hover:underline";
-
-/** Publish the approved candidate; disabled, with the reasons, until every gate and the approval are in place. */
+/** Approve and publish the candidate; disabled, with the reasons, while the server reports anything blocking it. */
 export function PublishControl({ practiceId, canPublish, blockers }: { practiceId: string; canPublish: boolean; blockers: string[] }) {
   if (!canPublish) {
     return (
@@ -30,8 +27,7 @@ export function PublishControl({ practiceId, canPublish, blockers }: { practiceI
 }
 
 /**
- * Approval for an uploaded candidate: choose an approver and submit once the quality gates pass, follow the
- * review, then publish when it is approved.
+ * Approval for an uploaded candidate: once the quality gates pass, submit it to an approver, or approve and publish it directly.
  */
 export function LibraryApprovalControls({ practiceId, quality }: { practiceId: string; quality: LibraryQualityGatesDetail }) {
   const submit = useAdminAction();
@@ -39,10 +35,6 @@ export function LibraryApprovalControls({ practiceId, quality }: { practiceId: s
   const [approverId, setApproverId] = useState("");
   const review = quality.review;
   const chosen = approverId || approvers[0]?.id || "";
-  const blockers = [
-    ...quality.gates.filter((gate) => gate.passed === false).map((gate) => `${gate.label}: ${gate.detail}`),
-    ...(review?.state === "Approved" ? [] : ["Independent approval is required before publishing"]),
-  ];
 
   return (
     <div className="space-y-3 border-t border-[var(--surface-border)] pt-4">
@@ -53,11 +45,6 @@ export function LibraryApprovalControls({ practiceId, quality }: { practiceId: s
             ? `${review.state} · ${review.reviewer || "Unassigned"}${review.selfReview ? " (self-review)" : ""}`
             : "Not submitted"}
         </p>
-        {review && review.state !== "Draft" ? (
-          <Link href={`/reviews/${encodeURIComponent(review.id)}`} className={LINK_CLASS}>
-            Open review {review.id}
-          </Link>
-        ) : null}
       </div>
 
       {quality.canSubmit ? (
@@ -85,7 +72,7 @@ export function LibraryApprovalControls({ practiceId, quality }: { practiceId: s
         </form>
       ) : null}
 
-      <PublishControl practiceId={practiceId} canPublish={Boolean(quality.canPublish)} blockers={quality.canSubmit ? [] : blockers} />
+      <PublishControl practiceId={practiceId} canPublish={Boolean(quality.canPublish)} blockers={quality.blockers ?? []} />
     </div>
   );
 }

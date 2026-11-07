@@ -4,10 +4,14 @@ Extracted verbatim from conversation.py; re-imported there so the
 monkeypatch contract on app.api.projects.conversation.<name> still holds.
 """
 
+import json
 import logging
 import re
 
 from src.memory.retrieval import TieredContextEngine, _chunk_strings
+from src.llm import gateway
+from src.llm.claude import _extract_first_json_object
+from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
 
 _LOG = logging.getLogger(__name__)
 
@@ -204,21 +208,51 @@ def _extract_discovery_answers_from_wiki(
     )
     evidence = "\n\n".join(wiki_excerpt + doc_excerpt)[:5000]
     try:
-        payload = claude_generate_json(
+        # [DEPRECATED: Hardcoded claude_generate_json] Use gateway for provider-agnostic call
+        # payload = claude_generate_json(
+        #     system=(
+        #         "Extract proposal discovery details from evidence snippets. "
+        #         "Return JSON only with keys: "
+        #         "client{name,industry}, outcome{primary,decision}, win_themes[array max 3], audience, source_refs[array]. "
+        #         "Use only explicit evidence. Leave unknown fields empty or omitted."
+        #     ),
+        #     user=(
+        #         f"Recent chat context:\n{prior_context}\n\n"
+        #         f"Latest user message:\n{user_message}\n\n"
+        #         f"Evidence:\n{evidence}"
+        #     ),
+        #     temperature=0.1,
+        #     max_tokens=500,
+        # )
+        
+        # [NEW: Gateway-based provider-agnostic call with JSON extraction - Supports all LLM providers]
+        # All imports at module level: json, gateway, _extract_first_json_object,
+        # _record_message_usage, _extract_final_text_from_message
+        msg = gateway.create_message(
+            model=gateway.model_for("default"),
+            max_tokens=500,
+            temperature=0.1,
             system=(
                 "Extract proposal discovery details from evidence snippets. "
                 "Return JSON only with keys: "
                 "client{name,industry}, outcome{primary,decision}, win_themes[array max 3], audience, source_refs[array]. "
                 "Use only explicit evidence. Leave unknown fields empty or omitted."
             ),
-            user=(
-                f"Recent chat context:\n{prior_context}\n\n"
-                f"Latest user message:\n{user_message}\n\n"
-                f"Evidence:\n{evidence}"
-            ),
-            temperature=0.1,
-            max_tokens=500,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Recent chat context:\n{prior_context}\n\n"
+                    f"Latest user message:\n{user_message}\n\n"
+                    f"Evidence:\n{evidence}"
+                )
+            }],
         )
+        _record_message_usage(msg)
+        text = _extract_final_text_from_message(msg)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = _extract_first_json_object(text)
     except Exception:
         return {}, wiki_refs[:6]
     normalized = _normalize_discovery(payload)

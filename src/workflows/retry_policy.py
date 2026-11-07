@@ -26,11 +26,20 @@ def should_apply_fallback(*, consecutive_failures: int, threshold: int = 3) -> b
     return int(consecutive_failures) >= int(threshold)
 
 
-def overflow_recovery_event(*, char_cap: int, applied_tier: str) -> dict[str, Any]:
+def overflow_recovery_event(*, token_budget: int | None = None, char_cap: int | None = None, applied_tier: str = "") -> dict[str, Any]:
     """Mode C: typed payload for context overflow recovery."""
+    # Workstream A: support both token_budget (new) and char_cap (legacy)
+    if token_budget is None and char_cap is not None:
+        token_budget = int(char_cap / 3.5)
+    # Old code (kept for reference):
+    # return {
+    #     "mode": "context_overflow_recovery",
+    #     "char_cap": int(char_cap),
+    #     "applied_tier": str(applied_tier),
+    # }
     return {
         "mode": "context_overflow_recovery",
-        "char_cap": int(char_cap),
+        "token_budget": int(token_budget or 32000),
         "applied_tier": str(applied_tier),
     }
 

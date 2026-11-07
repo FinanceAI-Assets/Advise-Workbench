@@ -9,7 +9,8 @@
 - keyword        BM25 search
 - semantic       embedding search (runs alongside keyword; skipped when LP_RAG_SEMANTIC_ENABLED=false)
 - fuse           merge the two rankings (reciprocal rank fusion)
-- select         drop repeated passages and keep the best ``max_results``
+- select         drop repeated passages and keep the best ``max_results``; a question about chosen practices that
+                 matches none of their passages gets their opening passages
 - generate       only when an answer is asked for: answer from the passages, citing them by number
 
 Each node is one trace span (``rag.lp.<node>``).
@@ -21,6 +22,7 @@ import logging
 from collections import Counter
 from collections.abc import Callable
 from functools import lru_cache
+from itertools import islice, zip_longest
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -116,7 +118,23 @@ def _select(state: LPState) -> LPState:
         results.append({**chunk, "relevance_score": round(score, 4)})
         if len(results) >= state["max_results"]:
             break
+    if only and state["want_answer"] and not results:
+        results = _opening_passages(chunks, only, state["max_results"])
     return {"results": results}
+
+
+def _opening_passages(chunks: list[dict[str, Any]], only: set[str], limit: int) -> list[dict[str, Any]]:
+    """The first passages of each chosen practice, taken in turn.
+
+    "Summarize this" shares no words with a source, yet the person chose it to ask about. The answer prompt only uses
+    what the passages say, so a question they do not cover still gets "they do not answer this".
+    """
+    by_practice: dict[str, list[dict[str, Any]]] = {}
+    for chunk in chunks:
+        if chunk.get("practice_id") in only:
+            by_practice.setdefault(chunk["practice_id"], []).append(chunk)
+    in_turn = (chunk for row in zip_longest(*by_practice.values()) for chunk in row if chunk)
+    return [{**chunk, "relevance_score": 0.0} for chunk in islice(in_turn, limit)]
 
 
 def _generate(state: LPState) -> LPState:

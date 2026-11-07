@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { BackButton } from "@/components/workbench/BackButton";
 import { PageFrame } from "@/components/workbench/PageFrame";
 import { HELP_ARTICLES, HELP_CATEGORIES, type HelpArticle } from "@/lib/helpArticles";
 
@@ -37,6 +38,7 @@ export default function HelpPage() {
 
   return (
     <PageFrame
+      back={<BackButton />}
       breadcrumb="User workspace / Side nav / Help & documentation"
       title="Help & documentation"
       subtitle="Guidance for evidence-led advisory work, secure collaboration and human review."
@@ -71,7 +73,7 @@ export default function HelpPage() {
                   type="button"
                   aria-pressed={active}
                   onClick={() => setCategory(active ? null : item.name)}
-                  className={`rounded-md p-2 text-left transition hover:bg-[var(--surface-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue)] ${
+                  className={`rounded-md p-2 text-left transition hover:bg-[var(--surface-muted)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-green)] ${
                     active ? "bg-[var(--surface-muted)]" : ""
                   }`}
                 >

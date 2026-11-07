@@ -190,7 +190,7 @@ export function UploadSourcesModal({
             >
               <label
                 className={cn(
-                  "block cursor-pointer rounded-md border border-dashed p-5 text-center transition focus-within:ring-2 focus-within:ring-[var(--coral-black)]",
+                  "block cursor-pointer rounded-md border border-dashed p-5 text-center transition focus-within:ring-2 focus-within:ring-[var(--accent-green)]",
                   dragging
                     ? "border-[var(--accent-green)] bg-[#EFF6E6]"
                     : "border-[var(--surface-border-strong)] bg-[var(--surface-muted)] hover:border-[var(--accent-green)]"

@@ -17,11 +17,13 @@ from src.agents.base_agent import AgentContext
 from src.prompts.prompt_hygiene import UNTRUSTED_SKILL_SYSTEM_NOTE, wrap_untrusted
 from src.core.config import settings
 from src.core.state import ProcessModel
+from src.llm import gateway
 from src.llm.claude import (  # noqa: F401 — the agents reach these as _shared.<name>
     claude_generate,
     claude_generate_json,
     claude_generate_with_thinking,
-    is_claude_enabled,
+    # [DEPRECATED: is_claude_enabled] Use gateway.is_enabled() for provider-agnostic check
+    # is_claude_enabled,
 )
 from src.agents.tool_agent import run_subagent_tool_loop
 from src.core.observability.metrics import increment
@@ -30,6 +32,12 @@ from src.tools.registry import anthropic_tool_definitions, default_tools_for_out
 from src.agents.specialists.pptx_slide_batching import _generate_slides_batched  # noqa: F401 — reached by the agents as _shared._generate_slides_batched
 
 _LOG = logging.getLogger(__name__)
+
+
+# [NEW: Wrapper for provider-agnostic gateway check]
+def is_claude_enabled() -> bool:
+    """Check if model provider is configured. Now provider-agnostic via gateway."""
+    return gateway.is_enabled()
 
 
 _SWARM_READ_TOOLS: tuple[str, ...] = (
@@ -614,12 +622,26 @@ def _apply_quality_gate(
             if isinstance(improved_obj, dict) and isinstance(improved_obj.get("slides"), list):
                 return json.dumps({"slides": improved_obj["slides"]}, ensure_ascii=False)
         else:
-            improved = claude_generate(
-                system=system,
-                user=remediation_prompt,
-                temperature=temperature,
+            # [DEPRECATED: Hardcoded claude_generate] Use gateway for provider-agnostic call
+            # improved = claude_generate(
+            #     system=system,
+            #     user=remediation_prompt,
+            #     temperature=temperature,
+            #     max_tokens=2500,
+            # )
+            
+            # [NEW: Gateway-based provider-agnostic call - Supports all LLM providers]
+            # gateway imported at module level (line ~21)
+            from src.agents.tool_agent import _record_message_usage, _extract_final_text_from_message
+            msg = gateway.create_message(
+                model=gateway.model_for("default"),
                 max_tokens=2500,
+                temperature=temperature,
+                system=system,
+                messages=[{"role": "user", "content": remediation_prompt}],
             )
+            _record_message_usage(msg)
+            improved = _extract_final_text_from_message(msg)
             if isinstance(improved, str) and improved.strip():
                 return improved
     except Exception:  # noqa: BLE001, S110
@@ -871,7 +893,7 @@ def _deliverable_type_for_skill(skill_id: str) -> str:
     return "generic"
 
 
-def _grounded_context_excerpt(ctx: AgentContext, char_cap: int) -> str:
+def _grounded_context_excerpt(ctx: AgentContext, char_cap: int | None = None, token_cap: int | None = None) -> str:
     """Context excerpt that keeps query-ranked retrieval chunks in the prompt.
 
     assembled_context is tier-ordered (CONTEXT.md → LP snippets → ranked doc
@@ -879,8 +901,16 @@ def _grounded_context_excerpt(ctx: AgentContext, char_cap: int) -> str:
     chunks. Split the cap between the head of assembled_context (curated
     context plus any prepended QA remediation) and the relevance-ordered
     retrieval excerpt, which is safe to head-slice.
+
+    Workstream C: supports both char_cap (legacy) and token_cap (new).
     """
-    cap = max(0, int(char_cap))
+    # Workstream C: convert token_cap to char_cap if provided
+    CHARS_PER_TOKEN = 3.5
+    if token_cap is not None:
+        char_cap = int(token_cap * CHARS_PER_TOKEN)
+    # Old code (kept for reference):
+    # cap = max(0, int(char_cap))
+    cap = max(0, int(char_cap or 32000))
     ac = (ctx.assembled_context or "").strip()
     ranked = str(ctx.retrieval_excerpt or "").strip()
     if ranked.startswith("## Planner retrieval excerpt"):
