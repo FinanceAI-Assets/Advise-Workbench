@@ -57,6 +57,19 @@ _ICON_BODIES: dict[str, str] = {
 # ``_SEMANTIC_STEP_ICON_MAP`` glyph table in ``pptx_artifact_renderer`` so existing
 # label classification behavior is unchanged — only the rendered marker improves.
 ICON_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # Finance / procure-to-pay nouns first: these are the subject of the step and beat generic verbs.
+    (("invoice", "billing"), "invoice"),
+    (("payment", "remittance", "treasury"), "bank"),
+    (("cash", "collection", "receivable", "payable"), "coins"),
+    (("purchase order", "requisition", "procure", "sourcing", "tender"), "clipboard"),
+    (("goods receipt", "receipt", "inventory", "warehouse", "logistics", "delivery"), "package"),
+    (("match", "reconcil", "exception"), "scan"),
+    (("month-end", "month end", "close calendar", "period close", "calendar"), "calendar"),
+    (("forecast", "budget"), "trend_up"),
+    (("ledger", "journal", "policy", "contract"), "document"),
+    (("onboard", "master data"), "database"),
+    (("train", "change management", "enablement"), "users"),
+    (("migration", "migrate"), "refresh"),
     (("assess", "discover", "diagnose", "baseline", "parse", "ingest", "extract", "capture", "collect"), "search"),
     (("plan", "roadmap", "strategy", "prioriti", "scope", "define"), "flag"),
     (("design", "blueprint", "architect", "model", "author", "write", "draft", "document", "summari", "synthesi", "compose"), "draft"),
