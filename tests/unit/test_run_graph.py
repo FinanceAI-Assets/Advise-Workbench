@@ -49,7 +49,7 @@ def graph_env(tmp_path, monkeypatch: pytest.MonkeyPatch):
 def test_phases_run_in_order(graph_env) -> None:
     calls, _ = graph_env
     assert agent_graph.execute_run_with_graph("p_1", "run_order") == (True, None)
-    assert calls == ["prepare", "context", "generate", "evaluate", "remember", "finalize"]
+    assert calls == ["prepare", "context", "path_router", "generate", "evaluate", "remember", "finalize"]
     assert agent_graph.has_unfinished_attempt("run_order") is False
     assert agent_graph._LIVE_JOBS == {}
 
@@ -58,7 +58,7 @@ def test_a_phase_outcome_ends_the_attempt(graph_env) -> None:
     calls, behaviour = graph_env
     behaviour["evaluate"] = (False, "Evaluator checks failed")
     assert agent_graph.execute_run_with_graph("p_1", "run_stop") == (False, "Evaluator checks failed")
-    assert calls == ["prepare", "context", "generate", "evaluate"]
+    assert calls == ["prepare", "context", "path_router", "generate", "evaluate"]
 
 
 def test_an_error_in_a_phase_is_recorded_as_a_failed_run(graph_env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,7 +67,7 @@ def test_an_error_in_a_phase_is_recorded_as_a_failed_run(graph_env, monkeypatch:
     seen: list[str] = []
     monkeypatch.setattr(orchestrator, "fail_run_job", lambda job, exc: seen.append(str(exc)) or (False, str(exc)))
     assert agent_graph.execute_run_with_graph("p_1", "run_error") == (False, "model unavailable")
-    assert seen == ["model unavailable"] and calls == ["prepare", "context", "generate"]
+    assert seen == ["model unavailable"] and calls == ["prepare", "context", "path_router", "generate"]
 
 
 def test_restart_resumes_after_the_last_finished_phase(graph_env, tmp_path) -> None:
@@ -75,7 +75,7 @@ def test_restart_resumes_after_the_last_finished_phase(graph_env, tmp_path) -> N
     behaviour["evaluate"] = _ProcessDied()
     with pytest.raises(_ProcessDied):
         agent_graph.execute_run_with_graph("p_1", "run_resume")
-    assert calls == ["prepare", "context", "generate", "evaluate"]
+    assert calls == ["prepare", "context", "path_router", "generate", "evaluate"]
     assert agent_graph.has_unfinished_attempt("run_resume") is True
 
     # "Restart": nothing survives in memory, only the checkpoint file.
@@ -139,7 +139,7 @@ def test_resume_stops_when_the_run_can_no_longer_continue(graph_env) -> None:
 def test_queued_runs_go_through_the_graph(graph_env) -> None:
     calls, _ = graph_env
     assert orchestrator._execute_run_job("p_1", "run_switch") == (True, None)
-    assert calls == ["prepare", "context", "generate", "evaluate", "remember", "finalize"]
+    assert calls == ["prepare", "context", "path_router", "generate", "evaluate", "remember", "finalize"]
 
 
 def test_snapshot_keeps_data_and_leaves_out_what_cannot_be_stored(tmp_path) -> None:
@@ -175,7 +175,7 @@ def test_live_objects_in_the_state_do_not_stop_the_run(graph_env, monkeypatch: p
     phases = dict(orchestrator.RUN_PHASES) | {"generate": generate_with_live_objects}
     monkeypatch.setattr(orchestrator, "RUN_PHASES", tuple((n, phases[n]) for n in agent_graph.PHASE_ORDER))
     assert agent_graph.execute_run_with_graph("p_1", "run_live") == (True, None)
-    assert calls == ["prepare", "context", "generate", "evaluate", "remember", "finalize"]
+    assert calls == ["prepare", "context", "path_router", "generate", "evaluate", "remember", "finalize"]
 
 
 def test_a_checkpoint_that_cannot_be_written_fails_the_run_once(graph_env, monkeypatch: pytest.MonkeyPatch) -> None:

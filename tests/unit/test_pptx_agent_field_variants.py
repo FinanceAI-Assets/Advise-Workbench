@@ -54,5 +54,6 @@ def test_quadrants_and_bullets_render_with_their_text(tmp_path) -> None:
         assert word in deck
     assert "**" not in deck and "__Control__" not in deck
     harvey_slide = next(s for s in prs.slides if "Manual Process Drives Cycle Time" in _slide_text(s))
-    assert any(sh.shape_type == 13 for sh in harvey_slide.shapes)  # the figure picture is present
+    # Harvey balls are drawn as native shapes (ovals and freeform wedges); a picture is also accepted.
+    assert sum(sh.shape_type in (5, 13) for sh in harvey_slide.shapes) >= 4
     assert "02 / 03" in _slide_text(harvey_slide)  # figure slides carry the same footer as other slides

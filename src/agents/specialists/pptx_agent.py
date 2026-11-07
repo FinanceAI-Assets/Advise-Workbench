@@ -167,6 +167,47 @@ def _shared_user_context_appendix(ctx: AgentContext) -> str:
     return wrap_untrusted_bundle("\n\n".join(blocks) + "\n\n---\n\n")
 
 
+def _guard_slides(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip placeholders and leaked internal headings before slides are finalized."""
+    from src.deliverables.pptx.content_guard import sanitize_slides
+
+    cleaned, report = sanitize_slides(slides)
+    if report:
+        _LOG.info("pptx content_guard: %d fixes (%s)", len(report), "; ".join(report[:5]))
+    return cleaned or slides
+
+
+def _baseline_cards(pm: ProcessModel) -> list[dict[str, Any]]:
+    """Three stat cards built only from ProcessModel facts (metrics, handoffs, roles)."""
+    fills = ["dark", "mid_dark", "gray"]
+    cards: list[dict[str, Any]] = []
+    for m in (pm.get("metrics") or [])[:3]:
+        if isinstance(m, dict) and str(m.get("stat") or "").strip():
+            src = str(m.get("source") or "").strip()
+            cards.append({
+                "stat": str(m["stat"])[:16],
+                "label": str(m.get("label") or "")[:40],
+                "description": (f"Source: {src}" if src else "Reported in the source documents.")[:120],
+            })
+    steps = [st for st in (pm.get("steps") or []) if isinstance(st, dict)]
+    handoffs = sum(1 for a, b in zip(steps, steps[1:]) if a.get("role") and b.get("role") and a["role"] != b["role"])
+    extras = [
+        (str(handoffs), "role handoffs\nacross the flow", "Each handoff is a point where work waits and ownership changes."),
+        (str(len(pm.get("roles") or [])), "roles\ninvolved", "More roles raise coordination effort and control complexity."),
+        (str(len(pm.get("decisions") or [])), "decision points\nin the flow", "Decision branches mark where exceptions and rework concentrate."),
+    ]
+    for stat, label, desc in extras:
+        if len(cards) >= 3:
+            break
+        if stat != "0":
+            cards.append({"stat": stat, "label": label, "description": desc})
+    while len(cards) < 3:
+        cards.append({"stat": str(len(steps)), "label": "workflow steps\nin scope", "description": "Step count sets the scope for control design and automation."})
+    for i, c in enumerate(cards[:3]):
+        c["fill"] = fills[i]
+    return cards[:3]
+
+
 def _pptx_deterministic_slides(
     pm: ProcessModel,
     contract: dict[str, Any] | None = None,
@@ -203,14 +244,14 @@ def _pptx_deterministic_slides(
     process_name = str(pm.get("process_name") or "Process Overview")
     n_s, n_r = len(steps), len(roles)
     fill_rot = ["dark", "mid_dark", "green", "gray", "mid", "dark_green"]
-    step_src = steps or [{"name": "No steps extracted", "description": "", "role": "TBD"}]
+    step_src = steps
     stack: list[dict[str, Any]] = []
     for i, s in enumerate(step_src[:6]):
         if isinstance(s, dict):
             stack.append(
                 {
                     "label": str(s.get("name") or "Step")[:40],
-                    "description": str(s.get("description") or f"Owner: {s.get('role') or 'TBD'}")[:100],
+                    "description": str(s.get("description") or (f"Owner: {s.get('role')}" if s.get("role") else ""))[:100],
                     "fill": fill_rot[i % len(fill_rot)],
                 }
             )
@@ -231,23 +272,20 @@ def _pptx_deterministic_slides(
         table_rows.append(
             [
                 str(st.get("name") or "—")[:40],
-                str(st.get("role") or "TBD")[:30],
+                str(st.get("role") or "Owner not stated in source")[:30],
                 io[:80],
             ]
         )
-    if not table_rows:
-        table_rows = [["—", "TBD", "See process documentation"]]
 
     return [
         {
             "title": process_name,
             "slide_type": "title",
-            "subtitle": "Process Overview",
-            "badges": [
-                f"{n_s} workflow steps",
-                f"{n_r} roles",
-                "Advise Workbench",
-            ],
+            "subtitle": "Current state, opportunities and recommended actions",
+            "badges": [b for b in (
+                f"{n_s} workflow steps" if n_s else "",
+                f"{n_r} roles" if n_r else "",
+            ) if b],
         },
         {
             "title": "Process scale",
@@ -266,9 +304,9 @@ def _pptx_deterministic_slides(
                     "fill": "mid_dark",
                 },
                 {
-                    "stat": "—",
-                    "label": "SLA / run rate\n(to define)",
-                    "description": "Quantify cycle time or frequency once operational data is available.",
+                    "stat": str(len(pm.get("decisions") or [])),
+                    "label": "decision points\nin the flow",
+                    "description": "Decision branches mark where rework, approvals and exceptions concentrate.",
                     "fill": "gray",
                 },
             ],
@@ -317,28 +355,9 @@ def _pptx_deterministic_slides(
             },
         },
         {
-            "title": "Controls and metrics",
+            "title": "Measured baseline and handoff load",
             "slide_type": "stat_cards",
-            "stat_cards": [
-                {
-                    "stat": "—",
-                    "label": "key control\npoints",
-                    "description": "Map critical controls to steps once the control framework is agreed.",
-                    "fill": "dark",
-                },
-                {
-                    "stat": "—",
-                    "label": "error or\nexception rate",
-                    "description": "Track defect or rework rates where systems provide operational data.",
-                    "fill": "mid_dark",
-                },
-                {
-                    "stat": "—",
-                    "label": "cycle time\nor SLA",
-                    "description": "Baseline throughput targets after measuring end-to-end lead time.",
-                    "fill": "gray",
-                },
-            ],
+            "stat_cards": _baseline_cards(pm),
         },
         {
             "title": "Recommended next actions",
@@ -1125,7 +1144,7 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
                 pass
             slide_dicts = _shared._run_pptx_post_processor(ctx, slide_dicts)
             slide_dicts = _critique_and_repair_pptx(ctx, slide_dicts, pm)
-            slide_dicts = _normalize_pptx_slide_identities(slide_dicts)
+            slide_dicts = _normalize_pptx_slide_identities(_guard_slides(slide_dicts))
             return AgentOutput(updates={"pptx_slides": slide_dicts})
 
         # ── Single-shot generation (default path) ──
@@ -1176,7 +1195,7 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
                     pass
                 slide_dicts = _shared._run_pptx_post_processor(ctx, slide_dicts)
                 slide_dicts = _critique_and_repair_pptx(ctx, slide_dicts, pm)
-                slide_dicts = _normalize_pptx_slide_identities(slide_dicts)
+                slide_dicts = _normalize_pptx_slide_identities(_guard_slides(slide_dicts))
                 # region agent log
                 _session_debug_log(
                     run_id=ctx.run_id,
@@ -1192,7 +1211,7 @@ def run_pptx_agent(ctx: AgentContext) -> AgentOutput:
                 # endregion
                 return AgentOutput(updates={"pptx_slides": slide_dicts})
 
-    fallback_slides = _normalize_pptx_slide_identities(_pptx_deterministic_slides(pm, _load_run_storyline(ctx)))
+    fallback_slides = _normalize_pptx_slide_identities(_guard_slides(_pptx_deterministic_slides(pm, _load_run_storyline(ctx))))
     # region agent log
     _session_debug_log(
         run_id=ctx.run_id,

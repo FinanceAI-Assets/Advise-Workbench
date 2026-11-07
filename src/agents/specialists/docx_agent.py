@@ -306,7 +306,7 @@ def _docx_deterministic_fallback(
             lines.append(f"- **{r}**")
         lines += ["", "## Procedure", ""]
         for i, st in enumerate(steps, 1):
-            lines.append(f"{i}. **{st.get('name') or 'Step'}** _(role: {st.get('role') or 'TBD'})_")
+            lines.append(f"{i}. **{st.get('name') or 'Step'}** _(role: {st.get('role') or 'Not assigned in source'})_")
         lines += ["", "## References", "", "- Source: run instruction and assembled project context."]
         return "\n".join(lines).strip() + "\n"
 
@@ -326,7 +326,7 @@ def _docx_deterministic_fallback(
                  f"This process covers **{name}**, structured across **{n_steps}** step(s) and **{n_roles}** role(s). "
                  f"Key activities include: {highlights}.", "", "## Key Activities", ""]
         for st in steps[:6]:
-            lines.append(f"- **{st.get('name', '—')}** _(owner: {st.get('role', 'TBD')})_")
+            lines.append(f"- **{st.get('name', '—')}** _(owner: {st.get('role', 'Not assigned in source')})_")
         lines += ["", "## Roles and Accountability", ""]
         for r in roles:
             lines.append(f"- **{r}**: accountable for their assigned steps in this process")
@@ -362,7 +362,7 @@ def _docx_deterministic_fallback(
                 for st in steps[:8]:
                     if isinstance(st, dict):
                         lines.append(
-                            f"- **{st.get('name', '—')}** _(owner: {st.get('role', 'TBD')})_"
+                            f"- **{st.get('name', '—')}** _(owner: {st.get('role', 'Not assigned in source')})_"
                         )
                 lines.append("")
             lines += [
@@ -425,7 +425,7 @@ def _docx_deterministic_fallback(
             if isinstance(st, dict):
                 req_lines.append(
                     f"{i}. The system shall support **{st.get('name', 'activity')}** "
-                    f"with accountable owner **{st.get('role') or 'TBD'}**."
+                    f"with accountable owner **{st.get('role') or 'Not assigned in source'}**."
                 )
         if decisions:
             for d in decisions[:3]:
@@ -473,5 +473,5 @@ def _docx_deterministic_fallback(
                  "## Procedure"]
         for i, st in enumerate(steps[:30], 1):
             if isinstance(st, dict):
-                lines.append(f"{i}. {st.get('name') or 'Step'} ({st.get('role') or 'TBD'})")
+                lines.append(f"{i}. {st.get('name') or 'Step'} ({st.get('role') or 'Not assigned in source'})")
         return "\n".join(lines)

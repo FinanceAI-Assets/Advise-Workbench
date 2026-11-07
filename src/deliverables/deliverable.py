@@ -53,6 +53,10 @@ class DeliverableRegistry:
         with cls._lock:
             d = cls._deliverables.get(key)
         if d is None:
+            _init_default_deliverables()
+            with cls._lock:
+                d = cls._deliverables.get(key)
+        if d is None:
             raise ValueError(f"Unknown output type: {output_type}")
         return d
 
@@ -64,36 +68,34 @@ class DeliverableRegistry:
 
 # ── Auto-register implementations ─────────────────────────────────────────
 
-# Lazy-load deliverable implementations to avoid circular imports
+_DEFAULT_DELIVERABLES: tuple[tuple[str, str, str], ...] = (
+    ("pptx", "src.deliverables.pptx.deliverable_pptx", "PPTXDeliverable"),
+    ("docx", "src.deliverables.docx.deliverable_docx", "DOCXDeliverable"),
+    ("pdf", "src.deliverables.pdf.deliverable_pdf", "PDFDeliverable"),
+    ("xlsx", "src.deliverables.xlsx.deliverable_xlsx", "XLSXDeliverable"),
+)
+
+
 def _init_default_deliverables() -> None:
-    """Initialize default deliverable implementations."""
-    if DeliverableRegistry._deliverables:
-        return  # Already initialized
+    """Register every default deliverable that is not registered yet.
 
-    try:
-        from src.deliverables.pptx.deliverable_pptx import PPTXDeliverable
-        DeliverableRegistry.register("pptx", PPTXDeliverable())
-    except ImportError:
-        pass
+    Implementations are imported lazily to avoid circular imports. A type whose
+    import fails now (for example because ``src.core.storage`` is still being
+    imported) is retried on the next call, and ``DeliverableRegistry.get`` calls
+    this when a type is missing, so one partial import cannot leave a type
+    permanently unregistered.
+    """
+    import importlib
 
-    try:
-        from src.deliverables.docx.deliverable_docx import DOCXDeliverable
-        DeliverableRegistry.register("docx", DOCXDeliverable())
-    except ImportError:
-        pass
-
-    try:
-        from src.deliverables.pdf.deliverable_pdf import PDFDeliverable
-        DeliverableRegistry.register("pdf", PDFDeliverable())
-    except ImportError:
-        pass
-
-    try:
-        from src.deliverables.xlsx.deliverable_xlsx import XLSXDeliverable
-        DeliverableRegistry.register("xlsx", XLSXDeliverable())
-    except ImportError:
-        pass
+    for key, module_name, class_name in _DEFAULT_DELIVERABLES:
+        if key in DeliverableRegistry._deliverables:
+            continue
+        try:
+            module = importlib.import_module(module_name)
+            DeliverableRegistry.register(key, getattr(module, class_name)())
+        except ImportError:
+            continue
 
 
-# Initialize on module load (but only once)
+# Initialize on module load; anything that could not load yet is retried by get().
 _init_default_deliverables()

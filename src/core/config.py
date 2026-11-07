@@ -542,7 +542,8 @@ class Settings(BaseSettings):
     enable_deliverable_registry: bool = True
     enable_unified_quality_framework: bool = True
     enable_content_enrichment_engine: bool = True
-    # Feature flag for PPTX structural vision critic (fail-open when disabled or unavailable).
+    # Feature flag for the PPTX visual critic. When False the deck is not inspected: the report is a skip,
+    # and a skipped check does not pass the visual gate for a deck run.
     pptx_visual_critic_enabled: bool = True
     # Optional model override for PPTX visual critic; empty uses ANTHROPIC_CLAUDE_MODEL.
     pptx_visual_critic_model: str = ""
@@ -553,9 +554,10 @@ class Settings(BaseSettings):
     # When enabled, decks with an unset deck_theme default to "editorial"; classic remains
     # reachable via brand_override.deck_theme. Fail-soft: falls back to classic on any error.
     pptx_editorial_theme_enabled: bool = True
-    # Visual critic mode for PPTX: "auto" uses pixel path when soffice+pypdfium2 are available,
-    # else falls back to metadata; "pixel" forces pixel path; "metadata" uses structural metadata only.
-    pptx_visual_critic_mode: str = "auto"
+    # Visual critic mode for PPTX: "pixel" (default) inspects rendered slide images and reports a skip,
+    # not a silent downgrade, when soffice/pypdfium2 are missing; "auto" uses the pixel path when available
+    # and otherwise falls back to the structural metadata check; "metadata" uses structural metadata only.
+    pptx_visual_critic_mode: str = "pixel"
     # When True, unsupported numeric claims from PPTX evidence validation fail the render QA gate.
     # When False, evidence signals remain advisory metadata.
     pptx_evidence_hard_fail_enabled: bool = True

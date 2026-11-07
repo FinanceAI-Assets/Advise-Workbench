@@ -61,7 +61,7 @@ class TestInvestigatorAgentAnalyzeFailures:
         assert "SAME stage fails every attempt" in result["error_evolution"]
 
     def test_analyze_three_attempts_different_errors(self):
-        """Should detect when errors differ across attempts."""
+        """Should detect when different stages fail across attempts."""
         agent = InvestigatorAgent()
         attempts = [
             {
@@ -73,13 +73,13 @@ class TestInvestigatorAgentAnalyzeFailures:
             {
                 "attempt": 2,
                 "error": "Layout spacing issue",
-                "stage": "pptx_generation",
+                "stage": "layout_validation",
                 "artifact": "pptx"
             },
             {
                 "attempt": 3,
                 "error": "Font rendering error",
-                "stage": "pptx_generation",
+                "stage": "visual_qa",
                 "artifact": "pptx"
             }
         ]

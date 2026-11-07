@@ -190,13 +190,13 @@ def run_xlsx_agent(ctx: AgentContext) -> AgentOutput:
         accountable = roles[0] if roles else "Process Owner"
         lines = ["| Activity | Responsible | Accountable | Consulted | Informed |", "|---|---|---|---|---|"]
         if not steps:
-            lines.append("| No extracted activity | TBD | TBD | — | — |")
+            lines.append("| No extracted activity | Not stated in source | Not stated in source | — | — |")
         else:
             for st in steps:
                 if not isinstance(st, dict):
                     continue
                 nm = (st.get("name") or "—").replace("|", "\\|")
-                resp = (st.get("role") or (roles[0] if roles else "TBD")).replace("|", "\\|")
+                resp = (st.get("role") or (roles[0] if roles else "Not assigned in source")).replace("|", "\\|")
                 others = [r for r in roles if r not in (st.get("role"), accountable)]
                 cons = (", ".join(others[:3]) if others else "—").replace("|", "\\|")
                 lines.append(f"| {nm} | {resp} | {accountable} | {cons} | — |")
@@ -206,13 +206,13 @@ def run_xlsx_agent(ctx: AgentContext) -> AgentOutput:
             "|---|---|---|---|---|---|---|",
         ]
         if not steps:
-            lines.append("| No extracted activity | TBD | - | - | - | - | Add structured steps in instruction |")
+            lines.append("| No extracted activity | Not stated in source | - | - | - | - | Add structured steps in instruction |")
         else:
             for st in steps:
                 if not isinstance(st, dict):
                     continue
                 activity = str(st.get("name") or "Step").replace("|", "\\|")
-                owner = str(st.get("role") or (roles[0] if roles else "TBD")).replace("|", "\\|")
+                owner = str(st.get("role") or (roles[0] if roles else "Not assigned in source")).replace("|", "\\|")
                 inputs = ", ".join([str(v) for v in (st.get("inputs") or [])[:4]]) or "-"
                 outputs = ", ".join([str(v) for v in (st.get("outputs") or [])[:4]]) or "-"
                 tools = ", ".join([str(v) for v in (st.get("tools") or [])[:4]]) or "-"
