@@ -216,15 +216,15 @@ When building executive-grade decks (PPTX_ARTIFACT_RENDERER_ENABLED), elevate yo
 When an approved storyline or deck outline exists, follow it instead and choose the visual that proves each title (two_by_two, harvey_balls, waterfall, gantt, benchmark_bars, heat_map, value_chain, maturity_curve, process_flow, chart). Otherwise:
 
 
-1. `slide_type: "title"` — process name as title, subtitle states the audience and decision sought, badges
+1. `slide_type: "title"` — process name as title, `subtitle: "Process Overview"`, badges
 2. `slide_type: "stat_cards"` — 3 KPI cards from ProcessModel metrics
 3. `slide_type: "column_cards"` OR `"process_flow"` — use `column_cards` for three-pillar frameworks; use `process_flow` when 3–5 steps are strictly ordered
 4. `slide_type: "stack_layers"` — architecture / workflow layers (one row per phase)
-5. `slide_type: "table"` — Roles and mandates as an action-titled Owner | Mandate table
+5. `slide_type: "bullets"` — Process Overview, one bullet per role mandate
 6. `slide_type: "table"` — Workflow Walkthrough: Step | Owner | Input → Output
 7. `slide_type: "chart"` (if time-series or benchmark data exists), `"big_number"` (if one metric dominates), or `"stat_cards"` (for three parallel KPIs). **Never use `"bullets"` here.**
 8+ Additional content slides as needed
-Final: `slide_type: "table"`, action title for the decision sought, 3 rows Owner | Action | By when
+Final: `slide_type: "bullets"`, title "Recommended Next Actions", exactly 3 numbered actions
 
 ---
 
@@ -247,72 +247,3 @@ of layout types. Aim for at most 40% bullets slides; use `stat_cards`, `column_c
 - Do not mix `bullets` and `table` on the same slide
 - `footer_note` is a single line — do not use it for multi-sentence explanations
 - Derive metrics from ProcessModel; do not invent numbers not in the source data
-
----
-
-## Consulting Standard (Big4 quality bar)
-
-These rules sit on top of everything above. When rules conflict, this section wins.
-
-### 1. Ghost deck first
-Before slides, fix internally: the recommendation, 3–4 supporting arguments, one proof per argument.
-Reading only the titles in order must tell the whole story (pyramid principle, answer first).
-Arc: Situation → Complication → Question → Answer (SCQA), then evidence, then roadmap and ask.
-
-### 2. Action titles (every content slide)
-- A full sentence stating the conclusion. Not a topic label.
-- 8–16 words, one line or two. Active voice. Include a number when the source has one.
-- Bad: "Process Overview", "Pain Points", "Benefits". Good: "Manual invoice matching delays 38% of payments beyond terms".
-- One message per slide. If the title needs "and", split the slide.
-- Never emit internal headings, field names or markup in titles (for example "ObjectiveNow").
-- Title and section_divider slides may use short names.
-
-### 3. Pick the visual that proves the title
-| Message | slide_type |
-|---|---|
-| Sequence of steps | `process_flow` (3–6 steps, each with `icon`) |
-| End-to-end capability chain | `value_chain` (`stages`) |
-| Two-axis prioritisation | `two_by_two` (`quadrants` with `pos` tl/tr/bl/br, `x_label`, `y_label`) |
-| Option scoring | `harvey_balls` (`rows`: `label`, `scores` 0–4) |
-| Bridge or change in a total | `waterfall` (`bars`: `label`, `delta`, `kind` increase/decrease/total) |
-| Plan over time | `gantt` (`tasks`: `lane`, `label`, `start`, `end` as 0–1) or `roadmap_matrix` |
-| Comparison to benchmark | `benchmark_bars` (`series`: `label`, `value`, `benchmark`) |
-| Risk or coverage grid | `heat_map` (`rows`, `cols`, `cells` low/med/high) |
-| Maturity today vs target | `maturity_curve` (`stages`, `current_index`, `target_index`) |
-| Trend or comparison of numbers | `chart` (column, bar, line; no 3D; avoid pie) |
-| 3 headline KPIs | `stat_cards` |
-| One KPI is the story | `big_number` (once per deck) |
-| Framework of 3–4 pillars | `column_cards` |
-| Detailed ownership or data | `table` |
-`bullets` is the last resort. Max 30% of content slides.
-
-### 4. Icons
-- Every `process_flow` step, `stat_cards` card and `column_cards` card gets an `icon`.
-- Use only these names: activity, ai, alert, award, bank, bar_chart, bell, bot, branch, briefcase, building, calendar, check, checklist, clipboard, clock, cloud, cog, coins, cpu, database, document, document_search, dollar, exchange, eye, factory, flag, gauge, globe, handshake, health, hourglass, invoice, lab, layers, leaf, lightbulb, line_chart, lock, map, message, microscope, milestone, network, package, pie_chart, pill, presentation, refresh, repeat, rocket, route, savings, scale, scan, search, server, settings, shield, shield_check, sliders, sparkles, stethoscope, target, timer, trend_down, trend_up, truck, user_check, users, workflow, wrench, zap.
-- One meaning per icon in a deck. No decorative icons. If no name fits, omit `icon`.
-
-### 5. Flow and structure rules
-- Flows read left to right, 3–6 steps. Label ≤4 words. Description ≤12 words, verb first.
-- Name the owner or system in the description when the source has it.
-- Roadmaps: 3 phases max with dated outcomes, not activities.
-
-### 6. Density budgets
-- Bullets ≤5 per slide, ≤15 words each. Card body ≤35 words. Table ≤7 rows, ≤8 words per cell.
-- Remove content before shrinking text. Every element must support the title.
-
-### 7. Evidence and sources
-- Every number comes from the source material or ProcessModel. Never invent.
-- Put the source in `footer_note` as "Source: <document or system>, <period>". Label estimates "estimated".
-- If the source lacks the data for a slide, drop the slide or use a qualitative visual. Never ship a placeholder.
-
-### 8. Empty-state ban
-Forbidden in any output: "TBD", "TODO", "N/A", "Lorem", "No steps extracted", "0 workflow steps",
-"Not available", "[...]", "Click to add". If data is missing, change the slide, do not fill the gap with a label.
-
-### 9. Closing slide
-Last content slide: "Decisions and next steps" as an action title with owner, action and date per row
-(`table` with Owner | Action | By when). Exactly 3 rows.
-
-### 10. Pre-output checklist
-Titles tell the story? One message per slide? Visual type matches the message? Icons from the list?
-Numbers sourced? No placeholders? Valid JSON only?
