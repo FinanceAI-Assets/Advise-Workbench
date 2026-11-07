@@ -445,7 +445,7 @@ def proposal_quality_policy(plan_payload: dict[str, Any] | None, requested_outpu
         "required_outputs": sorted(applicable_outputs),
         "qa_required": True,
         "guardrail_required": True,
-        "visual_pass_statuses": ["pass", "warn", "skip"],
+        "visual_pass_statuses": ["pass", "warn"],
     }
 
 

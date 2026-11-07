@@ -54,9 +54,9 @@ Every deck must tell a coherent visual story. Before generating slides, establis
 2. **Quantitative anchor** — a `stat_cards` slide early in the deck gives scale and urgency
 3. **Conceptual frame** — `column_cards` presents the 3-pillar or 3-dimension view
 4. **Process depth** — `stack_layers` and `table` slides carry the operational detail
-5. **Action close** — final bullets slide with exactly 3 numbered next actions
+5. **Action close** — final `table` slide (Owner | Action | By when), exactly 3 rows
 
-**Never open with bullets. Never close with a table.**
+**Never open with bullets.** Every content slide title is an action title: a full sentence with the conclusion (see `pptx_v1` Consulting Standard).
 
 ---
 
@@ -67,7 +67,9 @@ Every deck must tell a coherent visual story. Before generating slides, establis
 | Scale, KPIs, counts, SLA metrics | `stat_cards` |
 | 3-dimension frameworks, pillars, capabilities | `column_cards` |
 | Architecture layers, workflow phases, tiers | `stack_layers` |
-| Step-by-step process, input/output pairs, ownership | `table` |
+| Ordered steps with icons | `process_flow` |
+| Ownership, input/output pairs | `table` |
+| Prioritisation, scoring, bridges, plans, benchmarks | `two_by_two`, `harvey_balls`, `waterfall`, `gantt`, `benchmark_bars` |
 | Role mandates, policy points, ordered steps | `bullets` |
 | Major section transitions | `section_divider` |
 
@@ -101,6 +103,7 @@ to create visual rhythm — avoid repeating the same fill across all items.
 ### `column_cards` — all 3 cards must have substantive bodies
 - `body`: a full paragraph (3–5 sentences or ≤40 words) — not a bullet list
 - `heading`: active verb phrase or capability name
+- `icon`: one name from the `pptx_v1` icon list
 
 ### `stack_layers` — 3–7 rows
 - Each `description` should be a meaningful phrase (8–15 words), not a title repeat

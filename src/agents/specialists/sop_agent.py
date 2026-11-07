@@ -101,7 +101,7 @@ def run_sop_agent(ctx: AgentContext) -> AgentOutput:
         )
     else:
         for i, st in enumerate(steps, start=1):
-            role = st.get("role") or "TBD"
+            role = st.get("role") or "Not assigned in source"
             nm = st.get("name") or "Step"
             lines.append(f"{i}. **{nm}** — _{role}_")
             if st.get("notes"):
