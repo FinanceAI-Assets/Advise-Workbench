@@ -173,6 +173,6 @@ def run_pdf_agent(ctx: AgentContext) -> AgentOutput:
     for i, st in enumerate(steps[:20], start=1):
         if not isinstance(st, dict):
             continue
-        lines.append(f"{i}. **{st.get('name') or 'Step'}** — {st.get('role') or 'Not assigned in source'}")
+        lines.append(f"{i}. **{st.get('name') or 'Step'}** — {st.get('role') or 'TBD'}")
     lines.extend(["", "## Next Actions", "", "- Validate step ownership", "- Finalize deliverable formatting"])
     return AgentOutput(updates={"pdf_markdown": "\n".join(lines)})
